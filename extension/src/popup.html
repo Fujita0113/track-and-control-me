@@ -1,0 +1,129 @@
+<meta charset="utf-8" />
+<title>Track &amp; Control Me</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    font-family: system-ui, sans-serif;
+  }
+  body {
+    width: 320px;
+    margin: 0;
+    padding: 12px;
+    font-size: 13px;
+  }
+  h1 {
+    font-size: 14px;
+    margin: 0 0 8px;
+  }
+  section {
+    margin-bottom: 12px;
+  }
+  label {
+    display: block;
+    margin: 6px 0 2px;
+    font-weight: 600;
+  }
+  input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    font-size: 13px;
+  }
+  button {
+    margin-top: 8px;
+    padding: 5px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 0;
+  }
+  .row span:last-child {
+    color: #555;
+    text-align: right;
+    word-break: break-all;
+  }
+  @media (prefers-color-scheme: dark) {
+    .row span:last-child {
+      color: #aaa;
+    }
+  }
+  .conn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #999;
+    flex: 0 0 auto;
+  }
+  .dot.ok {
+    background: #2e7d32;
+  }
+  .dot.warn {
+    background: #f9a825;
+  }
+  .dot.ng {
+    background: #c62828;
+  }
+  .warning {
+    display: none;
+    color: #c62828;
+    margin-top: 4px;
+    font-size: 12px;
+  }
+  ul {
+    margin: 4px 0 0;
+    padding-left: 18px;
+  }
+  li {
+    padding: 1px 0;
+  }
+  hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 10px 0;
+  }
+</style>
+
+<h1>Track &amp; Control Me</h1>
+
+<section>
+  <div class="conn">
+    <span id="conn-dot" class="dot"></span>
+    <strong id="conn-label">—</strong>
+  </div>
+  <div class="row"><span>最終接続</span><span id="last-connected">—</span></div>
+  <div class="row"><span>最終ハートビート</span><span id="last-heartbeat">—</span></div>
+  <div class="row"><span>在席状態</span><span id="idle-state">—</span></div>
+  <div class="row"><span>直近エラー</span><span id="last-error">—</span></div>
+</section>
+
+<hr />
+
+<section>
+  <div class="row"><span>アクティブグループ</span><span id="active-group">—</span></div>
+  <label>開いているグループ</label>
+  <ul id="open-groups"></ul>
+</section>
+
+<hr />
+
+<section>
+  <label for="port">ポート</label>
+  <input id="port" type="number" inputmode="numeric" min="1" max="65535" />
+  <label for="token">共有トークン</label>
+  <input id="token" type="text" autocomplete="off" spellcheck="false" />
+  <div id="token-warning" class="warning">
+    トークンが未設定です。dev サーバが既定トークンを受理しない場合は接続が拒否されます。
+  </div>
+  <button id="save" type="button">保存して再接続</button>
+</section>
+
+<script src="popup.js"></script>

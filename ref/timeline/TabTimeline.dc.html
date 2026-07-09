@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:"Roboto","Noto Sans JP",system-ui,sans-serif;color:#3c4043;-webkit-font-smoothing:antialiased}
+  @keyframes pop{from{opacity:0;transform:scale(.96) translateY(4px)}to{opacity:1;transform:none}}
+</style>
+</helmet>
+<div style="display:flex;flex-direction:column;height:100vh;background:#fff">
+
+  <!-- header -->
+  <div style="display:flex;align-items:center;gap:20px;height:64px;padding:0 24px;border-bottom:1px solid #e0e3e7;flex:none">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="width:36px;height:36px;border-radius:8px;background:#1a73e8;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px">6</div>
+      <div style="display:flex;flex-direction:column">
+        <span style="font-size:20px;font-weight:500;color:#202124;line-height:1.1">2026年7月6日</span>
+        <span style="font-size:12px;color:#5f6368">月曜日 · Edge タブグループ タイムライン</span>
+      </div>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#5f6368">
+      <span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:#e8f0fe;color:#1a73e8;border-radius:16px;font-weight:500">空き時間を上下にドラッグして記録</span>
+      <span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:#f1f3f4;border-radius:16px">ブロックをクリックで詳細・削除</span>
+    </div>
+  </div>
+
+  <!-- scroll area -->
+  <div style="flex:1;overflow:auto;position:relative">
+    <div style="display:flex;position:relative">
+
+      <!-- time gutter -->
+      <div ref="{{ gutterRef }}" style="width:64px;flex:none;position:relative;height:{{ totalHeightPx }}">
+        <sc-for list="{{ hours }}" as="h" hint-placeholder-count="15">
+          <div style="{{ h.style }}">{{ h.label }}</div>
+        </sc-for>
+        <sc-for list="{{ boundaryTicks }}" as="t" hint-placeholder-count="6">
+          <div style="{{ t.style }}">{{ t.label }}</div>
+        </sc-for>
+      </div>
+
+      <!-- lane -->
+      <div ref="{{ laneRef }}" onMouseDown="{{ onGridMouseDown }}" style="flex:1;position:relative;height:{{ totalHeightPx }};border-left:1px solid #e0e3e7;cursor:crosshair;user-select:none">
+
+        <!-- hour lines -->
+        <sc-for list="{{ hourLines }}" as="ln" hint-placeholder-count="15">
+          <div style="{{ ln.style }}"></div>
+        </sc-for>
+        <sc-for list="{{ boundaryLines }}" as="bl" hint-placeholder-count="6">
+          <div style="{{ bl.style }}"></div>
+        </sc-for>
+
+        <!-- now indicator -->
+        <div style="{{ nowStyle }}">
+          <div style="position:absolute;left:-5px;top:-4px;width:10px;height:10px;border-radius:50%;background:#ea4335"></div>
+        </div>
+
+        <!-- blocks -->
+        <sc-for list="{{ laid }}" as="b" hint-placeholder-count="6">
+          <div onClick="{{ b.onClick }}" onMouseDown="{{ b.onMouseDown }}" style="{{ b.style }}">
+            <div style="{{ b.nameStyle }}">{{ b.name }}</div>
+            <div style="{{ b.timeStyle }}">{{ b.timeLabel }}</div>
+            <sc-if value="{{ b.isLeisure }}" hint-placeholder-val="{{ true }}">
+              <span style="position:absolute;top:5px;right:6px;font-size:9px;font-weight:500;color:#5f6368;background:#fff;border:1px solid #dadce0;border-radius:8px;padding:1px 5px">自己申告</span>
+            </sc-if>
+          </div>
+        </sc-for>
+
+        <!-- drag ghost -->
+        <sc-if value="{{ hasGhost }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ ghostStyle }}">
+            <span style="font-size:12px;font-weight:500;color:#1a73e8">{{ ghostLabel }}</span>
+          </div>
+        </sc-if>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- detail popover -->
+  <sc-if value="{{ hasDetail }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeDetail }}" style="position:fixed;inset:0;z-index:40"></div>
+    <div style="{{ detail.style }}">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="{{ detail.dotStyle }}"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:16px;font-weight:500;color:#202124;line-height:1.3;word-break:break-word">{{ detail.name }}</div>
+          <div style="font-size:13px;color:#5f6368;margin-top:2px">{{ detail.timeLabel }}</div>
+          <div style="font-size:12px;color:#80868b;margin-top:6px">{{ detail.typeLabel }}</div>
+        </div>
+        <div onClick="{{ closeDetail }}" style="cursor:pointer;color:#5f6368;font-size:20px;line-height:1;padding:2px">×</div>
+      </div>
+      <div style="height:1px;background:#e0e3e7;margin:14px 0"></div>
+      <div onClick="{{ detail.onDelete }}" style="display:flex;flex-direction:column;gap:2px;cursor:pointer;padding:8px 10px;border-radius:8px;background:#fce8e6" style-hover="background:#fad2cf">
+        <span style="font-size:13px;font-weight:500;color:#c5221f">{{ detail.deleteLabel }}</span>
+        <span style="font-size:11px;color:#a50e0e">{{ detail.deleteHint }}</span>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- leisure draft popover -->
+  <sc-if value="{{ hasDraft }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ draft.onCancel }}" style="position:fixed;inset:0;z-index:40"></div>
+    <div style="{{ draft.style }}">
+      <div style="font-size:16px;font-weight:500;color:#202124">空き時間を記録</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:12px">
+        <input type="time" value="{{ draft.startStr }}" onChange="{{ draft.onStart }}" style="font:inherit;font-size:14px;padding:6px 8px;border:1px solid #dadce0;border-radius:6px;color:#3c4043">
+        <span style="color:#5f6368">〜</span>
+        <input type="time" value="{{ draft.endStr }}" onChange="{{ draft.onEnd }}" style="font:inherit;font-size:14px;padding:6px 8px;border:1px solid #dadce0;border-radius:6px;color:#3c4043">
+      </div>
+      <div style="font-size:12px;color:#5f6368;margin:14px 0 6px">よく使うカテゴリ</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <sc-for list="{{ draft.chips }}" as="c" hint-placeholder-count="6">
+          <div onClick="{{ c.onClick }}" style="{{ c.style }}">{{ c.label }}</div>
+        </sc-for>
+      </div>
+      <div style="font-size:12px;color:#5f6368;margin:14px 0 6px">またはメモを自由入力</div>
+      <input type="text" value="{{ draft.text }}" onChange="{{ draft.onText }}" placeholder="例: 昼食を取りながら動画を視聴" style="width:100%;font:inherit;font-size:14px;padding:8px 10px;border:1px solid #dadce0;border-radius:6px;color:#3c4043">
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
+        <div onClick="{{ draft.onCancel }}" style="cursor:pointer;padding:8px 16px;border-radius:8px;font-size:14px;font-weight:500;color:#1a73e8" style-hover="background:#f1f3f4">キャンセル</div>
+        <div onClick="{{ draft.onAdd }}" style="cursor:pointer;padding:8px 18px;border-radius:8px;font-size:14px;font-weight:500;color:#fff;background:#1a73e8" style-hover="background:#1765cc">追加</div>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.DAY_START = 8*60;   // 08:00
+    this.DAY_END   = 22*60;  // 22:00
+    this.PXM = 1.2;          // px per minute (72px/hour)
+    this.NOW = 16*60+45;     // sample "現在" line
+    this.gutterRef = React.createRef();
+    this.laneRef = React.createRef();
+    this.categories = ["昼食","休憩","移動","仮眠","運動","雑務","その他"];
+    let uid = 0; const id = ()=> "b"+(++uid);
+    this.state = {
+      blocks: [
+        {id:id(), type:"tab", name:"競技プログラミング", color:"#039be5", start:9*60,     end:12*60},
+        {id:id(), type:"tab", name:"Python講義",         color:"#0b8043", start:10*60,    end:11*60+30},
+        {id:id(), type:"leisure", name:"昼食", color:"#9aa0a6", start:12*60, end:13*60},
+        {id:id(), type:"tab", name:"リサーチ",           color:"#8e24aa", start:13*60,    end:14*60+30},
+        {id:id(), type:"tab", name:"メール返信",         color:"#f4511e", start:13*60+15, end:14*60},
+        {id:id(), type:"tab", name:"ブログ執筆",         color:"#3f51b5", start:15*60,    end:17*60},
+        {id:id(), type:"tab", name:"ニュースまとめ",     color:"#e67c73", start:15*60+30, end:16*60+15},
+      ],
+      drag: null,      // {a, b} minutes while dragging
+      detail: null,    // {block, x, y}
+      draft: null,     // {start, end, category, text, x, y}
+    };
+    this._uid = uid;
+  }
+  newId(){ this._uid++; return "b"+this._uid; }
+
+  // ---- time helpers ----
+  fmt(m){ m=Math.round(m); const h=Math.floor(m/60), mm=m%60; return String(h).padStart(2,"0")+":"+String(mm).padStart(2,"0"); }
+  parse(s){ const [h,m]=s.split(":").map(Number); return h*60+m; }
+  yToMin(clientY){
+    const r = this.laneRef.current.getBoundingClientRect();
+    let m = this.DAY_START + (clientY - r.top)/this.PXM;
+    m = Math.round(m/5)*5;
+    return Math.max(this.DAY_START, Math.min(this.DAY_END, m));
+  }
+
+  // ---- overlap layout (Google-calendar style column split) ----
+  layout(blocks){
+    const sorted=[...blocks].sort((a,b)=> a.start-b.start || a.end-b.end);
+    const clusters=[]; let cur=[]; let curEnd=-1;
+    for(const ev of sorted){
+      if(cur.length && ev.start>=curEnd){ clusters.push(cur); cur=[]; curEnd=-1; }
+      cur.push(ev); curEnd=Math.max(curEnd,ev.end);
+    }
+    if(cur.length) clusters.push(cur);
+    const out=[];
+    for(const cl of clusters){
+      const cols=[];
+      for(const ev of cl){
+        let placed=false;
+        for(let i=0;i<cols.length;i++){
+          if(cols[i].end<=ev.start){ cols[i].end=ev.end; ev._col=i; placed=true; break; }
+        }
+        if(!placed){ ev._col=cols.length; cols.push({end:ev.end}); }
+      }
+      const n=cols.length;
+      for(const ev of cl) out.push({ev, col:ev._col, colCount:n});
+    }
+    return out;
+  }
+
+  // free gap (unoccupied interval) that contains minute m — leisure can only live here.
+  // returns null if m is inside an existing block.
+  gapContaining(m){
+    let lo=this.DAY_START, hi=this.DAY_END;
+    for(const b of this.state.blocks){
+      if(b.start < m && b.end > m) return null;      // inside an occupied block
+      if(b.end <= m) lo=Math.max(lo, b.end);         // block before m -> gap starts after it
+      else if(b.start >= m) hi=Math.min(hi, b.start);// block after m -> gap ends at it
+    }
+    return [lo,hi];
+  }
+
+  // ---- interactions ----
+  onGridMouseDown = (e)=>{
+    if(e.button!==0) return;
+    let start = this.yToMin(e.clientY);
+    const gap = this.gapContaining(start);
+    if(!gap) return;                                 // started on a filled slot -> ignore
+    const SNAP = 15;                                 // minutes: stick to a nearby edge, else free
+    if(start - gap[0] <= SNAP) start = gap[0];        // near the block above -> snap to its end
+    else if(gap[1] - start <= SNAP) start = gap[1];   // near the block below -> snap to its start
+    this.setState({ drag:{a:start,b:start,lo:gap[0],hi:gap[1]}, detail:null, draft:null });
+    window.addEventListener("mousemove", this._move);
+    window.addEventListener("mouseup", this._up);
+  };
+  _move = (e)=>{
+    if(!this.state.drag) return;
+    const {lo,hi} = this.state.drag;
+    let b = this.yToMin(e.clientY);
+    b = Math.max(lo, Math.min(hi, b));               // snap/stick to adjacent group edges
+    this.setState(s=> ({ drag:{...s.drag, b} }));
+  };
+  _up = (e)=>{
+    window.removeEventListener("mousemove", this._move);
+    window.removeEventListener("mouseup", this._up);
+    const d = this.state.drag;
+    this.setState({drag:null});
+    if(!d) return;
+    const start=Math.min(d.a,d.b), end=Math.max(d.a,d.b);
+    if(end-start < 10) return; // too small = treated as a click
+    this.setState({
+      draft:{ start, end, category:"昼食", text:"", x:e.clientX, y:e.clientY }
+    });
+  };
+
+  openDetail = (block, e)=>{
+    e.stopPropagation();
+    this.setState({ detail:{block, x:e.clientX, y:e.clientY}, draft:null, drag:null });
+  };
+  closeDetail = ()=> this.setState({detail:null});
+  deleteBlock = (blockId)=> this.setState(s=>({ blocks:s.blocks.filter(b=>b.id!==blockId), detail:null }));
+
+  cancelDraft = ()=> this.setState({draft:null});
+  addDraft = ()=>{
+    const d=this.state.draft; if(!d) return;
+    const name = d.text.trim() || d.category;
+    const nb = {id:this.newId(), type:"leisure", name, color:"#9aa0a6", start:d.start, end:d.end};
+    this.setState(s=>({ blocks:[...s.blocks, nb], draft:null }));
+  };
+  setDraft = (patch)=> this.setState(s=> ({ draft:{...s.draft, ...patch} }));
+
+  // ---- popover positioning (clamped to viewport) ----
+  popStyle(x, y, w, h){
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let left = x + 14, top = y - 10;
+    if(left + w > vw - 12) left = x - w - 14;
+    if(left < 12) left = 12;
+    if(top + h > vh - 12) top = vh - h - 12;
+    if(top < 12) top = 12;
+    return {position:"fixed", left:left+"px", top:top+"px", width:w+"px", zIndex:50,
+      background:"#fff", borderRadius:"12px", padding:"16px",
+      boxShadow:"0 8px 28px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.12)",
+      animation:"pop .12s ease-out"};
+  }
+
+  renderVals(){
+    const {DAY_START, DAY_END, PXM} = this;
+    const total = DAY_END - DAY_START;
+    const totalHeightPx = (total*PXM)+"px";
+
+    // hour gutter labels
+    const hours=[], hourLines=[];
+    for(let h=Math.ceil(DAY_START/60); h<=DAY_END/60; h++){
+      const top=(h*60-DAY_START)*PXM;
+      hours.push({ label:this.fmt(h*60), style:{
+        position:"absolute", right:"10px", top:top+"px", transform:"translateY(-50%)",
+        fontSize:"11px", color:"#70757a", fontWeight:500
+      }});
+      hourLines.push({ style:{
+        position:"absolute", left:0, right:0, top:top+"px", borderTop:"1px solid #e8eaed"
+      }});
+    }
+
+    const nowStyle = {position:"absolute", left:0, right:0, top:((this.NOW-DAY_START)*PXM)+"px",
+      borderTop:"2px solid #ea4335", zIndex:5};
+
+    // faint lines at block boundaries — but when blocks overlap, only the EARLIEST block
+    // in that cluster contributes its start/end lines (the later one's edges are hidden anyway).
+    const times=new Set();
+    {
+      const sorted=[...this.state.blocks].sort((a,b)=> a.start-b.start || a.end-b.end);
+      let cur=[], curEnd=-1;
+      const flush=(cl)=>{ if(!cl.length) return; const first=cl[0]; times.add(first.start); times.add(first.end); };
+      for(const ev of sorted){
+        if(cur.length && ev.start>=curEnd){ flush(cur); cur=[]; curEnd=-1; }
+        cur.push(ev); curEnd=Math.max(curEnd, ev.end);
+      }
+      flush(cur);
+    }
+    const boundaryLines=[], boundaryTicks=[];
+    [...times].sort((a,b)=>a-b).forEach(m=>{
+      if(m<=DAY_START || m>=DAY_END) return;
+      const top=(m-DAY_START)*PXM;
+      boundaryLines.push({ style:{position:"absolute", left:0, right:0, top:top+"px",
+        borderTop:"1px dashed #cfd4da", zIndex:1} });
+      if(m%60!==0) boundaryTicks.push({ label:this.fmt(m), style:{position:"absolute", right:"10px",
+        top:top+"px", transform:"translateY(-50%)", fontSize:"10px", color:"#9aa0a6", fontWeight:500} });
+    });
+
+    // blocks
+    const laid = this.layout(this.state.blocks).map(({ev, col, colCount})=>{
+      const top=(ev.start-DAY_START)*PXM;
+      const height=Math.max(18,(ev.end-ev.start)*PXM);
+      const leftPct = col/colCount*100;
+      const widthCalc = `calc(${100/colCount}% - 5px)`;
+      const isLeisure = ev.type==="leisure";
+      const short = height < 40;
+      const base = {
+        position:"absolute", top:top+"px", left:`calc(${leftPct}% + 2px)`, width:widthCalc,
+        height:height+"px", borderRadius:"7px", padding: short? "3px 8px":"6px 9px",
+        overflow:"hidden", cursor:"pointer", zIndex:10, transition:"box-shadow .12s",
+        display:"flex", flexDirection:"column", gap:"1px"
+      };
+      let style, nameStyle, timeStyle;
+      if(isLeisure){
+        style = {...base, background:"#f1f3f4", border:"1px dashed #9aa0a6",
+          boxShadow:"none"};
+        nameStyle = {fontSize:"12.5px", fontWeight:500, color:"#5f6368",
+          whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", paddingRight:"52px"};
+        timeStyle = {fontSize:"11px", color:"#80868b", display: short?"none":"block"};
+      } else {
+        style = {...base, background:ev.color, color:"#fff",
+          boxShadow:"0 1px 2px rgba(0,0,0,.18)"};
+        nameStyle = {fontSize:"12.5px", fontWeight:500, color:"#fff",
+          whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"};
+        timeStyle = {fontSize:"11px", color:"rgba(255,255,255,.9)", display: short?"none":"block"};
+      }
+      return {
+        id:ev.id, name:ev.name, isLeisure,
+        timeLabel:`${this.fmt(ev.start)} – ${this.fmt(ev.end)}`,
+        style, nameStyle, timeStyle,
+        onClick:(e)=>this.openDetail(ev, e),
+        onMouseDown:(e)=>e.stopPropagation(),
+      };
+    });
+
+    // drag ghost
+    const d=this.state.drag;
+    const hasGhost = !!(d && Math.abs(d.b-d.a)>=5);
+    let ghostStyle={}, ghostLabel="";
+    if(hasGhost){
+      const s=Math.min(d.a,d.b), e=Math.max(d.a,d.b);
+      ghostStyle={ position:"absolute", top:((s-DAY_START)*PXM)+"px", left:"2px", right:"3px",
+        height:((e-s)*PXM)+"px", borderRadius:"7px", background:"rgba(26,115,232,.14)",
+        border:"1.5px dashed #1a73e8", zIndex:20, display:"flex", alignItems:"center",
+        justifyContent:"center", pointerEvents:"none"};
+      ghostLabel=`${this.fmt(s)} – ${this.fmt(e)}`;
+    }
+
+    // detail popover
+    const det=this.state.detail;
+    let detail=null;
+    if(det){
+      const b=det.block; const isTab=b.type==="tab";
+      detail={
+        name:b.name,
+        timeLabel:`${this.fmt(b.start)} – ${this.fmt(b.end)}`,
+        typeLabel: isTab? "Edge タブグループ" : "自己申告した空き時間",
+        deleteLabel: isTab? "このグループを削除" : "この記録を削除",
+        deleteHint: isTab? "この時間は開いていなかった場合" : "",
+        dotStyle:{width:"14px",height:"14px",borderRadius:"4px",background:b.color,flex:"none",marginTop:"3px",
+          border: isTab? "none":"1px dashed #9aa0a6"},
+        style:this.popStyle(det.x, det.y, 268, 190),
+        onDelete:()=>this.deleteBlock(b.id),
+      };
+    }
+
+    // leisure draft popover
+    const dr=this.state.draft;
+    let draft=null;
+    if(dr){
+      draft={
+        startStr:this.fmt(dr.start), endStr:this.fmt(dr.end), text:dr.text,
+        style:this.popStyle(dr.x, dr.y, 300, 340),
+        chips:this.categories.map(c=>({
+          label:c,
+          onClick:()=>this.setDraft({category:c, text:""}),
+          style:{cursor:"pointer",padding:"6px 12px",borderRadius:"16px",fontSize:"13px",
+            border:"1px solid "+(dr.category===c && !dr.text.trim()?"#1a73e8":"#dadce0"),
+            background:(dr.category===c && !dr.text.trim())?"#e8f0fe":"#fff",
+            color:(dr.category===c && !dr.text.trim())?"#1a73e8":"#3c4043", fontWeight:500}
+        })),
+        onStart:(e)=>this.setDraft({start:this.parse(e.target.value)}),
+        onEnd:(e)=>this.setDraft({end:this.parse(e.target.value)}),
+        onText:(e)=>this.setDraft({text:e.target.value}),
+        onCancel:this.cancelDraft,
+        onAdd:this.addDraft,
+      };
+    }
+
+    return {
+      totalHeightPx, hours, hourLines, boundaryLines, boundaryTicks, nowStyle, laid,
+      gutterRef:this.gutterRef, laneRef:this.laneRef,
+      onGridMouseDown:this.onGridMouseDown,
+      hasGhost, ghostStyle, ghostLabel,
+      hasDetail:!!detail, detail, closeDetail:this.closeDetail,
+      hasDraft:!!draft, draft,
+    };
+  }
+}
+</script>
+</body>
+</html>

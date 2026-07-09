@@ -1,0 +1,17 @@
+{
+  "name": "@track/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Edge/Chromium MV3 拡張：アクティブグループ検出＋ハートビート送信",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@track/contract": "*"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2"
+  }
+}

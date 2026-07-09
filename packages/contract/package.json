@@ -1,0 +1,19 @@
+{
+  "name": "@track/contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "拡張と server が共有する zod スキーマ／型（ハートビート・イベント・WS プロトコル）",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --outDir dist"
+  },
+  "dependencies": {
+    "zod": "^4.4"
+  }
+}

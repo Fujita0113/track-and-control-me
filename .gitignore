@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# runtime data / secrets
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+data/
+backups/
+.env
+config.local.json
+
+# build output
+extension/dist/
+server/dist/
+coverage/
+
+# OS / editor
+Thumbs.db
+.DS_Store

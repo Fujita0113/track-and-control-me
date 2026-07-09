@@ -1,0 +1,24 @@
+{
+  "name": "@track/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ローカル backend：WS 受信・時間集計・ルール評価・パスワード・ダッシュボード",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@track/contract": "*",
+    "@fastify/static": "^9.1",
+    "@fastify/websocket": "^11.2",
+    "better-sqlite3": "^12.11",
+    "croner": "^10.0",
+    "fastify": "^5.10",
+    "zod": "^4.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6"
+  }
+}

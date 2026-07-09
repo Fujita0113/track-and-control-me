@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(openspec instructions *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('--- instruction ---'\\); print\\(d['instruction']\\); print\\('--- template ---'\\); print\\(d['template']\\)\")",
+      "Bash(openspec status *)",
+      "Bash(openspec validate *)",
+      "Bash(echo \"=== EXIT $? ===\")",
+      "Bash(python -)"
+    ]
+  },
+  "remote": {
+    "defaultEnvironmentId": "env_01JU51umQDsjWnbfG5eYmL8U"
+  }
+}

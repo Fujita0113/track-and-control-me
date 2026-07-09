@@ -1,0 +1,30 @@
+{
+  "name": "track-and-control-me",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Edge タブグループ単位の作業時間計測＋パスワードゲート（ローカル完結）",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/contract",
+    "extension",
+    "server"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build:contract": "npm run build -w @track/contract",
+    "build:ext": "npm run build -w @track/extension",
+    "server": "npm run start -w @track/server"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "esbuild": "^0.28",
+    "tsx": "^4.23",
+    "typescript": "^6.0",
+    "vitest": "^4.1"
+  }
+}
