@@ -90,6 +90,25 @@ export async function onGroupRemovedFromMap(group: chrome.tabGroups.TabGroup): P
   });
 }
 
+/**
+ * ブラウザ再起動（onStartup）時に byGroupId マップ全体を破棄する。
+ * chrome.tabGroups の groupId はブラウザセッション内でのみ有効な揮発値で、
+ * 再起動後は採番がリセットされ、以前のセッションで別グループが使っていた
+ * groupId が新しいグループに再利用されうる。onRemoved は再起動をまたいで
+ * 発火しないため、キャッシュを残したままだと groupId が一致しただけで
+ * 無関係な旧グループの stableGroupId（＝旧タイトル・色）に取り違えてしまう。
+ * byIdentity（title+color）マップは再起動をまたぐ同一性維持のために残す。
+ */
+export async function resetGroupIdMapOnStartup(): Promise<void> {
+  await withLock(async () => {
+    const maps = await loadMaps();
+    if (Object.keys(maps.byGroupId).length > 0) {
+      maps.byGroupId = {};
+      await saveMaps(maps);
+    }
+  });
+}
+
 /** 現時点の状態を chrome.* API から能動的に収集した結果。 */
 export interface GatheredState {
   active: {

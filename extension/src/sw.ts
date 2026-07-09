@@ -1,6 +1,11 @@
 import { DEFAULTS } from '@track/contract';
 import type { EventType } from '@track/contract';
-import { gatherState, onGroupRemovedFromMap, onGroupUpserted } from './groups';
+import {
+  gatherState,
+  onGroupRemovedFromMap,
+  onGroupUpserted,
+  resetGroupIdMapOnStartup,
+} from './groups';
 import { buildSample } from './sampler';
 import {
   ensureBootId,
@@ -81,9 +86,12 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 // 新しいブラウザセッション：bootId を振り直して (bootId,seq) の一意性を保つ。
+// groupId は前セッションの値が引き継がれない（採番リセット・再利用の恐れがある）ため、
+// byGroupId キャッシュも合わせて破棄する。
 chrome.runtime.onStartup.addListener(() => {
   void (async () => {
     await regenerateBootId();
+    await resetGroupIdMapOnStartup();
     chrome.idle.setDetectionInterval(DEFAULTS.IDLE_DETECTION_SECONDS);
     await ensureHeartbeatAlarm();
     await wsClient.reconnect();
