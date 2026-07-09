@@ -16,7 +16,7 @@
 
 ## 4. Verification
 
-- [ ] 4.1 `npm run server` E2E: the "ゲート" tab shows today's state + progress + reveal AND the ruleset list + create button; no separate "ルール編集" tab
-- [ ] 4.2 Create/edit/delete a future ruleset from the merged screen; confirm freeze rules (today/past read-only)
-- [ ] 4.3 Open the rule editor, wait past one 30s refresh; confirm the modal and unsaved input survive
-- [ ] 4.4 Confirm password reveal still works when unlocked
+- [x] 4.1 `npm run server` E2E: the "ゲート" tab shows today's state + progress + reveal AND the ruleset list + create button; no separate "ルール編集" tab
+- [x] 4.2 Create/edit/delete a future ruleset from the merged screen; confirm freeze rules (today/past read-only)
+- [x] 4.3 Open the rule editor, wait past one 30s refresh; confirm the modal and unsaved input survive
+- [x] 4.4 Confirm password reveal still works when unlocked
