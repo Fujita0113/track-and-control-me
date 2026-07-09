@@ -52,17 +52,22 @@ function resolveOnMaps(
 ): { stableId: string; changed: boolean } {
   const gk = String(groupId);
   const ik = identityKey(title, color);
+  // 新規作成直後は一瞬 title=='' になる。空タイトルは色が同じであれば
+  // どのグループでも同じ identity キーになってしまい、無関係な既存グループの
+  // stableGroupId を誤って引き継いでしまう（新規採番前提を壊す）。
+  // 空タイトルの間は identity での引き当て・書き込みの両方を行わない。
+  const hasMeaningfulTitle = title.length > 0;
   let changed = false;
   let stable = maps.byGroupId[gk];
   if (stable === undefined) {
-    stable = maps.byIdentity[ik] ?? crypto.randomUUID();
+    stable = (hasMeaningfulTitle ? maps.byIdentity[ik] : undefined) ?? crypto.randomUUID();
     changed = true;
   }
   if (maps.byGroupId[gk] !== stable) {
     maps.byGroupId[gk] = stable;
     changed = true;
   }
-  if (maps.byIdentity[ik] !== stable) {
+  if (hasMeaningfulTitle && maps.byIdentity[ik] !== stable) {
     maps.byIdentity[ik] = stable;
     changed = true;
   }
@@ -106,6 +111,30 @@ export async function resetGroupIdMapOnStartup(): Promise<void> {
       maps.byGroupId = {};
       await saveMaps(maps);
     }
+  });
+}
+
+// resolveOnMaps の空タイトル識別子バグ修正に伴い、既存ストレージに残った
+// 誤った byGroupId/byIdentity エントリを一度だけ全消去するマイグレーション。
+const GROUP_MAP_SCHEMA_VERSION = 2;
+const GROUP_MAP_SCHEMA_VERSION_KEY = 'groupMapSchemaVersion';
+
+/**
+ * 拡張機能の起動（onInstalled：新規インストール／更新／リロード）ごとに呼ぶ。
+ * schema version が古ければ byGroupId・byIdentity を丸ごと消去し、以後は
+ * 修正済みロジックで各グループに新規の stableGroupId が振り直される。
+ * ブラウザ再起動を待たずに反映させるための一回限りの補正。
+ */
+export async function migrateGroupMapsIfNeeded(): Promise<void> {
+  await withLock(async () => {
+    const res = await chrome.storage.local.get(GROUP_MAP_SCHEMA_VERSION_KEY);
+    const current = (res[GROUP_MAP_SCHEMA_VERSION_KEY] as number | undefined) ?? 1;
+    if (current >= GROUP_MAP_SCHEMA_VERSION) return;
+    await chrome.storage.local.set({
+      [GROUP_BY_ID_KEY]: {},
+      [GROUP_BY_IDENTITY_KEY]: {},
+      [GROUP_MAP_SCHEMA_VERSION_KEY]: GROUP_MAP_SCHEMA_VERSION,
+    });
   });
 }
 

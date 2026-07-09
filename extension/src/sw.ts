@@ -2,6 +2,7 @@ import { DEFAULTS } from '@track/contract';
 import type { EventType } from '@track/contract';
 import {
   gatherState,
+  migrateGroupMapsIfNeeded,
   onGroupRemovedFromMap,
   onGroupUpserted,
   resetGroupIdMapOnStartup,
@@ -74,6 +75,7 @@ async function ensureHeartbeatAlarm(): Promise<void> {
 async function bootstrap(): Promise<void> {
   chrome.idle.setDetectionInterval(DEFAULTS.IDLE_DETECTION_SECONDS);
   await ensureBootId();
+  await migrateGroupMapsIfNeeded();
   await ensureHeartbeatAlarm();
   await wsClient.connect();
 }
