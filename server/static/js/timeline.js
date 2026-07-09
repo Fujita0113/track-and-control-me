@@ -26,8 +26,7 @@ export function hide() {
 export async function show(root) {
   clear(root);
   const dateInput = h('input', { type: 'date', value: state.today });
-  root.appendChild(h('div', { class: 'section-head' },
-    h('h2', {}, 'タイムライン'),
+  root.appendChild(h('div', { class: 'section-head', style: { justifyContent: 'flex-end' } },
     h('div', { class: 'row' }, h('label', { class: 'field' }, '対象日', dateInput)),
   ));
   const hint = h('div', { class: 'tl-hint' },

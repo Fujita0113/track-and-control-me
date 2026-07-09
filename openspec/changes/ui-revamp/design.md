@@ -1,6 +1,6 @@
 ## Context
 
-SPA は `index.html` のフラットなタブバーを `main.js` の `activate()` が切り替える構成（`.active` を `<section>` に付け替え）。各画面は vanilla JS モジュール（`h()` ヘルパで DOM 生成）。バックエンドは Fastify + better-sqlite3、集計は `server/src/aggregation/` の pure 関数。参照実装は `ref/timeline/TabTimeline.dc.html` と `dev/kanban v4/kanban v4/Cadence Board.dc.html`（いずれも React + 独自 `support.js` の "DC" プロトタイプ）で、**設計・挙動の仕様**として扱い、コードは vanilla へ移植する。
+SPA は `index.html` のフラットなタブバーを `main.js` の `activate()` が切り替える構成（`.active` を `<section>` に付け替え）。各画面は vanilla JS モジュール（`h()` ヘルパで DOM 生成）。バックエンドは Fastify + better-sqlite3、集計は `server/src/aggregation/` の pure 関数。参照実装は `ref/timeline/TabTimeline.dc.html` と `ref/kanban/Cadence Board.dc.html`（いずれも React + 独自 `support.js` の "DC" プロトタイプ）で、**設計・挙動の仕様**として扱い、コードは vanilla へ移植する。見た目は参照の配色トークン・寸法を**そのまま踏襲**する（`specs/kanban-board/spec.md` の視覚要件を参照）。
 
 既存 API（維持）: `/api/summary`・`/api/summary/range`・`/api/unlock/{date}`・`/api/rules*`・`/api/checks/{date}*`・`/api/password/reveal`・`/api/timeline/{date}*`（`addManual`/`gapToAway`/`putSplit`/`patchEntry`/`deleteEntry`）・`/api/reflection/{date}`・`/api/tasks*`・`/api/planning/{date}`。この change は原則フロント合成＋振り返り/タスクの小規模スキーマ拡張。ゲートの latch/評価ロジックには手を入れない。
 

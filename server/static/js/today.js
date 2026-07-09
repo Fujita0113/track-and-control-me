@@ -27,7 +27,6 @@ export function hide() {
 export async function show(root) {
   clear(root);
   hide();
-  root.appendChild(h('div', { class: 'section-head' }, h('h2', {}, '今日')));
 
   // 3 領域を用意し、それぞれ独立に描画・更新する。
   const overviewRegion = h('div', { class: 'stack' });

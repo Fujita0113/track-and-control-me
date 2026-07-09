@@ -5,7 +5,6 @@ import { h, clear, copyText, toast } from './util.js';
 
 export async function show(root) {
   clear(root);
-  root.appendChild(h('div', { class: 'section-head' }, h('h2', {}, '設定')));
   const body = h('div', { class: 'stack' });
   root.appendChild(body);
   await render(body);
