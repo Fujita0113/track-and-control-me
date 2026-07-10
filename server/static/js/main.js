@@ -36,6 +36,19 @@ function bootNav() {
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.addEventListener('click', () => activate(btn.dataset.target));
   });
+  // ディープリンク: #timeline で始まる hash は timeline タブへ(通知からの遷移。timeline-revamp D8)。
+  // 既に timeline 表示中でも from/to 付きで来たら再表示するため、いったん解除してから activate。
+  window.addEventListener('hashchange', () => {
+    if ((location.hash || '').startsWith('#timeline')) {
+      if (current === 'timeline') current = null;
+      void activate('timeline');
+    }
+  });
+}
+
+/** 初期表示画面: #timeline で始まる hash があれば timeline、なければ today。 */
+function initialScreen() {
+  return (location.hash || '').startsWith('#timeline') ? 'timeline' : 'today';
 }
 
 async function boot() {
@@ -44,7 +57,7 @@ async function boot() {
   try {
     await loadState();
     meta.textContent = `作業日 ${state.today} · tz ${state.config.tz}`;
-    await activate('today');
+    await activate(initialScreen());
     // 初回オンボーディング(ルール皆無時)。画面表示後に判定する。
     await maybeShowOnboarding();
   } catch (err) {

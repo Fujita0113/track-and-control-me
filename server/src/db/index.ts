@@ -76,6 +76,8 @@ export interface AppConfigRow {
   ws_port: number;
   shared_token: string;
   session_coalesce_seconds: number;
+  /** 「記録すべき離席」の最小秒数（timeline-revamp D2）。既定 600。 */
+  away_min_seconds: number;
   planning_require_reflection: number;
   planning_min_tomorrow_tasks: number;
   password_hash_salt: string;

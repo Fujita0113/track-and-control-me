@@ -46,6 +46,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
       'undefined_day_policy',
       'reveal_yesterday',
       'session_coalesce_seconds',
+      'away_min_seconds',
       'planning_require_reflection',
       'planning_min_tomorrow_tasks',
       'ws_port' as keyof AppConfigRow,

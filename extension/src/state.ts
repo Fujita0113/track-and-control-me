@@ -15,6 +15,7 @@ const BOOT_ID_KEY = 'bootId';
 const SEQ_KEY = 'seq';
 const SNAPSHOT_KEY = 'snapshot';
 const QUEUE_KEY = 'queue';
+const AWAY_NOTIFIED_KEY = 'awayNotifiedTs';
 
 /** 送信待ちキューの上限（超過分は古い方から捨てる）。 */
 const QUEUE_CAP = 2000;
@@ -103,6 +104,11 @@ export interface Snapshot {
   lastHeartbeatTs: number;
   /** 直近に発火したイベント種別。 */
   lastEventType: EventType;
+  /**
+   * 離席復帰通知を出した離席区間の開始時刻（＝当時の lastActiveTs）。
+   * 同一離席区間への重複通知を抑止する（timeline-revamp D7）。未通知は 0。
+   */
+  lastAwayNotifiedTs: number;
 }
 
 export async function saveSnapshot(snapshot: Snapshot): Promise<void> {
@@ -113,6 +119,21 @@ export async function loadSnapshot(): Promise<Snapshot | null> {
   const res = await chrome.storage.local.get(SNAPSHOT_KEY);
   const s = res[SNAPSHOT_KEY];
   return s ? (s as Snapshot) : null;
+}
+
+/**
+ * 離席区間 `awayStart` への復帰通知を「初回だけ」原子的に確保する（timeline-revamp D7）。
+ * withLock で直列化し、bootstrap / onStartup / heartbeat が同時に復帰判定しても通知は1回に抑止する。
+ * @returns この呼び出しが通知権を獲得したら true。
+ */
+export async function claimAwayNotification(awayStart: number): Promise<boolean> {
+  return withLock(async () => {
+    const res = await chrome.storage.local.get(AWAY_NOTIFIED_KEY);
+    const cur = res[AWAY_NOTIFIED_KEY];
+    if (typeof cur === 'number' && cur === awayStart) return false; // 既に通知済み。
+    await chrome.storage.local.set({ [AWAY_NOTIFIED_KEY]: awayStart });
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -100,11 +100,16 @@ function coalesceSessions(sessions: SessionRow[], thresholdMs: number): AutoBloc
   return blocks;
 }
 
-/** [winStart, capEnd] で、与えた区間集合に覆われない部分をギャップとして返す。 */
+/**
+ * [winStart, capEnd] で、与えた区間集合に覆われない部分をギャップとして返す。
+ * `minGapSeconds` 未満のギャップは「作業の呼吸として吸収」される区間なので除外する
+ * （timeline-revamp D2: 閾値未満は表示せず、同一グループ間ならクライアントのランのハッチとして可視化）。
+ */
 function computeGaps(
   winStart: number,
   capEnd: number,
   intervals: { startAt: number; endAt: number }[],
+  minGapSeconds: number,
 ): Gap[] {
   if (capEnd <= winStart) return [];
   const sorted = intervals
@@ -122,8 +127,7 @@ function computeGaps(
   if (cursor < capEnd) {
     gaps.push({ startAt: cursor, endAt: capEnd, seconds: (capEnd - cursor) / 1000 });
   }
-  // 極小ギャップ（< 5分）は表示ノイズなので除外。
-  return gaps.filter((g) => g.seconds >= 300);
+  return gaps.filter((g) => g.seconds >= minGapSeconds);
 }
 
 export function getTimeline(db: DB, dayKey: string, nowMs = Date.now()): Timeline {
@@ -159,7 +163,7 @@ export function getTimeline(db: DB, dayKey: string, nowMs = Date.now()): Timelin
   }));
 
   const capEnd = Math.min(winEnd, Math.max(nowMs, winStart));
-  const gaps = computeGaps(winStart, capEnd, [...auto, ...manual]);
+  const gaps = computeGaps(winStart, capEnd, [...auto, ...manual], cfg.away_min_seconds);
 
   const splitOverrides = (
     db

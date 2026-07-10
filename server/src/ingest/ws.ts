@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ClientMessageSchema, WS_PATH, type ServerMessage } from '@track/contract';
 import type { DB } from '../db/index.js';
+import { getConfig } from '../db/index.js';
 import { storeSample } from '../services/ingest.js';
 
 /**
@@ -46,7 +47,9 @@ export function registerIngestRoute(app: FastifyInstance, deps: IngestDeps): voi
           return;
         }
         authed = true;
-        send(socket, { type: 'welcome', serverTime: Date.now() });
+        // 復帰通知の閾値を配布（timeline-revamp D7）。拡張は未受領時 DEFAULTS.AWAY_MIN_SECONDS へフォールバック。
+        const awayMinSeconds = getConfig(deps.db).away_min_seconds;
+        send(socket, { type: 'welcome', serverTime: Date.now(), awayMinSeconds });
         deps.log?.(
           `ingest: 接続確立 (${peer}) ext=${parsed.extVersion} boot=${parsed.bootId}` +
             (token === '' ? ' [警告: トークン未設定=dev モード]' : ''),

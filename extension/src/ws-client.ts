@@ -7,7 +7,7 @@ import type {
   SampleMessage,
   ServerMessage,
 } from '@track/contract';
-import { getWsConfig } from './config';
+import { getWsConfig, setAwayMinSeconds } from './config';
 import { drainQueue, enqueueMessages, getBootId, requeueFront } from './state';
 
 /**
@@ -151,6 +151,8 @@ export class WsClient {
       case 'welcome':
         this.welcomed = true;
         this.status.welcomed = true;
+        // 復帰通知の閾値を永続（timeline-revamp D7）。optional のため未送信の旧サーバーとも互換。
+        if (typeof msg.awayMinSeconds === 'number') void setAwayMinSeconds(msg.awayMinSeconds);
         void this.persistStatus();
         void this.flushQueue();
         break;

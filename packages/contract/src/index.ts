@@ -29,6 +29,12 @@ export const DEFAULTS = {
   KEEPALIVE_SECONDS: 20,
   /** backend の待受ポート（127.0.0.1 バインド）。 */
   WS_PORT: 47653,
+  /**
+   * 「記録すべき離席」の最小秒数（timeline-revamp D2 の一元化閾値）。
+   * サーバーのギャップ抽出・クライアントのラン結合・拡張の復帰通知が共有する。
+   * 権威はサーバー設定 `away_min_seconds`。拡張は welcome 未受領時にこの値へフォールバック。
+   */
+  AWAY_MIN_SECONDS: 600,
 } as const;
 
 /** chrome.idle の状態。'idle'|'locked' は非計上、'active' のみ計上。 */
@@ -161,7 +167,13 @@ export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
 /** backend → 拡張のメッセージ（判別 union）。 */
 export const ServerMessageSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('welcome'), serverTime: z.number().int() }),
+  // welcome は接続確立時に一度だけ。awayMinSeconds はサーバー設定の配布（timeline-revamp D7）。
+  // optional のため旧サーバー（未送信）とも後方互換。
+  z.object({
+    type: z.literal('welcome'),
+    serverTime: z.number().int(),
+    awayMinSeconds: z.number().int().positive().optional(),
+  }),
   z.object({ type: z.literal('pong'), serverTime: z.number().int() }),
   z.object({
     type: z.literal('ack'),

@@ -32,6 +32,7 @@ async function render(body) {
     { key: 'idle_detection_seconds', label: 'アイドル検出(秒)', type: 'number' },
     { key: 'heartbeat_seconds', label: 'ハートビート(秒)', type: 'number' },
     { key: 'session_coalesce_seconds', label: 'セッション結合(秒)', type: 'number' },
+    { key: 'away_min_seconds', label: '離席とみなす最小時間(分)', type: 'number', unit: 'min' },
     { key: 'planning_min_tomorrow_tasks', label: 'PLANNING: 翌日最小タスク数', type: 'number' },
     { key: 'ws_port', label: 'ws_port', type: 'number' },
     { key: 'shared_token', label: 'shared_token', type: 'text' },
@@ -45,8 +46,13 @@ async function render(body) {
   const inputs = new Map();
   const grid = h('div', { class: 'grid grid-2' });
   for (const f of fields) {
-    const inp = h('input', { type: f.type, value: cfg[f.key] == null ? '' : String(cfg[f.key]) });
-    inputs.set(f.key, { inp, type: f.type });
+    // unit==='min' は秒設定を分単位で表示・編集する(保存時に *60)。
+    const raw = cfg[f.key];
+    const shown = f.unit === 'min'
+      ? (raw == null ? '' : String(Math.round(raw / 60)))
+      : (raw == null ? '' : String(raw));
+    const inp = h('input', { type: f.type, value: shown });
+    inputs.set(f.key, { inp, type: f.unit === 'min' ? 'min' : f.type });
     grid.appendChild(h('label', { class: 'field' }, f.label, inp));
   }
 
@@ -70,6 +76,7 @@ async function render(body) {
     const patch = {};
     for (const [key, { inp, type }] of inputs) {
       if (type === 'bool') patch[key] = inp.checked ? 1 : 0;
+      else if (type === 'min') patch[key] = Math.round(Number(inp.value) * 60); // 分 → 秒
       else if (type === 'number') patch[key] = Number(inp.value);
       else patch[key] = inp.value;
     }

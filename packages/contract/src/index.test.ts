@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   ActivitySampleSchema,
   ClientMessageSchema,
+  ServerMessageSchema,
   GroupRefSchema,
+  DEFAULTS,
   type ActivitySample,
   type GroupRef,
 } from './index.js';
@@ -98,5 +100,34 @@ describe('ClientMessageSchema', () => {
 
   it('rejects an unknown message type', () => {
     expect(() => ClientMessageSchema.parse({ type: 'bogus' })).toThrow();
+  });
+});
+
+describe('ServerMessageSchema welcome（awayMinSeconds は optional で後方互換）', () => {
+  it('parses a welcome without awayMinSeconds（旧サーバー互換）', () => {
+    const parsed = ServerMessageSchema.parse({ type: 'welcome', serverTime: 1_770_000_000_000 });
+    expect(parsed).toMatchObject({ type: 'welcome' });
+    expect((parsed as { awayMinSeconds?: number }).awayMinSeconds).toBeUndefined();
+  });
+
+  it('parses a welcome with awayMinSeconds', () => {
+    const parsed = ServerMessageSchema.parse({
+      type: 'welcome',
+      serverTime: 1_770_000_000_000,
+      awayMinSeconds: DEFAULTS.AWAY_MIN_SECONDS,
+    });
+    expect(parsed).toMatchObject({ type: 'welcome', awayMinSeconds: 600 });
+  });
+
+  it('rejects a non-positive awayMinSeconds', () => {
+    expect(() =>
+      ServerMessageSchema.parse({ type: 'welcome', serverTime: 1, awayMinSeconds: 0 }),
+    ).toThrow();
+  });
+});
+
+describe('DEFAULTS', () => {
+  it('exposes AWAY_MIN_SECONDS = 600（一元化閾値の既定）', () => {
+    expect(DEFAULTS.AWAY_MIN_SECONDS).toBe(600);
   });
 });
