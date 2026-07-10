@@ -1,122 +1,173 @@
-// 振り返り(spec: reflection-journal). カンバンとはタブ分離。
-//  - 上部: その日の満足度 5 段階(1〜5 クリック選択)
-//  - 下部: Markdown ライブプレビュー(自前レンダラ・CDN 非依存)
-//  - 保存: { content, satisfaction } を putReflection へ
-//  - 過去参照: GET /api/reflections の日付一覧 → 選択で該当日の満足度・本文を表示
+// 振り返り(spec: reflection-journal). ref/reflection/振り返り.dc.html 忠実移植。
+//  - 左: タイトル / 5 段階「気分」ピル / インライン・ライブ Markdown エディタ(md-editor.js)+ 下部クローム
+//  - 右レール: 対象日(date) / 過去の振り返り(日付・気分・2 行抜粋)
+//  - 保存: 手動「保存する」ボタン + 日付切替・過去選択・タブ離脱時に未保存分をフラッシュ
+//  - スタイルは全て rf-* クラス + CSSOM(CSP: インライン style 属性なし)。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, toast, emptyState } from './util.js';
-import { renderMarkdown } from './markdown.js';
+import { h, clear, toast } from './util.js';
+import { createMarkdownEditor } from './md-editor.js';
 
-const SAT_LABELS = ['最悪', '低い', '普通', '良い', '最高'];
+const MOOD_LABELS = ['いまひとつ', 'まあまあ', 'ふつう', '良い', 'とても良い'];
 
-export function hide() {}
+let ctx = null;
+
+export function hide() {
+  flush();
+  document.body.classList.remove('rf-page');
+  ctx = null;
+}
 
 export async function show(root) {
   clear(root);
-  const dateInput = h('input', { type: 'date', value: state.today });
-  root.appendChild(h('div', { class: 'section-head', style: { justifyContent: 'flex-end' } },
-    h('div', { class: 'row' }, h('label', { class: 'field' }, '対象日', dateInput)),
-  ));
+  document.body.classList.add('rf-page');
 
-  const layout = h('div', { class: 'rf-layout' });
-  const editorCol = h('div', { class: 'rf-editor' });
-  const historyCol = h('div', { class: 'rf-history' });
-  layout.appendChild(editorCol);
-  layout.appendChild(historyCol);
-  root.appendChild(layout);
+  // --- クローム更新（文字数・プレースホルダ・dirty） ---
+  const phEl = h('div', { class: 'rf-ph', text: '今日はどんな一日でしたか。Markdown で自由にどうぞ。' });
+  const countEl = h('span', { class: 'rf-count', text: '0 文字' });
+  const onEditorChange = (rawText) => {
+    countEl.textContent = [...rawText.replace(/\s/g, '')].length + ' 文字';
+    phEl.style.display = rawText.trim() === '' ? 'block' : 'none';
+    if (ctx && !ctx.loading) ctx.dirty = true;
+  };
 
-  const loadHistory = () => renderHistory(historyCol, (date) => {
-    dateInput.value = date;
-    renderEditor(editorCol, date, loadHistory);
+  const editor = createMarkdownEditor({
+    placeholder: '今日はどんな一日でしたか。Markdown で自由にどうぞ。',
+    onChange: onEditorChange,
   });
 
-  dateInput.addEventListener('change', () => renderEditor(editorCol, dateInput.value || state.today, loadHistory));
+  // --- 気分ピル ---
+  const moodSegs = [];
+  const moodGroup = h('div', { class: 'rf-mood' });
+  const syncMood = () => moodSegs.forEach((s, i) => s.classList.toggle('on', i + 1 === ctx.satisfaction));
+  MOOD_LABELS.forEach((label, idx) => {
+    const val = idx + 1;
+    const seg = h('span', { class: 'rf-mood-seg', text: label });
+    seg.addEventListener('click', () => {
+      ctx.satisfaction = ctx.satisfaction === val ? 0 : val;
+      ctx.dirty = true;
+      syncMood();
+    });
+    moodSegs.push(seg);
+    moodGroup.appendChild(seg);
+  });
+  const moodRow = h('div', { class: 'rf-mood-row' },
+    h('span', { class: 'rf-mood-label', text: '今日の気分' }), moodGroup);
 
-  await renderEditor(editorCol, dateInput.value || state.today, loadHistory);
+  // --- エディタカード + クローム ---
+  const savedEl = h('span', { class: 'rf-saved', text: '保存しました' });
+  const saveBtn = h('button', { class: 'rf-save', type: 'button', text: '保存する' });
+  const hint = h('span', { class: 'rf-hint' });
+  hint.append('# 見出し', sep(), '**太字**', sep(), '- 箇条書き', sep(), '> 引用', sep(), '`コード`');
+
+  const card = h('div', { class: 'rf-card' },
+    h('div', { class: 'rf-ed-wrap' }, phEl, editor.el),
+    h('div', { class: 'rf-chrome' },
+      hint,
+      h('div', { class: 'rf-chrome-right' }, countEl, savedEl, saveBtn),
+    ),
+  );
+
+  const left = h('section', { class: 'rf-left' }, h('h1', { class: 'rf-title', text: '今日の振り返り' }), moodRow, card);
+
+  // --- 右レール ---
+  const dateInput = h('input', { type: 'date', class: 'rf-cal', value: state.today });
+  const historyHost = h('div', { class: 'rf-past-list' });
+  const rail = h('aside', { class: 'rf-rail' },
+    h('div', {},
+      h('label', { class: 'rf-label', text: '対象日' }),
+      dateInput,
+    ),
+    h('div', {},
+      h('h2', { class: 'rf-past-h2', text: '過去の振り返り' }),
+      historyHost,
+    ),
+  );
+
+  root.appendChild(h('div', { class: 'rf-main' }, left, rail));
+
+  ctx = { date: state.today, satisfaction: 0, dirty: false, loading: false, editor, dateInput, historyHost, savedEl, syncMood, renderHistory };
+
+  // --- 挙動配線 ---
+  saveBtn.addEventListener('click', () => doSave(saveBtn));
+  dateInput.addEventListener('change', () => { flush(); loadEditorForDate(dateInput.value || state.today); });
+
+  await loadEditorForDate(state.today);
   await loadHistory();
 }
 
-async function renderEditor(col, date, onSaved) {
-  clear(col);
-  col.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
-  const reflection = await api.getReflection(date);
-  clear(col);
+function sep() { return h('span', { class: 'rf-hint-sep', text: '·' }); }
 
-  // --- 満足度 5 段階 ---
-  let satisfaction = reflection && reflection.satisfaction ? reflection.satisfaction : 0;
-  const satWrap = h('div', { class: 'rf-sat' });
-  const satNote = h('div', { class: 'rf-sat-note muted' });
-  const dots = [];
-  const syncSat = () => {
-    dots.forEach((d, idx) => d.classList.toggle('on', idx < satisfaction));
-    satNote.textContent = satisfaction ? `${satisfaction} / 5 — ${SAT_LABELS[satisfaction - 1]}` : '未評価';
-  };
-  for (let n = 1; n <= 5; n++) {
-    const dot = h('button', { class: 'rf-sat-dot', type: 'button', text: '★', title: `${n}` });
-    dot.addEventListener('click', () => { satisfaction = (satisfaction === n) ? 0 : n; syncSat(); });
-    dots.push(dot);
-    satWrap.appendChild(dot);
-  }
-  syncSat();
-
-  const satCard = h('div', { class: 'card' },
-    h('div', { class: 'card-title', text: `満足度 (${date})` }),
-    h('div', { class: 'row' }, satWrap, satNote),
-  );
-
-  // --- Markdown ライブプレビュー ---
-  const ta = h('textarea', { placeholder: '今日の振り返りを Markdown で記述…' });
-  ta.value = reflection && reflection.content ? reflection.content : '';
-  const preview = h('div', { class: 'md-preview' });
-  const syncPreview = () => { clear(preview); preview.appendChild(renderMarkdown(ta.value)); };
-  ta.addEventListener('input', syncPreview);
-  syncPreview();
-
-  const save = h('button', { class: 'btn primary', text: '保存', type: 'button' });
-  save.addEventListener('click', async () => {
-    save.disabled = true;
-    try {
-      await api.putReflection(date, ta.value, satisfaction || null);
-      toast('保存しました', 'ok');
-      if (onSaved) onSaved();
-    } catch (err) { toast(`失敗: ${err.message}`, 'err'); }
-    finally { save.disabled = false; }
-  });
-
-  const editorCard = h('div', { class: 'card' },
-    h('div', { class: 'card-title', text: 'Markdown ライブプレビュー' }),
-    h('div', { class: 'rf-split' },
-      h('div', { class: 'rf-split-in' }, h('div', { class: 'muted md-preview-label', text: '入力' }), ta),
-      h('div', { class: 'rf-split-out' }, h('div', { class: 'muted md-preview-label', text: 'プレビュー' }), preview),
-    ),
-    h('div', { class: 'row', style: { marginTop: '10px' } }, save),
-  );
-
-  col.appendChild(satCard);
-  col.appendChild(editorCard);
+async function loadEditorForDate(date) {
+  if (!ctx) return;
+  ctx.loading = true;
+  ctx.date = date;
+  ctx.dateInput.value = date;
+  let r = null;
+  try { r = await api.getReflection(date); } catch { /* noop */ }
+  ctx.editor.setValue(r && r.content ? r.content : '');
+  ctx.satisfaction = r && r.satisfaction ? r.satisfaction : 0;
+  ctx.syncMood();
+  ctx.loading = false;
+  ctx.dirty = false;
 }
 
-async function renderHistory(col, onPick) {
-  clear(col);
-  const card = h('div', { class: 'card' }, h('div', { class: 'card-title', text: '過去の振り返り' }));
-  const list = h('div', { class: 'list' });
-  card.appendChild(list);
-  col.appendChild(card);
-
+async function loadHistory() {
+  if (!ctx) return;
   let items = [];
   try { items = await api.getReflections(); } catch { /* noop */ }
-  if (!items.length) {
-    list.appendChild(emptyState('保存済みの振り返りはまだありません'));
+  renderHistory(items);
+}
+
+function renderHistory(items) {
+  const host = ctx.historyHost;
+  clear(host);
+  if (!items || !items.length) {
+    host.appendChild(h('p', { class: 'rf-past-empty' }, '保存済みの振り返りは', h('br'), 'まだありません'));
     return;
   }
   for (const it of items) {
-    const stars = it.satisfaction ? '★'.repeat(it.satisfaction) + '☆'.repeat(5 - it.satisfaction) : '—';
-    const row = h('button', { class: 'rf-hist-row', type: 'button' },
-      h('span', { class: 'rf-hist-date', text: it.date }),
-      h('span', { class: 'rf-hist-stars', text: stars }),
+    const mood = it.satisfaction ? MOOD_LABELS[it.satisfaction - 1] || '' : '';
+    const item = h('div', { class: 'rf-past-item' },
+      h('div', { class: 'rf-past-top' },
+        h('span', { class: 'rf-past-date', text: it.date }),
+        h('span', { class: 'rf-past-mood', text: mood }),
+      ),
+      h('p', { class: 'rf-past-excerpt', text: it.excerpt || '' }),
     );
-    row.addEventListener('click', () => onPick(it.date));
-    list.appendChild(row);
+    item.addEventListener('click', () => { flush(); loadEditorForDate(it.date); });
+    host.appendChild(item);
   }
+}
+
+/** 未保存分を非同期フラッシュ（fire-and-forget）。 */
+function flush() {
+  if (!ctx || !ctx.dirty) return;
+  const { date, editor, satisfaction } = ctx;
+  api.putReflection(date, editor.getValue(), satisfaction || null).catch(() => { /* noop */ });
+  editor.markSaved();
+  ctx.dirty = false;
+}
+
+async function doSave(saveBtn) {
+  if (!ctx) return;
+  saveBtn.disabled = true;
+  try {
+    await api.putReflection(ctx.date, ctx.editor.getValue(), ctx.satisfaction || null);
+    ctx.editor.markSaved();
+    ctx.dirty = false;
+    showSaved();
+    await loadHistory();
+  } catch (err) {
+    toast(`失敗: ${err.message}`, 'err');
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+function showSaved() {
+  const el = ctx.savedEl;
+  el.classList.add('show');
+  clearTimeout(ctx._savedTimer);
+  ctx._savedTimer = setTimeout(() => { if (ctx) ctx.savedEl.classList.remove('show'); }, 2200);
 }

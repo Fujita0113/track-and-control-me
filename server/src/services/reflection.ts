@@ -47,14 +47,30 @@ export interface ReflectionListItem {
   date: string;
   satisfaction: number | null;
   updated_at: number;
+  excerpt: string;
 }
 
-/** 保存済み振り返りの一覧（新しい日付順）。本文は含めない（一覧軽量化）。 */
+/** 本文 Markdown → 一覧表示用の抜粋。記号を除去・空白を圧縮し先頭 80 字。 */
+export function reflectionExcerpt(content: string): string {
+  return String(content ?? '')
+    .replace(/[#>*_`~-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
+/** 保存済み振り返りの一覧（新しい日付順）。本文全文は返さず抜粋のみ（一覧軽量化）。 */
 export function listReflections(db: DB, limit = 180): ReflectionListItem[] {
-  return db
+  const rows = db
     .prepare(
-      `SELECT date, satisfaction, updated_at FROM reflection_entry
+      `SELECT date, satisfaction, updated_at, content FROM reflection_entry
        ORDER BY date DESC LIMIT ?`,
     )
-    .all(limit) as ReflectionListItem[];
+    .all(limit) as Array<{ date: string; satisfaction: number | null; updated_at: number; content: string }>;
+  return rows.map(({ date, satisfaction, updated_at, content }) => ({
+    date,
+    satisfaction,
+    updated_at,
+    excerpt: reflectionExcerpt(content),
+  }));
 }
