@@ -405,4 +405,13 @@ ALTER TABLE app_config ADD COLUMN away_min_seconds INTEGER NOT NULL DEFAULT 600;
 ALTER TABLE task ADD COLUMN due_locked INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  {
+    version: 8,
+    name: 'task-status-order-index',
+    sql: /* sql */ `
+-- 列内並べ替えの読み取り最適化（kanban-task-reorder D/Migration）。
+-- listTasks の ORDER BY status, sort_order, id を後押しする（正しさには非依存の任意索引）。
+CREATE INDEX IF NOT EXISTS idx_task_status_order ON task(status, sort_order);
+`,
+  },
 ];

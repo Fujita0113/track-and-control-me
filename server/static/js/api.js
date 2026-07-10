@@ -75,6 +75,8 @@ export const api = {
   getTasks: () => req('GET', '/api/tasks'),
   createTask: (b) => req('POST', '/api/tasks', b),
   updateTask: (id, b) => req('PATCH', `/api/tasks/${id}`, b),
+  // 列内一括再インデックス。order = [{ status, ids: [...順序付き id] }, ...]
+  reorder: (order) => req('POST', '/api/tasks/reorder', { order }),
   deleteTask: (id) => req('DELETE', `/api/tasks/${id}`),
   getPlanning: (date) => req('GET', `/api/planning/${date}`),
 };

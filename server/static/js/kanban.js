@@ -342,9 +342,14 @@ function colEl(col) {
     e.preventDefault();
     try { e.dataTransfer.dropEffect = 'move'; } catch { /* noop */ }
     if (!el.querySelector('.kb-col-over')) el.appendChild(h('div', { class: 'kb-col-over' }));
+    // 並べ替え可能列のみ挿入位置インジケータを追従表示（DONE は完了ドロップ専用）。
+    if (col.key !== 'DONE') positionDropIndicator(el.querySelector('.kb-col-list'), e.clientY);
   });
   el.addEventListener('dragleave', (e) => {
-    if (!el.contains(e.relatedTarget)) el.querySelector('.kb-col-over')?.remove();
+    if (!el.contains(e.relatedTarget)) {
+      el.querySelector('.kb-col-over')?.remove();
+      if (col.key !== 'DONE') removeDropIndicator();
+    }
   });
   el.addEventListener('drop', (e) => onDrop(e, col.key, el));
   return el;
@@ -366,6 +371,7 @@ function cardEl(t) {
     S.draggingId = null;
     card.classList.remove('dragging');
     document.querySelectorAll('.kb-col-over').forEach((o) => o.remove());
+    removeDropIndicator();
   });
 
   card.appendChild(h('div', { class: 'kb-card-top' },
@@ -388,32 +394,126 @@ function completingOverlayEl() {
 }
 
 // --- D&D / 完了 -------------------------------------------------------------
+// 挿入位置インジケータ（design D3）。ドラッグ中の再描画は HTML5 D&D を壊すため、
+// プレースホルダは renderAll を介さず直接 DOM 操作で移動する。列内で 1 本のみ使う。
+let dropIndicator = null;
+
+/**
+ * 列リスト内で clientY が入る挿入インデックスを、各カードの垂直中点比較で算出する。
+ * ドラッグ中のカード（.dragging）は測定対象から除外する。
+ */
+function dropIndexIn(listEl, clientY) {
+  const cards = [...listEl.querySelectorAll('.kb-card:not(.dragging)')];
+  let idx = cards.length;
+  for (let i = 0; i < cards.length; i++) {
+    const r = cards[i].getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) { idx = i; break; }
+  }
+  return idx;
+}
+
+/** インジケータを算出位置へ挿入/移動。測定は自身を外した状態で行い揺れを防ぐ。 */
+function positionDropIndicator(listEl, clientY) {
+  if (!listEl) return;
+  if (dropIndicator && dropIndicator.parentElement) dropIndicator.remove();
+  const cards = [...listEl.querySelectorAll('.kb-card:not(.dragging)')];
+  let ref = null;
+  for (const c of cards) {
+    const r = c.getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) { ref = c; break; }
+  }
+  if (!dropIndicator) dropIndicator = h('div', { class: 'kb-drop-indicator' });
+  if (ref) {
+    listEl.insertBefore(dropIndicator, ref);
+  } else {
+    // 末尾は「＋新規タスク」ボタン/コンポーザの直前に置く。
+    const tail = listEl.querySelector('.kb-composer, .kb-add');
+    if (tail) listEl.insertBefore(dropIndicator, tail);
+    else listEl.appendChild(dropIndicator);
+  }
+}
+
+function removeDropIndicator() {
+  if (dropIndicator && dropIndicator.parentElement) dropIndicator.remove();
+}
+
+/** 列の並びを sort_order=0,1,2… に振り直し、status を当該キーへ正規化する。 */
+function reindexColumn(colKey, orderedTasks) {
+  orderedTasks.forEach((x, i) => { x.sort_order = i; x.status = colKey; });
+}
+
+/**
+ * 影響列の新しい表示順を S.tasks に反映する。描画は列でフィルタするため列間の絶対順序は
+ * 無関係で、within-column の順序のみ担保すればよい。未変更列は現在の相対順を保つ
+ * （legacy status 混在列を不用意に並べ替えない）。
+ */
+function commitColumnOrder(affected) {
+  const groups = { HOLD: [], TODO: [], DOING: [], DONE: [] };
+  for (const x of S.tasks) groups[normStatus(x.status)].push(x);
+  for (const k of Object.keys(affected)) groups[k] = affected[k];
+  S.tasks = [...groups.HOLD, ...groups.TODO, ...groups.DOING, ...groups.DONE];
+}
+
+/** バッチ再インデックスを保存。失敗時は再取得でサーバ状態へ収束（design Risks）。 */
+async function saveReorder(groups) {
+  const filtered = groups.filter((g) => g.ids.length > 0);
+  if (!filtered.length) return;
+  try { await api.reorder(filtered); }
+  catch (err) { toast(`並べ替えの保存に失敗: ${err.message}`, 'err'); await reload(); }
+}
+
 async function onDrop(e, colKey, colElm) {
   e.preventDefault();
   colElm.querySelector('.kb-col-over')?.remove();
+  removeDropIndicator();
   let id = Number(e.dataTransfer.getData('text/plain'));
   if (!id) id = S.draggingId;
   S.draggingId = null;
   const t = findTask(id);
-  if (!t || normStatus(t.status) === colKey) return;
+  if (!t) return;
+  const fromCol = normStatus(t.status);
 
-  if (colKey !== 'DONE') {
-    const fromCol = normStatus(t.status);
-    t.status = colKey;
-    if (t.done_at) t.done_at = null;
-    // ロックされていなければ列移動で due を再計算（design D3）。ロック時は据え置き。
-    const patch = { status: colKey };
-    if (!t.due_locked) {
-      const dec = computeDue(fromCol, colKey, tomorrowMode(), state.today);
-      if (dec.change) { t.due = dec.due; patch.due = dec.due; }
-    }
-    renderAll();
-    try { await api.updateTask(t.id, patch); }
-    catch (err) { toast(`移動に失敗: ${err.message}`, 'err'); await reload(); }
+  // 完了列：従来どおり完了演出＋アーカイブ（並べ替え対象外, design D4）。
+  if (colKey === 'DONE') {
+    if (fromCol === 'DONE') return;
+    const rect = colElm.getBoundingClientRect();
+    completeTask(t, rect.left + rect.width / 2, rect.top + 64);
     return;
   }
-  const rect = colElm.getBoundingClientRect();
-  completeTask(t, rect.left + rect.width / 2, rect.top + 64);
+
+  const listEl = colElm.querySelector('.kb-col-list');
+  const idx = dropIndexIn(listEl, e.clientY);
+
+  if (fromCol === colKey) {
+    // 同一列内の並べ替え：算出インデックスへ挿入 → 列を連番へ正規化。
+    const without = S.tasks.filter((x) => normStatus(x.status) === colKey && x.id !== t.id);
+    without.splice(idx, 0, t);
+    reindexColumn(colKey, without);
+    commitColumnOrder({ [colKey]: without });
+    renderAll();
+    await saveReorder([{ status: colKey, ids: without.map((x) => x.id) }]);
+    return;
+  }
+
+  // 列間移動：status 更新＋due 再計算（design D3）＋算出インデックスへ挿入。source/dest の
+  // 両列を連番へ正規化し、1 リクエストで一貫保存する。
+  const dest = S.tasks.filter((x) => normStatus(x.status) === colKey && x.id !== t.id);
+  const src = S.tasks.filter((x) => normStatus(x.status) === fromCol && x.id !== t.id);
+  t.status = colKey;
+  if (t.done_at) t.done_at = null;
+  if (!t.due_locked) {
+    const dec = computeDue(fromCol, colKey, tomorrowMode(), state.today);
+    if (dec.change) t.due = dec.due;
+  }
+  dest.splice(idx, 0, t);
+  reindexColumn(colKey, dest);
+  reindexColumn(fromCol, src);
+  commitColumnOrder({ [colKey]: dest, [fromCol]: src });
+  renderAll();
+  await saveReorder([
+    { status: fromCol, ids: src.map((x) => x.id) },
+    { status: colKey, ids: dest.map((x) => x.id) },
+  ]);
 }
 
 function completeTask(t, x, y) {
@@ -653,7 +753,7 @@ function detailEl(t) {
         renderAll();
       },
     }),
-    h('p', { class: 'kb-detail-hint', text: 'ノートは自動保存されます。列の移動はボードでカードをドラッグ。' })));
+    h('p', { class: 'kb-detail-hint', text: 'ノートは自動保存されます。カードはボードでドラッグして列の移動・並べ替えができます。' })));
   return panel;
 }
 

@@ -481,6 +481,8 @@ body.kb-page .content { max-width: 1580px; }
 .kb-count.done { background: #E9F5EE; color: #2E7D54; }
 .kb-col-list { display: flex; flex-direction: column; gap: 9px; padding: 2px; min-height: 56px; }
 .kb-col-over { position: absolute; inset: 0; border: 2px dashed #7FC79B; border-radius: 13px; background: rgba(46, 158, 99, 0.05); pointer-events: none; z-index: 3; }
+/* 挿入位置インジケータ（列内並べ替え）。gap の間に差し込む細いピル。 */
+.kb-drop-indicator { height: 3px; background: #2E9E63; border-radius: 3px; margin: 0 2px; pointer-events: none; position: relative; z-index: 4; box-shadow: 0 0 6px rgba(46, 158, 99, 0.45); }
 
 /* カード */
 .kb-card { background: #fff; border: 1px solid #EAE9E4; border-radius: 10px; padding: 12px; box-shadow: 0 1px 2px rgba(40, 38, 32, 0.04); cursor: pointer; position: relative; transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s; }
