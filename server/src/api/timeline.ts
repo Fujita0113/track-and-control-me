@@ -27,6 +27,7 @@ export function registerTimelineRoutes(app: FastifyInstance, deps: ApiDeps): voi
       title: string;
       color?: string | null;
       categoryKey?: string | null;
+      category?: string | null;
     };
     if (b?.startAt == null || b?.endAt == null || !b?.title) {
       reply.code(400);

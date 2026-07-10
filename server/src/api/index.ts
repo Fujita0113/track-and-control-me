@@ -13,6 +13,7 @@ import {
 import { evaluateDay } from '../rules/evaluate.js';
 import { listChecks, setCheck } from '../rules/checks.js';
 import { revealPasswords } from '../password/reveal.js';
+import { listManualCategories } from '../services/manual-categories.js';
 import { registerTimelineRoutes } from './timeline.js';
 import { registerPlanningRoutes } from './planning.js';
 import type { ApiDeps } from './types.js';
@@ -61,6 +62,9 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
 
   // --- グループ（ルール編集のピッカー用）---------------------------------
   app.get('/api/groups', async () => listGroups(db));
+
+  // --- 手動カテゴリ（記録ポップオーバーのチップ; 直近使用順）--------------
+  app.get('/api/categories', async () => listManualCategories(db));
 
   // --- サマリ（ダッシュボード）-------------------------------------------
   app.get('/api/summary', async (req) => {

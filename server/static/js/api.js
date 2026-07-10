@@ -40,6 +40,9 @@ export const api = {
   // グループ
   getGroups: () => req('GET', '/api/groups'),
 
+  // 手動カテゴリ（記録ポップオーバーのチップ; 直近使用順）
+  getCategories: () => req('GET', '/api/categories'),
+
   // サマリ
   getSummary: (date) => req('GET', date ? `/api/summary?${q({ date })}` : '/api/summary'),
   getRange: (from, to) => req('GET', `/api/summary/range?${q({ from, to })}`),

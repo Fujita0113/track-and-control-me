@@ -425,4 +425,30 @@ CREATE INDEX IF NOT EXISTS idx_task_status_order ON task(status, sort_order);
 ALTER TABLE app_config ADD COLUMN exclude_ungrouped_from_total INTEGER NOT NULL DEFAULT 0;
 `,
   },
+  {
+    version: 10,
+    name: 'manual-category-registry',
+    sql: /* sql */ `
+-- 手動記録カテゴリのレジストリ（spec: manual-category-registry / design.md D1）。
+-- 離席／空き時間の記録ポップオーバーで使う表示ラベルを永続化し、直近使用順で提供する。
+-- 旧 category テーブル（WORK/AWAY 層の遺物）とは別物の最小テーブル。集計・ルール・rollover には非接続。
+-- name はそのまま表示名（trim 済み）。last_used_at=0 は未使用（末尾へ回る）。rowid=挿入順（既定語の並び保持）。
+CREATE TABLE manual_category (
+  name TEXT PRIMARY KEY,                    -- trim 済み表示名（そのままラベル）
+  last_used_at INTEGER NOT NULL DEFAULT 0,  -- epoch ms。未使用は 0
+  use_count INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+-- 既定7語を挿入順＝並び順でシード（INSERT OR IGNORE で冪等）。last_used_at=0 で未使用扱い。
+INSERT OR IGNORE INTO manual_category (name, last_used_at, use_count, created_at) VALUES
+  ('昼食', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000),
+  ('休憩', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000),
+  ('移動', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000),
+  ('仮眠', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000),
+  ('運動', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000),
+  ('雑務', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000),
+  ('その他', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000);
+`,
+  },
 ];

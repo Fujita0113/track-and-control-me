@@ -1,6 +1,7 @@
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { boundaryStartOfDay, nextDayKey } from '../aggregation/index.js';
+import { recordCategoryUse } from './manual-categories.js';
 
 /**
  * 行動記録タイムライン（spec: activity-timeline / tasks 6.3–6.5, 6.7）。
@@ -185,10 +186,17 @@ export interface ManualInput {
   title: string;
   color?: string | null;
   categoryKey?: string | null;
+  /** 記録ポップオーバーで選択／入力されたカテゴリ名（表示ラベル）。レジストリへ upsert する。 */
+  category?: string | null;
 }
 
 export function addManualEntry(db: DB, dayKey: string, input: ManualInput): number {
   const now = Date.now();
+  // カテゴリ（表示ラベル）が与えられていればレジストリへ使用登録し、trim 名を category_key に格納する。
+  // 空／空白のみのときは登録せず、従来どおり categoryKey ?? 'uncategorized' を使う。
+  const category = (input.category ?? '').trim();
+  if (category) recordCategoryUse(db, category, now);
+  const categoryKey = category || (input.categoryKey ?? 'uncategorized');
   const info = db
     .prepare(
       `INSERT INTO activity_log_entry
@@ -201,7 +209,7 @@ export function addManualEntry(db: DB, dayKey: string, input: ManualInput): numb
       input.endAt,
       input.title,
       input.color ?? null,
-      input.categoryKey ?? 'uncategorized',
+      categoryKey,
       now,
       now,
     );
