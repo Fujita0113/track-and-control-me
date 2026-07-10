@@ -22,7 +22,43 @@ const PRI = {
 };
 const WD_JP = ['日', '月', '火', '水', '木', '金', '土'];
 const SOUND_KEY = 'tcm_kanban_sound';
+const TOMORROW_KEY = 'tcm_kanban_tomorrow'; // {date, on} その日限りの「明日の計画モード」
+const HOLD_AHEAD_DAYS = 7; // 保留カードの既定 due（作業日 +7）
 const NS = 'http://www.w3.org/2000/svg';
+
+// --- 明日トグル（明日の計画モード） ------------------------------------------
+// クライアント状態。localStorage に日付キーで保持し、翌日は OFF にリセット。
+// 振り返り画面（reflection.js）の「明日の計画へ」からも setTomorrowMode(true) で ON にする。
+export function tomorrowMode() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOMORROW_KEY) || 'null');
+    if (raw && raw.date === state.today) return !!raw.on;
+  } catch { /* noop */ }
+  return false;
+}
+export function setTomorrowMode(on) {
+  localStorage.setItem(TOMORROW_KEY, JSON.stringify({ date: state.today, on: !!on }));
+}
+
+/**
+ * 自動 due 決定エンジン（design D3）。ロックされていないタスクにのみ適用する純関数。
+ * @param {string|null} fromCol 遷移前の列（作成時は null）
+ * @param {string} toCol 遷移後の列（HOLD/TODO/DOING/DONE）
+ * @param {boolean} tomorrowOn 明日トグル
+ * @param {string} workday 作業日 'YYYY-MM-DD'（= state.today）
+ * @returns {{change: boolean, due?: string}} change=false は「期日を変更しない」
+ */
+export function computeDue(fromCol, toCol, tomorrowOn, workday) {
+  if (toCol === 'DONE') return { change: false }; // 完了＝アーカイブ。触らない。
+  if (toCol === 'HOLD') return { change: true, due: addDays(workday, HOLD_AHEAD_DAYS) };
+  // toCol は非HOLD（TODO/DOING）。
+  // 作成（fromCol=null）または HOLD からの復帰なら today/明日を付与。
+  if (fromCol === null || fromCol === 'HOLD') {
+    return { change: true, due: tomorrowOn ? addDays(workday, 1) : workday };
+  }
+  // 非HOLD → 非HOLD の移動は据え置き。
+  return { change: false };
+}
 
 // --- 画面状態 -------------------------------------------------------------
 let rootEl = null;
@@ -89,6 +125,16 @@ function overdueCount() {
 }
 function findTask(id) {
   return S.tasks.find((t) => t.id === id) || null;
+}
+
+// --- 明日の計画進捗（gate の tomorrow_tasks_registered と同じ数え方: due=翌日 かつ 未完了） ---
+function planningThreshold() {
+  const n = state.config && state.config.planning_min_tomorrow_tasks;
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+function tomorrowTaskCount() {
+  const tk = addDays(state.today, 1);
+  return activeTasks().filter((t) => t.due === tk).length;
 }
 
 /** 参照の fmtDue: 期限なし/今日/明日/昨日/M/D 超過/M/D。 */
@@ -227,7 +273,21 @@ function headerEl() {
     setWrap.appendChild(pop);
   }
 
-  const right = h('div', { class: 'kb-head-right' }, dateChip, doneChip, setWrap);
+  // 明日の計画モード トグル（＋ ON 中は「明日のタスク n/N」進捗）。
+  const tmOn = tomorrowMode();
+  const planChip = h('div', { class: `kb-chip${tmOn ? ' kb-chip-plan' : ''}` },
+    h('span', { class: 'kb-chip-lbl', text: '明日の計画' }),
+    switchEl(tmOn, () => { setTomorrowMode(!tmOn); renderAll(); }));
+  const right = h('div', { class: 'kb-head-right' }, dateChip, doneChip);
+  if (tmOn) {
+    const n = tomorrowTaskCount();
+    const need = planningThreshold();
+    right.appendChild(h('div', { class: `kb-chip kb-chip-plan${n >= need ? ' done' : ''}` },
+      h('span', { class: 'kb-chip-lbl', text: '明日のタスク' }),
+      h('span', { class: 'kb-chip-val', text: `${n} / ${need}` })));
+  }
+  right.appendChild(planChip);
+  right.appendChild(setWrap);
   return h('div', { class: 'kb-head' }, left, right);
 }
 
@@ -310,7 +370,10 @@ function cardEl(t) {
 
   card.appendChild(h('div', { class: 'kb-card-top' },
     h('span', { class: `kb-pri ${pri}`, text: PRI[pri].label }),
-    h('span', { class: 'kb-due', text: fmtDue(t.due) })));
+    h('span', {
+      class: 'kb-due',
+      title: t.due_locked ? '手動指定した期日（自動更新なし）' : '自動決定の期日',
+    }, fmtDue(t.due), t.due_locked ? ' 🔒' : null)));
   card.appendChild(h('div', { class: 'kb-card-title', text: t.title }));
   if (S.detailId === t.id) card.appendChild(h('div', { class: 'kb-card-sel' }));
   if (S.completingId === t.id) card.appendChild(completingOverlayEl());
@@ -335,10 +398,17 @@ async function onDrop(e, colKey, colElm) {
   if (!t || normStatus(t.status) === colKey) return;
 
   if (colKey !== 'DONE') {
+    const fromCol = normStatus(t.status);
     t.status = colKey;
     if (t.done_at) t.done_at = null;
+    // ロックされていなければ列移動で due を再計算（design D3）。ロック時は据え置き。
+    const patch = { status: colKey };
+    if (!t.due_locked) {
+      const dec = computeDue(fromCol, colKey, tomorrowMode(), state.today);
+      if (dec.change) { t.due = dec.due; patch.due = dec.due; }
+    }
     renderAll();
-    try { await api.updateTask(t.id, { status: colKey }); }
+    try { await api.updateTask(t.id, patch); }
     catch (err) { toast(`移動に失敗: ${err.message}`, 'err'); await reload(); }
     return;
   }
@@ -410,7 +480,10 @@ async function commitComposer(keepOpen, openDet) {
   if (!text) { S.composingCol = null; S.composerText = ''; renderAll(); return; }
   S.composerText = '';
   try {
-    const t = await api.createTask({ title: text, status: col, priority: 'low', due: null });
+    // 作成時に列＋明日トグルから due を自動決定（design D3）。ロックは 0。
+    const dec = computeDue(null, normStatus(col), tomorrowMode(), state.today);
+    const due = dec.change ? dec.due : null;
+    const t = await api.createTask({ title: text, status: col, priority: 'low', due, due_locked: 0 });
     S.tasks.push(t);
     if (openDet) {
       S.composingCol = null;
@@ -612,16 +685,32 @@ function duePickerEl(t) {
       S.dueCalOpen = true;
       renderAll();
     },
-  }, iconCalendar(overdue ? '#C25E4D' : '#8A8983'), h('span', { text: label }));
+  }, iconCalendar(overdue ? '#C25E4D' : '#8A8983'),
+    h('span', { text: t.due_locked ? `${label} 🔒` : label }));
   wrap.appendChild(btn);
   if (S.dueCalOpen) wrap.appendChild(calendarEl(t));
   return wrap;
 }
 
 async function pickDue(t, iso) {
+  // 手動指定はロック（以後、自動 due エンジンの上書き対象から外す）。
   t.due = iso;
+  t.due_locked = 1;
   S.dueCalOpen = false;
-  try { await api.updateTask(t.id, { due: iso }); }
+  try { await api.updateTask(t.id, { due: iso, due_locked: 1 }); }
+  catch (err) { toast(`保存に失敗: ${err.message}`, 'err'); }
+  renderAll();
+}
+
+/** ロックを解除し、現在の列＋明日トグルから due を再計算する（design D4）。 */
+async function resetDueAuto(t) {
+  const col = normStatus(t.status);
+  const dec = computeDue(null, col, tomorrowMode(), state.today); // 現列に「置き直す」扱い
+  const due = dec.change ? dec.due : null;
+  t.due = due;
+  t.due_locked = 0;
+  S.dueCalOpen = false;
+  try { await api.updateTask(t.id, { due, due_locked: 0 }); }
   catch (err) { toast(`保存に失敗: ${err.message}`, 'err'); }
   renderAll();
 }
@@ -671,7 +760,8 @@ function calendarEl(t) {
   cal.appendChild(h('div', { class: 'kb-cal-foot' },
     h('button', { class: 'kb-cal-quick green', type: 'button', text: '今日', onclick: () => pickDue(t, state.today) }),
     h('button', { class: 'kb-cal-quick green', type: 'button', text: '明日', onclick: () => pickDue(t, addDays(state.today, 1)) }),
-    h('button', { class: 'kb-cal-quick plain', type: 'button', text: '期限なし', onclick: () => pickDue(t, null) })));
+    h('button', { class: 'kb-cal-quick plain', type: 'button', text: '期限なし', onclick: () => pickDue(t, null) }),
+    h('button', { class: 'kb-cal-quick plain', type: 'button', text: '自動に戻す', title: '列と明日トグルから期日を自動決定', onclick: () => resetDueAuto(t) })));
   return cal;
 }
 

@@ -15,6 +15,8 @@ export interface TaskRow {
   planned_for: string | null;
   priority: TaskPriority;
   due: string | null;
+  /** 1 = 手動指定でロック（自動 due 上書き対象外）。既定 0。 */
+  due_locked: number;
   notes: string | null;
   sort_order: number;
   created_at: number;
@@ -37,6 +39,7 @@ export interface TaskInput {
   planned_for?: string | null;
   priority?: TaskPriority;
   due?: string | null;
+  due_locked?: number;
   notes?: string | null;
   sort_order?: number;
 }
@@ -49,8 +52,8 @@ export function createTask(db: DB, input: TaskInput): TaskRow {
   const now = Date.now();
   const info = db
     .prepare(
-      `INSERT INTO task (title, description, status, planned_for, priority, due, notes, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO task (title, description, status, planned_for, priority, due, due_locked, notes, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.title,
@@ -59,6 +62,7 @@ export function createTask(db: DB, input: TaskInput): TaskRow {
       input.planned_for ?? null,
       normPriority(input.priority),
       input.due ?? null,
+      input.due_locked ? 1 : 0,
       input.notes ?? null,
       input.sort_order ?? 0,
       now,
@@ -74,6 +78,7 @@ const PATCHABLE = [
   'planned_for',
   'priority',
   'due',
+  'due_locked',
   'notes',
   'sort_order',
 ] as const;
@@ -91,7 +96,14 @@ export function updateTask(
   for (const k of PATCHABLE) {
     if (k in patch) {
       fields.push(`${k} = @${k}`);
-      params[k] = k === 'priority' ? normPriority(patch[k]) : patch[k];
+      params[k] =
+        k === 'priority'
+          ? normPriority(patch[k])
+          : k === 'due_locked'
+            ? patch[k]
+              ? 1
+              : 0
+            : patch[k];
     }
   }
   // DONE へ遷移したら done_at を刻む（履歴保持）。DONE から離脱で解除。

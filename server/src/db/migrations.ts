@@ -395,4 +395,14 @@ CREATE INDEX idx_task_due ON task(due, status);
 ALTER TABLE app_config ADD COLUMN away_min_seconds INTEGER NOT NULL DEFAULT 600;
 `,
   },
+  {
+    version: 7,
+    name: 'task-due-locked',
+    sql: /* sql */ `
+-- 期日の手動指定ロック（kanban-rule-conditions D4）。
+-- 1 = ユーザーが期限ピッカーで手動指定 → 自動 due エンジンの上書き対象から除外。
+-- 既存行は既定 0（自動決定の対象）。
+ALTER TABLE task ADD COLUMN due_locked INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];

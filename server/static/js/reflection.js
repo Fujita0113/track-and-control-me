@@ -7,6 +7,7 @@ import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, toast } from './util.js';
 import { createMarkdownEditor } from './md-editor.js';
+import { setTomorrowMode } from './kanban.js';
 
 const MOOD_LABELS = ['いまひとつ', 'まあまあ', 'ふつう', '良い', 'とても良い'];
 
@@ -57,6 +58,8 @@ export async function show(root) {
   // --- エディタカード + クローム ---
   const savedEl = h('span', { class: 'rf-saved', text: '保存しました' });
   const saveBtn = h('button', { class: 'rf-save', type: 'button', text: '保存する' });
+  // 就寝前リチュアル: 振り返り保存 → 明日の計画モード ON → カンバンへ遷移。
+  const planBtn = h('button', { class: 'rf-save', type: 'button', text: '振り返りを終えて明日の計画へ →' });
   const hint = h('span', { class: 'rf-hint' });
   hint.append('# 見出し', sep(), '**太字**', sep(), '- 箇条書き', sep(), '> 引用', sep(), '`コード`');
 
@@ -64,7 +67,7 @@ export async function show(root) {
     h('div', { class: 'rf-ed-wrap' }, phEl, editor.el),
     h('div', { class: 'rf-chrome' },
       hint,
-      h('div', { class: 'rf-chrome-right' }, countEl, savedEl, saveBtn),
+      h('div', { class: 'rf-chrome-right' }, countEl, savedEl, saveBtn, planBtn),
     ),
   );
 
@@ -90,6 +93,7 @@ export async function show(root) {
 
   // --- 挙動配線 ---
   saveBtn.addEventListener('click', () => doSave(saveBtn));
+  planBtn.addEventListener('click', () => goToPlanning(planBtn));
   dateInput.addEventListener('change', () => { flush(); loadEditorForDate(dateInput.value || state.today); });
 
   await loadEditorForDate(state.today);
@@ -162,6 +166,32 @@ async function doSave(saveBtn) {
     toast(`失敗: ${err.message}`, 'err');
   } finally {
     saveBtn.disabled = false;
+  }
+}
+
+/** 振り返りを保存し、明日の計画モードへ移行してカンバンへ遷移する（design D5）。 */
+async function goToPlanning(btn) {
+  if (!ctx) return;
+  const body = ctx.editor.getValue();
+  if (!body.trim()) {
+    // 空本文では reflection_done が成立しないため、まず記入を促す。
+    toast('先に今日の振り返りを記入してください', 'err');
+    ctx.editor.focus?.();
+    return;
+  }
+  btn.disabled = true;
+  try {
+    await api.putReflection(ctx.date, body, ctx.satisfaction || null);
+    ctx.editor.markSaved();
+    ctx.dirty = false;
+    setTomorrowMode(true); // 明日トグル ON（その日限り）
+    const tab = document.querySelector('.tab[data-target="kanban"]');
+    if (tab) tab.click();
+    else toast('カンバンを開けませんでした', 'err');
+  } catch (err) {
+    toast(`失敗: ${err.message}`, 'err');
+  } finally {
+    btn.disabled = false;
   }
 }
 

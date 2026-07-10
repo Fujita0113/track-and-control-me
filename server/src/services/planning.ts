@@ -59,6 +59,39 @@ export function getPlanningSignal(db: DB, dayKey: string): PlanningSignal {
   return { planningDone, reflectionDone, tomorrowTaskCount };
 }
 
+/**
+ * PLANNING 条件の `signal_key` → 単独ブールシグナルの中央レジストリ
+ * （kanban-rule-conditions D1/D2）。`evaluateDay` はこれ 1 箇所を呼ぶ。
+ *
+ * - `reflection_done`: 当日の振り返り本文が非空（= 既存 `reflectionDone`）。
+ * - `tomorrow_tasks_registered`: 翌日対象の未完了タスク数 >= `planning_min_tomorrow_tasks`。
+ * - `tomorrow_planned`: 既存合成 `planningDone`（振り返り AND 翌日タスク≥N）。
+ * - `null`: 後方互換で `tomorrow_planned` として評価（既存 signal_key 未設定条件）。
+ * - 未知キー: 安全側で false ＋ 警告（誤解錠しない）。
+ */
+export const PLANNING_SIGNAL_KEYS = [
+  'tomorrow_planned',
+  'reflection_done',
+  'tomorrow_tasks_registered',
+] as const;
+export type PlanningSignalKey = (typeof PLANNING_SIGNAL_KEYS)[number];
+
+export function resolvePlanningSignal(db: DB, dayKey: string, signalKey: string | null): boolean {
+  const sig = getPlanningSignal(db, dayKey);
+  switch (signalKey) {
+    case null:
+    case 'tomorrow_planned':
+      return sig.planningDone;
+    case 'reflection_done':
+      return sig.reflectionDone;
+    case 'tomorrow_tasks_registered':
+      return sig.tomorrowTaskCount >= getConfig(db).planning_min_tomorrow_tasks;
+    default:
+      console.warn(`[planning] 未知の signal_key=${JSON.stringify(signalKey)} → false（非解錠）`);
+      return false;
+  }
+}
+
 /** planning_status を materialize（task 9.3）。シグナルを返す。 */
 export function refreshPlanningStatus(db: DB, dayKey: string, nowMs = Date.now()): PlanningSignal {
   const sig = getPlanningSignal(db, dayKey);

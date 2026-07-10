@@ -33,7 +33,7 @@ async function render(body) {
     { key: 'heartbeat_seconds', label: 'ハートビート(秒)', type: 'number' },
     { key: 'session_coalesce_seconds', label: 'セッション結合(秒)', type: 'number' },
     { key: 'away_min_seconds', label: '離席とみなす最小時間(分)', type: 'number', unit: 'min' },
-    { key: 'planning_min_tomorrow_tasks', label: 'PLANNING: 翌日最小タスク数', type: 'number' },
+    { key: 'planning_min_tomorrow_tasks', label: '明日のタスク登録: 必要件数（閾値）', type: 'number' },
     { key: 'ws_port', label: 'ws_port', type: 'number' },
     { key: 'shared_token', label: 'shared_token', type: 'text' },
   ];

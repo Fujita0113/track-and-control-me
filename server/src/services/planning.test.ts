@@ -5,7 +5,8 @@ import { upsertFutureRuleSet } from '../rules/rules.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { saveReflection } from './reflection.js';
 import { createTask } from './tasks.js';
-import { getPlanningSignal, refreshPlanningStatus } from './planning.js';
+import { getPlanningSignal, refreshPlanningStatus, resolvePlanningSignal } from './planning.js';
+import { updateConfig } from '../db/index.js';
 
 const TZ = 'Asia/Tokyo';
 const jst = (y: number, mo: number, d: number, h: number, mi: number) =>
@@ -34,7 +35,8 @@ beforeEach(() => {
       combinator: 'ALL',
       conditions: [
         { target: 'TOTAL_WORK', thresholdSeconds: 3600 },
-        { target: 'PLANNING', signalKey: 'default', conditionKey: 'planning' },
+        // signal_key 未設定（null）は後方互換で tomorrow_planned として評価される。
+        { target: 'PLANNING', signalKey: null, conditionKey: 'planning' },
       ],
     },
     NOW_YESTERDAY,
@@ -87,5 +89,85 @@ describe('PLANNING シグナル & ゲート統合（9.3–9.5）', () => {
     expect(sig.planningDone).toBe(false);
     const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
     expect(r.status).toBe('LOCKED');
+  });
+});
+
+describe('resolvePlanningSignal（単独シグナル / signal_key 駆動）', () => {
+  it('reflection_done: 本文ありで true / 未記録で false', () => {
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'reflection_done')).toBe(false);
+    saveReflection(db, DAY_TODAY, '# 振り返り\n進めた。');
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'reflection_done')).toBe(true);
+  });
+
+  it('reflection_done: 空白のみの本文は false', () => {
+    saveReflection(db, DAY_TODAY, '   \n  ');
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'reflection_done')).toBe(false);
+  });
+
+  it('tomorrow_tasks_registered: 翌日タスク数が閾値以上で true', () => {
+    // 既定閾値=1。
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_tasks_registered')).toBe(false);
+    createTask(db, { title: '明日: DP 復習', status: 'TODO', due: DAY_TOMORROW });
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_tasks_registered')).toBe(true);
+  });
+
+  it('tomorrow_tasks_registered: 閾値変更が評価に反映される', () => {
+    updateConfig(db, { planning_min_tomorrow_tasks: 3 });
+    createTask(db, { title: 'A', status: 'TODO', due: DAY_TOMORROW });
+    createTask(db, { title: 'B', status: 'TODO', due: DAY_TOMORROW });
+    // 2 件 < 3 → false。
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_tasks_registered')).toBe(false);
+    createTask(db, { title: 'C', status: 'TODO', due: DAY_TOMORROW });
+    // 3 件 >= 3 → true。
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_tasks_registered')).toBe(true);
+  });
+
+  it('tomorrow_tasks_registered: DONE の翌日タスクは計上しない', () => {
+    createTask(db, { title: '完了済み', status: 'DONE', due: DAY_TOMORROW });
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_tasks_registered')).toBe(false);
+  });
+
+  it('tomorrow_planned: 振り返り＋翌日タスクの両方で true（合成）', () => {
+    saveReflection(db, DAY_TODAY, '振り返り');
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_planned')).toBe(false);
+    createTask(db, { title: '明日タスク', status: 'TODO', due: DAY_TOMORROW });
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_planned')).toBe(true);
+  });
+
+  it('後方互換: signal_key=null は tomorrow_planned と同一結果', () => {
+    saveReflection(db, DAY_TODAY, '振り返り');
+    createTask(db, { title: '明日タスク', status: 'TODO', due: DAY_TOMORROW });
+    const viaNull = resolvePlanningSignal(db, DAY_TODAY, null);
+    const viaPlanned = resolvePlanningSignal(db, DAY_TODAY, 'tomorrow_planned');
+    const planningDone = getPlanningSignal(db, DAY_TODAY).planningDone;
+    expect(viaNull).toBe(planningDone);
+    expect(viaNull).toBe(viaPlanned);
+    expect(viaNull).toBe(true);
+  });
+
+  it('未知の signal_key は false（誤解錠しない）', () => {
+    // たとえ振り返り・翌日タスクが揃っていても未知キーは false。
+    saveReflection(db, DAY_TODAY, '振り返り');
+    createTask(db, { title: '明日タスク', status: 'TODO', due: DAY_TOMORROW });
+    expect(resolvePlanningSignal(db, DAY_TODAY, 'no_such_signal')).toBe(false);
+  });
+
+  it('ゲート統合: signal_key=reflection_done は振り返りだけで達成しうる', () => {
+    // 別途、reflection_done 単独条件のルールを翌日発効で作り評価する。
+    upsertFutureRuleSet(
+      db,
+      DAY_TOMORROW,
+      {
+        combinator: 'ALL',
+        conditions: [{ target: 'PLANNING', signalKey: 'reflection_done', conditionKey: 'refl' }],
+      },
+      NOW_TODAY,
+    );
+    const NOW_TMR = jst(2026, 7, 11, 12, 0);
+    let r = evaluateDay(db, DAY_TOMORROW, NOW_TMR);
+    expect(r.perCondition.find((p) => p.target === 'PLANNING')!.met).toBe(false);
+    saveReflection(db, DAY_TOMORROW, '明日側の振り返り');
+    r = evaluateDay(db, DAY_TOMORROW, NOW_TMR);
+    expect(r.perCondition.find((p) => p.target === 'PLANNING')!.met).toBe(true);
   });
 });

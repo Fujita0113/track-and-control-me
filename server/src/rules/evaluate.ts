@@ -1,6 +1,6 @@
 import type { DB } from '../db/index.js';
 import { totalWorkSecondsForDay } from '../services/categories.js';
-import { getPlanningSignal } from '../services/planning.js';
+import { resolvePlanningSignal } from '../services/planning.js';
 import { getEffectiveRuleSet, type RuleTarget } from './rules.js';
 import { getCheck } from './checks.js';
 
@@ -20,6 +20,7 @@ export interface ConditionResult {
   thresholdSeconds?: number | null;
   label?: string | null;
   stableGroupId?: string | null;
+  signalKey?: string | null;
 }
 
 export interface EvalResult {
@@ -94,7 +95,8 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
           met = getCheck(db, dayKey, c.condition_key);
           break;
         case 'PLANNING':
-          met = getPlanningSignal(db, dayKey).planningDone;
+          // signal_key で評価シグナルを選択（null は tomorrow_planned＝後方互換）。
+          met = resolvePlanningSignal(db, dayKey, c.signal_key);
           break;
       }
       perCondition.push({
@@ -105,6 +107,7 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
         thresholdSeconds: c.threshold_seconds,
         label: c.label,
         stableGroupId: c.stable_group_id,
+        signalKey: c.signal_key,
       });
     }
     const combinator = eff.ruleSet.combinator;

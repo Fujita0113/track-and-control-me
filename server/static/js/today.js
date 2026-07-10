@@ -6,7 +6,7 @@
 import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, fmtDur, fmtHM, colorHex, copyText, toast, emptyState } from './util.js';
-import { targetLabel } from './targets.js';
+import { targetLabel, planningSignalLabel } from './targets.js';
 import { renderRuleEditing } from './rules.js';
 
 let charts = [];
@@ -177,9 +177,20 @@ function condRow(c, planning, date) {
     title = `グループ: ${c.stableGroupId || '?'}`;
     sub = `${fmtHM(c.actualSeconds || 0)} / ${fmtHM(c.thresholdSeconds || 0)}`;
   } else if (c.target === 'PLANNING') {
-    title = '翌日計画 (PLANNING)';
-    if (planning) sub = `振り返り: ${planning.reflectionDone ? '✓' : '✗'} / 翌日タスク: ${planning.tomorrowTaskCount}`;
-    else sub = met ? '完了' : '未完了';
+    // signal_key に応じた日本語ラベルを条件名に表示する。
+    title = `${targetLabel('PLANNING')}: ${planningSignalLabel(c.signalKey)}`;
+    if (planning) {
+      // シグナルごとに関係する実データだけを補足表示する。
+      if (c.signalKey === 'reflection_done') {
+        sub = `振り返り: ${planning.reflectionDone ? '✓ 記録済み' : '✗ 未記録'}`;
+      } else if (c.signalKey === 'tomorrow_tasks_registered') {
+        sub = `明日のタスク: ${planning.tomorrowTaskCount} 件`;
+      } else {
+        sub = `振り返り: ${planning.reflectionDone ? '✓' : '✗'} / 明日のタスク: ${planning.tomorrowTaskCount} 件`;
+      }
+    } else {
+      sub = met ? '完了' : '未完了';
+    }
   }
 
   const main = h('div', { class: 'cond-main' },

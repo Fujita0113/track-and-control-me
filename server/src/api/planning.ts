@@ -46,6 +46,7 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
       planned_for?: string | null;
       priority?: string;
       due?: string | null;
+      due_locked?: number;
       notes?: string | null;
     };
     if (!b?.title) {
