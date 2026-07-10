@@ -177,8 +177,8 @@ function condRow(c, planning, date) {
     title = `グループ: ${c.stableGroupId || '?'}`;
     sub = `${fmtHM(c.actualSeconds || 0)} / ${fmtHM(c.thresholdSeconds || 0)}`;
   } else if (c.target === 'PLANNING') {
-    // signal_key に応じた日本語ラベルを条件名に表示する。
-    title = `${targetLabel('PLANNING')}: ${planningSignalLabel(c.signalKey)}`;
+    // フラット化: signal_key の日本語ラベルをそのまま条件名にする(「翌日計画: …」の接頭辞は付けない)。
+    title = planningSignalLabel(c.signalKey);
     if (planning) {
       // シグナルごとに関係する実データだけを補足表示する。
       if (c.signalKey === 'reflection_done') {

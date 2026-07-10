@@ -35,6 +35,7 @@
 - [x] 6.2 `server/static/js/targets.js` の `PLANNING` ラベルを更新し、既知シグナルの語彙（キー↔日本語ラベル）を定義・共有する
 - [x] 6.3 `server/static/js/rules.js` の `signalKey` 自由入力を既知シグナルの `<select>` に置き換える（凍結済みの未知値は選択肢に温存）。`condText`・ゲート画面の条件行を日本語ラベル表示にする
 - [x] 6.4 `server/static/js/settings.js` に `planning_min_tomorrow_tasks`（閾値）の入力・編集項目を追加する（既存項目のラベルを明確化）
+- [x] 6.5 条件UIをフラット化する: 「就寝前リチュアル」ターゲット＋「シグナル」サブセレクトの2段をやめ、`PLANNING` を signal_key ごとの独立項目（今日の振り返り / 明日のタスク登録 / 翌日計画）として条件ドロップダウンへ直接並べる（`targets.js` に `CONDITION_KINDS`・`conditionKindValue`・`conditionKindTarget`・`conditionLabel` を追加、`rules.js` を単一 `<select>` 化、`today.js` の接頭辞を除去）。サーバー無変更
 
 ## 7. 契約（あれば）
 
@@ -45,5 +46,5 @@
 - [x] 8.1 `npm run typecheck` と `npm test` が全ワークスペースで通る（76 tests passed / 全 workspace typecheck OK / 変更 JS は node --check 通過）
 - [x] 8.2 手動確認（自動 due）: 通常作成=今日 / 明日トグルON作成=明日 / HOLD作成=+7 / HOLD→TODO=今日か明日 / 非HOLD間移動=据え置き / DONE=据え置き
 - [x] 8.3 手動確認（ロック）: 手動指定→列移動で不変 / 「自動に戻す」で再計算
-- [ ] 8.4 手動確認（フロー）: 4h作業→振り返り記載→「明日の計画へ」→明日タスクを閾値以上登録→ゲート UNLOCK。振り返り未記録や明日タスク不足では LOCKED
-- [ ] 8.5 手動確認（後方互換）: 既存 `PLANNING`（signal_key未設定）ルールが従来どおり評価される
+- [x] 8.4 手動確認（フロー）: 4h作業→振り返り記載→「明日の計画へ」→明日タスクを閾値以上登録→ゲート UNLOCK。振り返り未記録や明日タスク不足では LOCKED
+- [x] 8.5 手動確認（後方互換）: 既存 `PLANNING`（signal_key未設定）ルールが従来どおり評価される

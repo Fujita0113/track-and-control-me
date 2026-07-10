@@ -2,7 +2,7 @@
 import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, fmtHM, addDays, toast, openModal, closeModal, emptyState } from './util.js';
-import { TARGETS, targetLabel, PLANNING_SIGNALS, planningSignalLabel } from './targets.js';
+import { targetLabel, planningSignalLabel, CONDITION_KINDS, conditionKindValue, conditionKindTarget } from './targets.js';
 
 /** ルール編集セクション(見出し + 作成ボタン + ルールセット一覧)を root に描画する。
  * ゲート画面から合成して使うため、再描画は自身のセクション内に閉じる。 */
@@ -57,7 +57,8 @@ function condText(c, groupName) {
   if (c.target === 'TOTAL_WORK') return `${label} ≥ ${fmtHM(c.threshold_seconds || 0)}`;
   if (c.target === 'GROUP') return `${label}[${groupName.get(c.stable_group_id) || c.stable_group_id}] ≥ ${fmtHM(c.threshold_seconds || 0)}`;
   if (c.target === 'MANUAL_CHECK') return `${label}: ${c.label || c.condition_key}`;
-  if (c.target === 'PLANNING') return `${label}: ${planningSignalLabel(c.signal_key)}`;
+  // PLANNING はフラット化済みなので signal ラベルをそのまま条件名にする(「翌日計画: …」の二重表記を避ける)。
+  if (c.target === 'PLANNING') return planningSignalLabel(c.signal_key);
   return label;
 }
 
@@ -146,27 +147,26 @@ function fromRow(c) {
 }
 
 function condEditorRow(c, groups) {
-  const targetSel = h('select', {}, ...TARGETS.map((t) => h('option', { value: t.v }, t.label)));
-  targetSel.value = c.target;
+  // 条件はフラットな1つの <select>。PLANNING は signal_key ごとの項目(今日の振り返り / 明日のタスク登録 …)。
+  const kindSel = h('select', {}, ...CONDITION_KINDS.map((k) => h('option', { value: k.v }, k.label)));
+  const kindVal = conditionKindValue(c.target, c.signalKey);
+  // 凍結済みルールの未知 signal_key を温存する(編集は未来日のみだが防御的に)。
+  if (!CONDITION_KINDS.some((k) => k.v === kindVal)) {
+    kindSel.appendChild(h('option', { value: kindVal }, `${c.signalKey || c.target}（凍結値）`));
+  }
+  kindSel.value = kindVal;
   const minutes = h('input', { type: 'number', min: '0', step: '5', value: String(c.minutes ?? 0) });
   minutes.style.width = '80px';
   const groupSel = h('select', {}, ...groups.map((x) => h('option', { value: x.stable_group_id }, x.name)));
   if (c.stableGroupId) groupSel.value = c.stableGroupId;
   const labelInp = h('input', { type: 'text', value: c.label || '', placeholder: 'チェック項目名' });
-  // PLANNING シグナルは既知選択肢の <select>。凍結済みの未知値は選択肢へ温存する。
-  const signalSel = h('select', {}, ...PLANNING_SIGNALS.map((s) => h('option', { value: s.v }, s.label)));
-  const known = PLANNING_SIGNALS.some((s) => s.v === c.signalKey);
-  if (c.signalKey && !known) {
-    signalSel.appendChild(h('option', { value: c.signalKey }, `${c.signalKey}（凍結値）`));
-  }
-  signalSel.value = c.signalKey || 'tomorrow_planned';
 
   const extra = h('div', { class: 'row', style: { flex: '1' } });
   const rm = h('button', { class: 'icon-btn', text: '🗑', title: '削除', type: 'button' });
 
   const row = h('div', { class: 'cond cond-editor' },
     h('div', { class: 'stack', style: { flex: '1' } },
-      h('div', { class: 'row' }, h('span', { class: 'muted', text: '条件' }), targetSel, extra),
+      h('div', { class: 'row' }, h('span', { class: 'muted', text: '条件' }), kindSel, extra),
     ),
     rm,
   );
@@ -174,22 +174,22 @@ function condEditorRow(c, groups) {
 
   const sync = () => {
     clear(extra);
-    const t = targetSel.value;
-    if (t === 'TOTAL_WORK') extra.append(labelSpan('しきい値(分)'), minutes);
-    else if (t === 'GROUP') extra.append(groupSel, labelSpan('≥ 分'), minutes);
-    else if (t === 'MANUAL_CHECK') extra.append(labelInp);
-    else if (t === 'PLANNING') extra.append(labelSpan('シグナル'), signalSel);
+    const { target } = conditionKindTarget(kindSel.value);
+    if (target === 'TOTAL_WORK') extra.append(labelSpan('しきい値(分)'), minutes);
+    else if (target === 'GROUP') extra.append(groupSel, labelSpan('≥ 分'), minutes);
+    else if (target === 'MANUAL_CHECK') extra.append(labelInp);
+    // PLANNING はシグナル選択が条件そのものへ統合されたため、追加入力は無し。
   };
-  targetSel.addEventListener('change', sync);
+  kindSel.addEventListener('change', sync);
   sync();
 
   // 参照用に要素をぶら下げる.
   row._get = () => {
-    const t = targetSel.value;
-    if (t === 'TOTAL_WORK') return { target: t, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
-    if (t === 'GROUP') return { target: t, stableGroupId: groupSel.value, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
-    if (t === 'MANUAL_CHECK') return { target: t, label: labelInp.value.trim() || 'チェック' };
-    if (t === 'PLANNING') return { target: t, signalKey: signalSel.value || null };
+    const { target, signalKey } = conditionKindTarget(kindSel.value);
+    if (target === 'TOTAL_WORK') return { target, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
+    if (target === 'GROUP') return { target, stableGroupId: groupSel.value, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
+    if (target === 'MANUAL_CHECK') return { target, label: labelInp.value.trim() || 'チェック' };
+    if (target === 'PLANNING') return { target, signalKey: signalKey || null };
     return null;
   };
   return row;
