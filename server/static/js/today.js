@@ -80,8 +80,9 @@ async function renderOverview(region) {
     summary.groups.length ? h('div', { class: 'chart-wrap' }, groupCanvas) : emptyState('グループデータなし'),
   ));
   if (summary.groups.length) {
+    // 設定 ON の未グループ行は時間つきで表示しつつ「総作業時間に非計上」を凡例ラベルへ明示（行は消さない）。
     charts.push(doughnut(groupCanvas, {
-      labels: summary.groups.map((g) => g.name),
+      labels: summary.groups.map((g) => (g.countsTowardTotal === false ? `${g.name}（総作業時間に非計上）` : g.name)),
       values: summary.groups.map((g) => Math.round(g.seconds / 60)),
       colors: summary.groups.map((g) => colorHex(g.color)),
     }));

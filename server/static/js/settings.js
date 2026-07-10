@@ -41,6 +41,7 @@ async function render(body) {
     { key: 'reveal_yesterday', label: '前日パスワードも表示 (reveal_yesterday)' },
     { key: 'planning_require_reflection', label: 'PLANNING に振り返り必須' },
     { key: 'include_ungrouped_in_split', label: '未グループを分割に含める' },
+    { key: 'exclude_ungrouped_from_total', label: '未グループ時間を総作業時間に含めない（娯楽の除外）' },
   ];
 
   const inputs = new Map();

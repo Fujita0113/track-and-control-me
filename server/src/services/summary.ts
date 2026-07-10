@@ -1,6 +1,6 @@
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
-import { totalWorkSecondsForDay } from './categories.js';
+import { totalWorkSecondsForDay, countsTowardTotal } from './categories.js';
 import { getEvaluation, evaluateDay, type EvalResult } from '../rules/evaluate.js';
 import { dayKeyFor, nextDayKey } from '../aggregation/index.js';
 
@@ -15,6 +15,8 @@ export interface GroupTotal {
   color: string | null;
   ms: number;
   seconds: number;
+  /** この行が日の総作業時間へ算入されるか（ON+未グループのとき false）。UI の非計上ヒント用。 */
+  countsTowardTotal: boolean;
 }
 
 export interface GroupInfo {
@@ -37,6 +39,7 @@ export function todayKey(db: DB, nowMs = Date.now()): string {
 }
 
 export function daySummary(db: DB, dayKey: string): DaySummary {
+  const cfg = getConfig(db);
   const groupRows = db
     .prepare(
       `SELECT d.stable_group_id AS id, d.ms AS ms, g.name AS name, g.color AS color
@@ -53,6 +56,7 @@ export function daySummary(db: DB, dayKey: string): DaySummary {
     color: r.color,
     ms: r.ms,
     seconds: r.ms / 1000,
+    countsTowardTotal: countsTowardTotal(r.id, cfg),
   }));
 
   const excluded = (
@@ -78,6 +82,7 @@ export interface RangeDay {
 
 /** [from, to]（両端含む、day_key 文字列）のグループ別推移（棒グラフ用）。 */
 export function rangeSummary(db: DB, from: string, to: string): RangeDay[] {
+  const cfg = getConfig(db);
   const stmt = db.prepare(
     `SELECT d.stable_group_id AS id, d.ms AS ms, g.name AS name, g.color AS color
      FROM daily_totals_snapshot d
@@ -90,9 +95,10 @@ export function rangeSummary(db: DB, from: string, to: string): RangeDay[] {
   let guard = 0;
   while (cur <= to && guard++ < 3660) {
     const rows = stmt.all(cur) as { id: string; ms: number; name: string | null; color: string | null }[];
+    // 総作業時間は当日サマリと同一規則（未グループ除外を尊重）で算出。行自体は全グループ表示。
     let totalMs = 0;
     const groups = rows.map((r) => {
-      totalMs += r.ms;
+      if (countsTowardTotal(r.id, cfg)) totalMs += r.ms;
       return {
         stableGroupId: r.id,
         name: r.name ?? (r.id === 'ungrouped' ? 'その他（未グループ）' : r.id),

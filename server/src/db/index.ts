@@ -80,6 +80,8 @@ export interface AppConfigRow {
   away_min_seconds: number;
   planning_require_reflection: number;
   planning_min_tomorrow_tasks: number;
+  /** 未グループ（'ungrouped'）時間を総作業時間へ算入しない（work-time-scope）。既定 0=算入。 */
+  exclude_ungrouped_from_total: number;
   password_hash_salt: string;
   updated_at: number;
 }

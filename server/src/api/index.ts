@@ -49,6 +49,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
       'away_min_seconds',
       'planning_require_reflection',
       'planning_min_tomorrow_tasks',
+      'exclude_ungrouped_from_total',
       'ws_port' as keyof AppConfigRow,
       'shared_token' as keyof AppConfigRow,
     ];

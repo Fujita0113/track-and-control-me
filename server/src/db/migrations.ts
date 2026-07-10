@@ -414,4 +414,15 @@ ALTER TABLE task ADD COLUMN due_locked INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_task_status_order ON task(status, sort_order);
 `,
   },
+  {
+    version: 9,
+    name: 'exclude-ungrouped-from-total',
+    sql: /* sql */ `
+-- 未グループ（'ungrouped' = @track/contract の UNGROUPED_KEY）時間を総作業時間から除外する設定
+-- （spec: work-time-scope）。ON のとき日の総作業時間の合算から stable_group_id='ungrouped' 行を外す。
+-- 既定 0（OFF）＝現行どおり未グループも算入（後方互換）。per-group 生データ
+-- （daily_totals_snapshot）には非影響で、読み出し時にのみ除外する（design.md D1/D2/D4/D5）。
+ALTER TABLE app_config ADD COLUMN exclude_ungrouped_from_total INTEGER NOT NULL DEFAULT 0;
+`,
+  },
 ];
