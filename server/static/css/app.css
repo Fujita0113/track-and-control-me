@@ -722,9 +722,58 @@ body.rf-page .content { max-width: 1200px; }
 .rf-ed-hr .rf-ed-marker { position: relative; z-index: 1; font-size: 12px; letter-spacing: 3px; background: #ffffff; padding-right: 6px; }
 .rf-ed-hr::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid #e4e9f1; }
 .rf-ed-list-marker { color: #3b5bb5; font-weight: 700; }
-.rf-ed-check { color: #3b5bb5; font-weight: 700; cursor: pointer; font-family: ui-monospace, Menlo, Consolas, monospace; }
-.rf-ed-check.on { color: #2e9e63; }
-.rf-ed-task.checked .rf-ed-task-text { text-decoration: line-through; color: #9aa4b4; }
+
+/* Notion 風タスクチェックボックス。マーカー "- " と角括弧の文字は DOM textContent に
+   残したまま視覚的にのみ隠す（display:none / font-size:0 は textContent も
+   Range.toString() も変えない）。→ getContent() の raw 復元・グローバルオフセット・TASK_RE 丸めは不変。 */
+/* 先頭ダッシュ "- " はタスク行だけ隠す。子結合子 '>' が必須:
+   タスク本文中の強調マーカーも .rf-ed-marker なので、子孫結合子だと本文の強調まで隠れる。 */
+.rf-ed-task > .rf-ed-marker { display: none; }
+/* 角括弧スパンを 16px のボックスに。文字は font-size:0 + transparent で不可視化
+   （textContent には残す）。display:none 不可（クリック対象／ボックスが消える）。 */
+.rf-ed-check {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  vertical-align: middle;
+  font-size: 0;
+  color: transparent;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* ::before = 角丸ボックス（Notion のウォームグレー半透明ボーダー） */
+.rf-ed-check::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 1.6px solid rgba(55, 53, 47, 0.45);
+  border-radius: 3px;
+  background: transparent;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+/* チェック時 = Notion プライマリブルー塗り（buildLine が .on を付与） */
+.rf-ed-check.on::before { background: #2383e2; border-color: #2383e2; }
+/* ::after = 白いチェックマーク（回転ボーダーで描画・画像アセット不要 = CSP 安全） */
+.rf-ed-check::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1.5px;
+  width: 4.5px;
+  height: 8.5px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.rf-ed-check.on::after { opacity: 1; }
+/* チェック済み行の本文 = 取り消し線 + ミュート */
+.rf-ed-task.checked .rf-ed-task-text { text-decoration: line-through; color: rgba(55, 53, 47, 0.55); }
 
 /* --- Markdown 読み取り専用レンダラ (md-*): markdown.js。kanban のタスクノート等と共用 --- */
 .md-body { line-height: 1.6; font-size: 13.5px; }
