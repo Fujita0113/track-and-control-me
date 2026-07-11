@@ -296,11 +296,62 @@ function switchEl(on, onToggle) {
     h('span', { class: 'kb-switch-knob' }));
 }
 
+// --- ドラッグ端の自動横スクロール(issue #16) --------------------------------
+// ドラッグ中にポインタがボード表示領域(.kb-board-scroll)の左右端近傍へ入ると、
+// requestAnimationFrame ループで横スクロールし、画面外の列(特に完了)へ運べるようにする。
+// HTML5 D&D を壊さないため renderAll は一切呼ばず scrollLeft を直接操作する。
+const EDGE_ZONE = 90; // 端からこの距離(px)以内でスクロール開始
+const MAX_SPEED = 18; // 1フレームあたりの最大スクロール量(px)
+let autoScrollEl = null;
+let autoScrollDir = 0; // -1=左 / +1=右 / 0=停止
+let autoScrollSpeed = 0;
+let autoScrollRAF = null;
+
+function autoScrollStep() {
+  if (!autoScrollEl || autoScrollDir === 0) { autoScrollRAF = null; return; }
+  autoScrollEl.scrollLeft += autoScrollDir * autoScrollSpeed; // 端に達しても値はクランプされ継続
+  autoScrollRAF = requestAnimationFrame(autoScrollStep);
+}
+
+/** 端への食い込み量 intensity(0〜1) に比例した速度でループ開始/更新。冪等。 */
+function startAutoScroll(el, dir, intensity) {
+  if (!S || !S.draggingId) return; // ドラッグ中でなければ無視(暴走防止)
+  autoScrollEl = el;
+  autoScrollDir = dir;
+  autoScrollSpeed = MAX_SPEED * Math.max(0, Math.min(1, intensity));
+  if (autoScrollRAF == null) autoScrollRAF = requestAnimationFrame(autoScrollStep);
+}
+
+function stopAutoScroll() {
+  if (autoScrollRAF != null) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; }
+  autoScrollEl = null;
+  autoScrollDir = 0;
+  autoScrollSpeed = 0;
+}
+
 // --- ボード -----------------------------------------------------------------
 function boardEl() {
   const scroll = h('div', {
     class: 'kb-board-scroll',
     onclick: () => { if (S.detailId != null || S.dueCalOpen) closeDetail(); },
+  });
+  // ドラッグ中の端寄せで自動横スクロール。dragover はバブリングするため、列側の
+  // 挿入インジケータ経路(kanban-task-reorder)と衝突せず祖先で clientX を拾える。
+  scroll.addEventListener('dragover', (e) => {
+    if (!S.draggingId) return;
+    const rect = scroll.getBoundingClientRect();
+    const distLeft = e.clientX - rect.left;
+    const distRight = rect.right - e.clientX;
+    if (distLeft >= 0 && distLeft < EDGE_ZONE) {
+      startAutoScroll(scroll, -1, (EDGE_ZONE - distLeft) / EDGE_ZONE);
+    } else if (distRight >= 0 && distRight < EDGE_ZONE) {
+      startAutoScroll(scroll, 1, (EDGE_ZONE - distRight) / EDGE_ZONE);
+    } else {
+      stopAutoScroll();
+    }
+  });
+  scroll.addEventListener('dragleave', (e) => {
+    if (!scroll.contains(e.relatedTarget)) stopAutoScroll();
   });
   const board = h('div', { class: 'kb-board' });
   for (const col of COLS) board.appendChild(colEl(col));
@@ -372,6 +423,7 @@ function cardEl(t) {
     card.classList.remove('dragging');
     document.querySelectorAll('.kb-col-over').forEach((o) => o.remove());
     removeDropIndicator();
+    stopAutoScroll();
   });
 
   card.appendChild(h('div', { class: 'kb-card-top' },
@@ -464,6 +516,7 @@ async function saveReorder(groups) {
 
 async function onDrop(e, colKey, colElm) {
   e.preventDefault();
+  stopAutoScroll();
   colElm.querySelector('.kb-col-over')?.remove();
   removeDropIndicator();
   let id = Number(e.dataTransfer.getData('text/plain'));
@@ -1088,6 +1141,12 @@ function textOffsetWithin(container, node, nodeOffset) {
 function onLineBlur(t) {
   blurTimer = setTimeout(() => {
     blurTimer = null;
+    // 構造編集(Enter 改行など)の再描画で編集テキストエリアが差し替わると、外れた旧
+    // テキストエリアの blur がこの遅延タイマーを仕掛ける。発火時点では focusEditorLine が
+    // 既に新テキストエリアへフォーカス済みのため、実フォーカスが別の .kb-ed-input なら
+    // 「単なる差し替え」とみなし編集を継続する。エディタ外へ真に出た時のみ終了(issue #16)。
+    const a = document.activeElement;
+    if (a && a.classList && a.classList.contains('kb-ed-input')) return;
     S.editLine = -1;
     renderEditor(t);
   }, 130);
