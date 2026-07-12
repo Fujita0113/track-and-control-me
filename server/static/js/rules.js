@@ -49,7 +49,18 @@ export async function renderRuleEditing(root) {
     const groups = await api.getGroups().catch(() => []);
     const goals = await api.getGoals().catch(() => []);
     const existing = await api.getRule(target).catch(() => null);
-    openRuleEditor(target, existing && existing.ruleSet ? existing.conditions : [], groups, reload, computeLocked(goals));
+    // 初期条件は3段分岐:
+    // 1) 対象日に明示ルールがあればその条件
+    // 2) 無ければ対象日が継承する直近の過去ルール(effective_date < target の最初=最新)の条件
+    // 3) 継承元も無い(ルール皆無)なら空
+    let initialConditions;
+    if (existing && existing.ruleSet) {
+      initialConditions = existing.conditions;
+    } else {
+      const inherited = rules.find((r) => r.ruleSet.effective_date < target);
+      initialConditions = inherited ? inherited.conditions : [];
+    }
+    openRuleEditor(target, initialConditions, groups, reload, computeLocked(goals));
   });
   addTodayBtn.addEventListener('click', async () => {
     const [rulesets, groups] = await Promise.all([
