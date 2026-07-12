@@ -619,6 +619,7 @@ function composerEl() {
   let handled = false;
   ta.addEventListener('input', () => { S.composerText = ta.value; });
   ta.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault(); handled = true; commitComposer(false, true);
     } else if (e.key === 'Enter' && !e.shiftKey) {
@@ -773,6 +774,15 @@ function detailEl(t) {
     scheduleSave(t, 'title');
     const cardTitle = rootEl.querySelector(`.kb-card[data-id="${t.id}"] .kb-card-title`);
     if (cardTitle) cardTitle.textContent = t.title;
+  });
+  titleInp.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      flushSaves();
+      titleInp.blur();
+      enterEdit(t, 0, 0);
+    }
   });
   panel.appendChild(h('div', { class: 'kb-detail-title-wrap' }, titleInp));
 
@@ -1180,6 +1190,7 @@ function onContentChange(t, i, ta) {
 }
 
 function onBlockKey(t, i, e) {
+  if (e.isComposing || e.keyCode === 229) return;
   const lines = getLines(t);
   const block = parseBlock(lines[i]);
   const content = block.content;

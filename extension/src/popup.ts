@@ -97,6 +97,16 @@ document.addEventListener('DOMContentLoaded', () => {
   el<HTMLButtonElement>('save').addEventListener('click', () => {
     void save();
   });
+  // #port / #token での Enter で保存して再接続。IME 変換確定 Enter（主に #token）は無視する。
+  const submitOnEnter = (e: KeyboardEvent): void => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void save();
+    }
+  };
+  el<HTMLInputElement>('port').addEventListener('keydown', submitOnEnter);
+  el<HTMLInputElement>('token').addEventListener('keydown', submitOnEnter);
   void render();
   // popup 表示中は状態を軽くポーリングして更新する。
   setInterval(() => {

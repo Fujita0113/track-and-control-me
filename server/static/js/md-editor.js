@@ -153,7 +153,7 @@ export function htmlToMarkdown(html) {
 }
 
 /** Markdown エディタを生成。root(el)・getValue/setValue・focus・isDirty/markSaved を返す。 */
-export function createMarkdownEditor({ initial = '', placeholder = '', onChange } = {}) {
+export function createMarkdownEditor({ initial = '', placeholder = '', onChange, onSubmit } = {}) {
   const editor = h('div', {
     class: 'rf-ed',
     contenteditable: 'true',
@@ -502,7 +502,17 @@ export function createMarkdownEditor({ initial = '', placeholder = '', onChange 
     // (D3) Ctrl/Cmd 修飾ディスパッチ。順序: チェック切替 → 装飾 → undo/redo。各分岐は既定を殺す。
     if (e.ctrlKey || e.metaKey) {
       const k = e.key.toLowerCase();
-      if (e.key === 'Enter') { e.preventDefault(); toggleCheckKeyboard(); return; }
+      // Ctrl/Cmd+Enter: タスク行ではチェックをトグル、それ以外の行では onSubmit（保存）を実行。
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const caret = getCaret();
+        if (caret != null) {
+          const { lines, li } = locate(getContent(editor), caret);
+          if (TASK_RE.test(lines[li])) { toggleCheckKeyboard(); return; }
+        }
+        if (onSubmit) onSubmit();
+        return;
+      }
       if (k === 'b') { e.preventDefault(); wrapSelection('**'); return; }
       if (k === 'i') { e.preventDefault(); wrapSelection('*'); return; }
       if (k === 'e') { e.preventDefault(); wrapSelection('`'); return; }

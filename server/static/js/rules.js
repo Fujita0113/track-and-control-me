@@ -262,7 +262,24 @@ export function openRuleEditor(date, conditions, groups, onDone, locked = { keys
     h('button', { class: 'btn', text: 'キャンセル', type: 'button', onclick: closeModal }),
     save,
   ));
+  enterToSave(body, save);
   openModal(body, `ルール編集 — ${date}`);
+}
+
+/**
+ * モーダル body 内の単一行 input（text/number）での素の Enter で保存ボタン相当を実行する。
+ * IME 変換確定 Enter は無視し、textarea は改行のまま残す。save が disabled 中は二重送信を防ぐ。
+ */
+function enterToSave(body, save) {
+  body.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const el = e.target;
+    if (!el || el.tagName !== 'INPUT') return;
+    e.preventDefault();
+    if (save.disabled) return;
+    save.click();
+  });
 }
 
 /** 保存済みの条件行を PUT 入力（ConditionInput）へ写す。conditionKey を明示し baseline 一致を保証する。 */
@@ -337,6 +354,7 @@ export function openTodayAddEditor(date, baseline, additions, groups, onDone) {
     h('button', { class: 'btn', text: 'キャンセル', type: 'button', onclick: closeModal }),
     save,
   ));
+  enterToSave(body, save);
   openModal(body, `当日に条件を追加 — ${date}`);
 }
 

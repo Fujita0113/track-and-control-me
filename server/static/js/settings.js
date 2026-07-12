@@ -80,10 +80,16 @@ async function render(body) {
   save.addEventListener('click', async () => {
     const patch = {};
     for (const [key, { inp, type }] of inputs) {
-      if (type === 'bool') patch[key] = inp.checked ? 1 : 0;
-      else if (type === 'min') patch[key] = Math.round(Number(inp.value) * 60); // 分 → 秒
-      else if (type === 'number') patch[key] = Number(inp.value);
-      else patch[key] = inp.value;
+      if (type === 'bool') { patch[key] = inp.checked ? 1 : 0; continue; }
+      if (type === 'min' || type === 'number') {
+        // 空・非数値は NaN をサーバへ送らないよう patch から除外する。
+        if (String(inp.value).trim() === '') continue;
+        const n = Number(inp.value);
+        if (Number.isNaN(n)) continue;
+        patch[key] = type === 'min' ? Math.round(n * 60) : n; // min は 分 → 秒
+        continue;
+      }
+      patch[key] = inp.value;
     }
     save.disabled = true;
     try {
@@ -93,6 +99,21 @@ async function render(body) {
       render(body);
     } catch (err) { toast(`失敗: ${err.message}`, 'err'); save.disabled = false; }
   });
+
+  // 単一行 input（text/number）での素の Enter で保存する。IME 変換確定 Enter は無視し、
+  // disabled 中は二重送信を防ぐ。
+  const submitOnEnter = (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    if (save.disabled) return;
+    save.click();
+  };
+  for (const { inp } of inputs.values()) {
+    if (inp.tagName === 'INPUT' && (inp.type === 'text' || inp.type === 'number')) {
+      inp.addEventListener('keydown', submitOnEnter);
+    }
+  }
 
   const editCard = h('div', { class: 'card' },
     h('div', { class: 'card-title', text: '設定の編集' }),

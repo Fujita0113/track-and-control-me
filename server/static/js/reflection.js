@@ -92,6 +92,8 @@ export async function show(root) {
   const editor = createMarkdownEditor({
     placeholder: '今日はどんな一日でしたか。Markdown で自由にどうぞ。',
     onChange: onEditorChange,
+    // Ctrl/Cmd+Enter で保存（saveBtn は後段で定義されるが、呼び出しは描画後のため参照解決済み）。
+    onSubmit: () => doSave(saveBtn),
   });
 
   // --- 気分ピル ---
@@ -148,12 +150,20 @@ export async function show(root) {
 
   root.appendChild(h('div', { class: 'rf-main' }, left, rail));
 
-  ctx = { date: state.today, satisfaction: 0, dirty: false, loading: false, editor, dateInput, historyHost, savedEl, syncMood, renderHistory, journalsHost, journals: [], activeGoals: [] };
+  ctx = { date: state.today, satisfaction: 0, dirty: false, loading: false, editor, dateInput, historyHost, savedEl, saveBtn, syncMood, renderHistory, journalsHost, journals: [], activeGoals: [] };
 
   // --- 挙動配線 ---
   saveBtn.addEventListener('click', () => doSave(saveBtn));
   planBtn.addEventListener('click', () => goToPlanning(planBtn));
   dateInput.addEventListener('change', () => { flush(); loadEditorForDate(dateInput.value || state.today); });
+  dateInput.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      flush();
+      loadEditorForDate(dateInput.value || state.today);
+    }
+  });
 
   // 進行中の目標を取得（日記コーナーの対象）。
   ctx.activeGoals = (await api.getGoals().catch(() => [])).filter((g) => g.status === 'active');
@@ -173,6 +183,8 @@ function journalCorner(goal, content) {
       ph.style.display = raw.trim() === '' ? 'block' : 'none';
       if (ctx && !ctx.loading) entry.dirty = true;
     },
+    // Ctrl/Cmd+Enter で本文・全目標日記をまとめて保存（振り返りと同じ動線）。
+    onSubmit: () => doSave(ctx.saveBtn),
   });
   entry.editor = editor;
   ctx.journals.push(entry);

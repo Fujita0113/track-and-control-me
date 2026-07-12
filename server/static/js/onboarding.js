@@ -59,5 +59,13 @@ function showDialog() {
     h('button', { class: 'btn', text: 'あとで', type: 'button', onclick: closeModal }),
     createBtn,
   ));
+  // Enter で主要ボタン（作成）を実行、Escape で「あとで」相当（閉じる）。副ボタンには割り当てない。
+  body.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); createBtn.click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+  });
   openModal(body, '初期ルールを作成してください');
+  // 主要ボタンへ初期フォーカス（ネイティブ button の Enter/Space 既定挙動も活用）。
+  createBtn.focus();
 }
