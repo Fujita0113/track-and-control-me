@@ -77,6 +77,8 @@ function condText(c, groupName) {
   const label = targetLabel(c.target);
   if (c.target === 'TOTAL_WORK') return `${label} ≥ ${fmtHM(c.threshold_seconds || 0)}`;
   if (c.target === 'GROUP') return `${label}[${groupName.get(c.stable_group_id) || c.stable_group_id}] ≥ ${fmtHM(c.threshold_seconds || 0)}`;
+  // TIMELINE は「<カテゴリ> ◯分以上」で表示する（timeline: 生キーは出さない）。
+  if (c.target === 'TIMELINE') return `${c.label || 'カテゴリ'} ${Math.round((c.threshold_seconds || 0) / 60)}分以上`;
   if (c.target === 'MANUAL_CHECK') return `${label}: ${c.label || c.condition_key}`;
   // PLANNING はフラット化済みなので signal ラベルをそのまま条件名にする(「翌日計画: …」の二重表記を避ける)。
   if (c.target === 'PLANNING') return planningSignalLabel(c.signal_key);
@@ -167,7 +169,7 @@ export function openRuleEditor(date, conditions, groups, onDone, locked = { keys
       const meta = row._meta;
       if (!meta || !meta.locked || !row._get) continue;
       const got = row._get();
-      if (!got || (got.target !== 'TOTAL_WORK' && got.target !== 'GROUP')) continue;
+      if (!got || (got.target !== 'TOTAL_WORK' && got.target !== 'GROUP' && got.target !== 'TIMELINE')) continue;
       const newMin = got.thresholdSeconds != null ? Math.round(got.thresholdSeconds / 60) : 0;
       if (newMin !== (meta.origMinutes ?? 0)) changed.push(meta.conditionKey);
     }
@@ -225,13 +227,26 @@ function condEditorRow(c, groups, locked = false) {
   if (c.stableGroupId) groupSel.value = c.stableGroupId;
   const labelInp = h('input', { type: 'text', value: c.label || '', placeholder: 'チェック項目名' });
 
+  // TIMELINE 用: 手動カテゴリ（直近使用順）を候補に出す自由入力。未登録名は保存時にレジストリへ upsert される。
+  const catInp = h('input', { type: 'text', value: c.label || '', placeholder: 'カテゴリ（例: 運動）' });
+  catInp.style.width = '140px';
+  const catList = h('datalist');
+  const catListId = `cat-list-${Math.random().toString(36).slice(2)}`;
+  catList.id = catListId;
+  catInp.setAttribute('list', catListId);
+  api.getCategories().then((cats) => {
+    clear(catList);
+    for (const cat of cats || []) catList.appendChild(h('option', { value: cat.name }));
+  }).catch(() => { /* 候補が出せなくても自由入力は可能 */ });
+
   const extra = h('div', { class: 'row', style: { flex: '1' } });
   const rm = h('button', { class: 'icon-btn', text: '🗑', title: '削除', type: 'button' });
 
-  // ジャンル固定: 種別/グループは変更不可・行削除不可。閾値(minutes)のみ編集可。
+  // ジャンル固定: 種別/グループ/カテゴリは変更不可・行削除不可。閾値(minutes)のみ編集可。
   if (locked) {
     kindSel.disabled = true;
     groupSel.disabled = true;
+    catInp.disabled = true;
     rm.disabled = true;
     rm.title = 'ジャンル固定（削除不可）';
   }
@@ -250,6 +265,7 @@ function condEditorRow(c, groups, locked = false) {
     const { target } = conditionKindTarget(kindSel.value);
     if (target === 'TOTAL_WORK') extra.append(labelSpan('しきい値(分)'), minutes);
     else if (target === 'GROUP') extra.append(groupSel, labelSpan('≥ 分'), minutes);
+    else if (target === 'TIMELINE') extra.append(catInp, catList, labelSpan('≥ 分'), minutes);
     else if (target === 'MANUAL_CHECK') extra.append(labelInp);
     // PLANNING はシグナル選択が条件そのものへ統合されたため、追加入力は無し。
   };
@@ -261,6 +277,7 @@ function condEditorRow(c, groups, locked = false) {
     const { target, signalKey } = conditionKindTarget(kindSel.value);
     if (target === 'TOTAL_WORK') return { target, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
     if (target === 'GROUP') return { target, stableGroupId: groupSel.value, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
+    if (target === 'TIMELINE') return { target, label: catInp.value.trim() || 'uncategorized', thresholdSeconds: (Number(minutes.value) || 0) * 60 };
     if (target === 'MANUAL_CHECK') return { target, label: labelInp.value.trim() || 'チェック' };
     if (target === 'PLANNING') return { target, signalKey: signalKey || null };
     return null;

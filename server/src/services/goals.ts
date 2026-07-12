@@ -13,8 +13,8 @@ import type { ConditionResult } from '../rules/evaluate.js';
 
 const GOAL_DAYS = 30; // 30日固定（end_day = start_day + 29）。
 export type GoalStatus = 'upcoming' | 'active' | 'completed';
-export type GoalPracticeTarget = 'TOTAL_WORK' | 'GROUP' | 'PLANNING';
-const TIME_TARGETS = new Set<GoalPracticeTarget>(['TOTAL_WORK', 'GROUP']);
+export type GoalPracticeTarget = 'TOTAL_WORK' | 'GROUP' | 'PLANNING' | 'TIMELINE';
+const TIME_TARGETS = new Set<GoalPracticeTarget>(['TOTAL_WORK', 'GROUP', 'TIMELINE']);
 
 export class GoalNotFoundError extends Error {
   constructor(id: number) {
@@ -140,13 +140,18 @@ export function adoptCandidates(db: DB, nowMs = Date.now()): AdoptCandidate[] {
 
 function practiceLabel(
   target: GoalPracticeTarget,
-  c: { stable_group_id: string | null; signal_key: string | null; label: string | null },
+  c: { stable_group_id: string | null; signal_key: string | null; label: string | null; threshold_seconds: number | null },
   groupNames: Map<string, string>,
 ): string {
   if (target === 'TOTAL_WORK') return '総作業時間';
   if (target === 'GROUP')
     return `グループ: ${(c.stable_group_id && groupNames.get(c.stable_group_id)) || c.stable_group_id || '?'}`;
   if (target === 'PLANNING') return c.signal_key ?? '翌日計画';
+  if (target === 'TIMELINE') {
+    // 「<カテゴリ> ◯分以上」。timeline: 生キーは出さない。
+    const min = c.threshold_seconds != null ? Math.round(c.threshold_seconds / 60) : 0;
+    return `${c.label ?? 'カテゴリ'} ${min}分以上`;
+  }
   return c.label ?? target;
 }
 

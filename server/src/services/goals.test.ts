@@ -92,6 +92,30 @@ describe('目標の作成・採用', () => {
     const goals = listGoals(db, NOW_TODAY);
     expect(goals.length).toBe(2);
   });
+
+  it('TIMELINE 条件は採用候補に含まれ（manual:* は依然除外）、採用できる', () => {
+    upsertFutureRuleSet(
+      db,
+      START,
+      {
+        conditions: [
+          { target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 },
+          { target: 'MANUAL_CHECK', label: '振り返り', conditionKey: 'manual:1' },
+        ],
+      },
+      NOW_TODAY,
+    );
+    const cands = adoptCandidates(db, NOW_TODAY);
+    const tl = cands.find((c) => c.conditionKey === 'timeline:運動');
+    expect(tl).toBeTruthy();
+    expect(tl!.target).toBe('TIMELINE');
+    expect(tl!.label).toBe('運動 30分以上'); // 「<カテゴリ> ◯分以上」・生キーは出さない
+    expect(cands.some((c) => c.conditionKey.startsWith('manual:'))).toBe(false);
+    // 採用可能（timeline:<ラベル> の安定キーで保存される）。
+    const g = createGoal(db, { name: '運動習慣', practices: ['timeline:運動'] }, NOW_TODAY);
+    expect(g.practices[0]!.conditionKey).toBe('timeline:運動');
+    expect(g.practices[0]!.target).toBe('TIMELINE');
+  });
 });
 
 describe('削除猶予（作成当日のみ）', () => {
@@ -182,5 +206,25 @@ describe('完了レポート', () => {
     expect(rep.days[0]!.text).toBe('Day1 の振り返り');
     expect(rep.days[29]!.source).toBe('journal');
     expect(rep.days[29]!.text).toBe('Day30 の日記');
+  });
+
+  it('TIMELINE 実践は①カレンダーに乗り、②時間推移（isTimeType）として扱われる', () => {
+    upsertFutureRuleSet(
+      db,
+      START,
+      { conditions: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }] },
+      NOW_TODAY,
+    );
+    const g = createGoal(db, { name: '運動', practices: ['timeline:運動'] }, NOW_TODAY);
+    seedEval('2026-07-11', [
+      { conditionKey: 'timeline:運動', target: 'TIMELINE', met: true, actualSeconds: 2100, thresholdSeconds: 1800 },
+    ]);
+    const rep = getGoalReport(db, g.id, NOW_COMPLETED);
+    const p = rep.practices.find((x) => x.conditionKey === 'timeline:運動')!;
+    expect(p.isTimeType).toBe(true); // ② 時間推移に乗る
+    expect(p.cells[0]!.met).toBe(true); // ① Day1 達成
+    expect(p.cells[0]!.actualSeconds).toBe(2100);
+    expect(p.cells[0]!.thresholdSeconds).toBe(1800);
+    expect(rep.hasTimeType).toBe(true);
   });
 });

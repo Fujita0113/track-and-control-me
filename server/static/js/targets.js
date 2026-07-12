@@ -2,6 +2,7 @@
 export const TARGETS = [
   { v: 'TOTAL_WORK', label: '総作業時間' },
   { v: 'GROUP', label: 'グループ作業' },
+  { v: 'TIMELINE', label: 'タイムライン記録' },
   { v: 'MANUAL_CHECK', label: '手動チェック' },
   // PLANNING は編集 UI ではフラット化(CONDITION_KINDS)して signal_key ごとに1項目へ展開する。
   // ここは targetLabel のフォールバック用(単体で表示されることは通常ない)。
@@ -43,6 +44,7 @@ export function conditionLabel(target, signalKey) {
 export const CONDITION_KINDS = [
   { v: 'TOTAL_WORK', target: 'TOTAL_WORK', signalKey: null },
   { v: 'GROUP', target: 'GROUP', signalKey: null },
+  { v: 'TIMELINE', target: 'TIMELINE', signalKey: null },
   { v: 'MANUAL_CHECK', target: 'MANUAL_CHECK', signalKey: null },
   { v: 'PLANNING:reflection_done', target: 'PLANNING', signalKey: 'reflection_done' },
   { v: 'PLANNING:tomorrow_tasks_registered', target: 'PLANNING', signalKey: 'tomorrow_tasks_registered' },

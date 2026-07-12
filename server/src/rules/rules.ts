@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto';
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { dayKeyFor, nextDayKey } from '../aggregation/index.js';
+import { recordCategoryUse } from '../services/manual-categories.js';
 
 /**
  * 日次ルールセットの CRUD と凍結（design.md D7 / spec: work-rules-engine）。
  * 当日・過去は凍結（編集不可）、未来のみ編集可。凍結は app 層＋DBトリガの二重。
  */
 
-export type RuleTarget = 'GROUP' | 'TOTAL_WORK' | 'MANUAL_CHECK' | 'PLANNING';
+export type RuleTarget = 'GROUP' | 'TOTAL_WORK' | 'MANUAL_CHECK' | 'PLANNING' | 'TIMELINE';
 export type RuleStatus = 'DRAFT_FUTURE' | 'FROZEN_ACTIVE' | 'PAST';
 
 export class FrozenRuleError extends Error {
@@ -121,6 +122,10 @@ function deriveConditionKey(c: ConditionInput, index: number): string {
       return `manual:${index}`;
     case 'PLANNING':
       return `planning:${c.signalKey ?? 'default'}`;
+    case 'TIMELINE':
+      // ラベル（カテゴリ名）を安定キーに用いる（GROUP が stable_group_id で一致するのと対称）。
+      // 並び順に依存しないため manual:<index> の弱同一性を解消する。
+      return `timeline:${c.label ?? 'uncategorized'}`;
   }
 }
 
@@ -200,12 +205,13 @@ function assertGoalsSatisfied(db: DB, nowMs: number): void {
   }
 }
 
-/** effectiveDate の実効ルールにおける時間条件（TOTAL_WORK/GROUP）の condition_key → 閾値秒。 */
+/** effectiveDate の実効ルールにおける時間条件（TOTAL_WORK/GROUP/TIMELINE）の condition_key → 閾値秒。 */
 function effectiveTimeThresholds(db: DB, effectiveDate: string, nowMs: number): Map<string, number | null> {
   const eff = getEffectiveRuleSet(db, effectiveDate, nowMs);
   const map = new Map<string, number | null>();
   for (const c of eff?.conditions ?? []) {
-    if (c.target === 'TOTAL_WORK' || c.target === 'GROUP') map.set(c.condition_key, c.threshold_seconds);
+    if (c.target === 'TOTAL_WORK' || c.target === 'GROUP' || c.target === 'TIMELINE')
+      map.set(c.condition_key, c.threshold_seconds);
   }
   return map;
 }
@@ -231,7 +237,7 @@ function recordThresholdChanges(
         .prepare(
           `SELECT DISTINCT gp.condition_key AS key
            FROM goal_practice gp JOIN goal g ON g.id = gp.goal_id
-           WHERE gp.target IN ('TOTAL_WORK', 'GROUP')
+           WHERE gp.target IN ('TOTAL_WORK', 'GROUP', 'TIMELINE')
              AND g.end_day >= ? AND g.start_day <= ? AND g.end_day >= ?`,
         )
         .all(tomorrow, effectiveDate, effectiveDate) as { key: string }[]
@@ -241,7 +247,7 @@ function recordThresholdChanges(
 
   const afterThresholds = new Map<string, number | null>();
   input.conditions.forEach((c, i) => {
-    if (c.target === 'TOTAL_WORK' || c.target === 'GROUP')
+    if (c.target === 'TOTAL_WORK' || c.target === 'GROUP' || c.target === 'TIMELINE')
       afterThresholds.set(deriveConditionKey(c, i), c.thresholdSeconds ?? null);
   });
 
@@ -328,6 +334,9 @@ export function upsertFutureRuleSet(
         key: deriveConditionKey(c, i),
         sort: i,
       });
+      // TIMELINE 条件のカテゴリラベルは手動カテゴリレジストリへ upsert する（記録経路と同じ扱い）。
+      // 未登録名の入力でも以後の候補に並び、一致キーとして安定する。
+      if (c.target === 'TIMELINE' && (c.label ?? '').trim()) recordCategoryUse(db, c.label!, now);
     });
     // 適用後にジャンル固定を検証し、採用中条件の閾値変更を理由つきで記録する。
     assertGoalsSatisfied(db, nowMs);

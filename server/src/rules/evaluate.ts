@@ -91,6 +91,20 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
           met = actualSeconds >= (c.threshold_seconds ?? 0);
           break;
         }
+        case 'TIMELINE': {
+          // 当日の MANUAL 記録のうち category_key が条件ラベルに一致するものの継続時間を合算。
+          // end_at - start_at はミリ秒。/1000 で秒に。別ラベル・AUTO_SESSION は算入しない。
+          const row = db
+            .prepare(
+              `SELECT COALESCE(SUM(end_at - start_at), 0) AS ms
+               FROM activity_log_entry
+               WHERE day_key = ? AND entry_type = 'MANUAL' AND category_key = ?`,
+            )
+            .get(dayKey, c.label) as { ms: number };
+          actualSeconds = Math.floor(row.ms / 1000);
+          met = actualSeconds >= (c.threshold_seconds ?? 0);
+          break;
+        }
         case 'MANUAL_CHECK':
           met = getCheck(db, dayKey, c.condition_key);
           break;
