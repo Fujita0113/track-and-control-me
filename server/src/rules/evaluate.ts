@@ -92,11 +92,12 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
           break;
         }
         case 'TIMELINE': {
-          // 当日の MANUAL 記録のうち category_key が条件ラベルに一致するものの継続時間を合算。
-          // end_at - start_at はミリ秒。/1000 で秒に。別ラベル・AUTO_SESSION は算入しない。
+          // 当日の MANUAL 記録のうち category_key が条件ラベルに一致するものの持ち分を合算。
+          // 持ち分 = (end_at - start_at) / n（同時記録は n=構成数で按分、単独記録は n=1 で区間長そのまま）。
+          // n は既定1のため既存・単独記録・過去データは結果不変。別ラベル・AUTO_SESSION は算入しない。
           const row = db
             .prepare(
-              `SELECT COALESCE(SUM(end_at - start_at), 0) AS ms
+              `SELECT COALESCE(SUM((end_at - start_at) * 1.0 / n), 0) AS ms
                FROM activity_log_entry
                WHERE day_key = ? AND entry_type = 'MANUAL' AND category_key = ?`,
             )

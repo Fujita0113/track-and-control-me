@@ -506,4 +506,16 @@ CREATE TABLE goal_journal (
 );
 `,
   },
+  {
+    version: 12,
+    name: 'coactive-manual-record-group',
+    sql: /* sql */ `
+-- 複数カテゴリの均等割同時記録（spec: timeline-coactive-record / design.md D1・D2）。
+-- 同一区間を N カテゴリで同時記録する各 MANUAL 行を、同一 co_record_group_id で束ねる。
+-- 加算的移行（nullable, 既定 NULL）でバックフィル不要。既存の単独 MANUAL 記録は
+-- co_record_group_id=NULL のまま、n=1（既存既定）で持ち分＝区間長そのまま＝後方互換。
+-- n は AUTO 同時オープンと同じ「持ち分の分母」。同時記録の持ち分は (end_at - start_at) / n。
+ALTER TABLE activity_log_entry ADD COLUMN co_record_group_id INTEGER;
+`,
+  },
 ];

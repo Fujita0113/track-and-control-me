@@ -411,11 +411,27 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
 .tlc-pop-delete-hint { font-size: 11px; color: #a50e0e; }
 .tlc-draft-times { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
 .tlc-draft-lbl { font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
-.tlc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.tlc-chip { cursor: pointer; padding: 6px 12px; border-radius: 16px; font-size: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font-weight: 500; }
+.tlc-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tlc-chip { cursor: pointer; padding: 6px 12px; border-radius: 16px; font-size: 13px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
 .tlc-chip.active { border-color: var(--accent); background: var(--accent-weak); color: var(--accent); }
 /* 追跡中カテゴリのチップ強調(選択 active とは独立・timeline-tracked-highlight)。 */
 .tlc-chip.tracked { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+/* 「もっと見る/閉じる」トグル(上限超過分の展開・timeline-gap-recording D6)。 */
+.tlc-chip-more { cursor: pointer; padding: 6px 10px; border-radius: 16px; font-size: 12px; border: 1px dashed var(--muted-2); background: transparent; color: var(--muted); font-weight: 500; }
+.tlc-chip-more:hover { border-color: var(--accent); color: var(--accent); }
+.tlc-draft-add { display: flex; gap: 8px; align-items: center; }
+.tlc-draft-add input { flex: 1; }
+.tlc-draft-add .btn { flex: none; padding: 6px 12px; }
+/* 「なぜ強調か」を示す閾値バッジ(≥N分・timeline-tracked-highlight・表示専用)。 */
+.tlc-thr-badge {
+  display: inline-block; font-size: 9.5px; font-weight: 600; line-height: 1.5; white-space: nowrap;
+  color: var(--accent); background: var(--accent-weak); border: 1px solid var(--accent);
+  border-radius: 8px; padding: 0 5px;
+}
+.tlc-block .tlc-thr-badge { position: relative; z-index: 2; margin-top: 3px; align-self: flex-start; }
+/* 同時記録の持ち分(区間長 ÷ N)補助ラベル。 */
+.tlc-b-share { position: relative; z-index: 2; font-size: 10px; color: #5f6368; margin-top: 2px; }
+.tlc-block.leisure.tracked .tlc-b-share { color: var(--accent); opacity: 0.9; }
 .tlc-draft-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 /* --- ラン詳細ポップオーバー内訳 (timeline-revamp D3/D4) --- */

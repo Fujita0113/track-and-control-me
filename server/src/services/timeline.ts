@@ -31,6 +31,12 @@ export interface ManualEntry {
   color: string | null;
   categoryKey: string | null;
   edited: boolean;
+  /** 同時記録グループ ID。単独記録は null（spec: timeline-coactive-record / D1）。 */
+  coRecordGroupId: number | null;
+  /** 同時記録グループの構成数（＝持ち分の分母）。単独記録は 1。 */
+  n: number;
+  /** 持ち分秒 = (endAt - startAt) / n / 1000（D2: 読み取り時に算出）。 */
+  creditedSeconds: number;
 }
 
 export interface Gap {
@@ -151,17 +157,25 @@ export function getTimeline(db: DB, dayKey: string, nowMs = Date.now()): Timelin
     color: string | null;
     category_key: string | null;
     edited: number;
+    co_record_group_id: number | null;
+    n: number;
   }[];
-  const manual: ManualEntry[] = manualRows.map((r) => ({
-    id: r.id,
-    kind: 'MANUAL',
-    startAt: r.start_at,
-    endAt: r.end_at,
-    title: r.title,
-    color: r.color,
-    categoryKey: r.category_key,
-    edited: r.edited === 1,
-  }));
+  const manual: ManualEntry[] = manualRows.map((r) => {
+    const n = r.n > 0 ? r.n : 1;
+    return {
+      id: r.id,
+      kind: 'MANUAL',
+      startAt: r.start_at,
+      endAt: r.end_at,
+      title: r.title,
+      color: r.color,
+      categoryKey: r.category_key,
+      edited: r.edited === 1,
+      coRecordGroupId: r.co_record_group_id ?? null,
+      n,
+      creditedSeconds: (r.end_at - r.start_at) / n / 1000,
+    };
+  });
 
   const capEnd = Math.min(winEnd, Math.max(nowMs, winStart));
   const gaps = computeGaps(winStart, capEnd, [...auto, ...manual], cfg.away_min_seconds);
@@ -216,6 +230,67 @@ export function addManualEntry(db: DB, dayKey: string, input: ManualInput): numb
   return info.lastInsertRowid as number;
 }
 
+export interface CoRecordInput {
+  startAt: number;
+  endAt: number;
+  /** 選択・入力されたカテゴリ名の配列（順序保持）。trim・重複・空白は正規化される。 */
+  categories: string[];
+  color?: string | null;
+}
+
+/**
+ * 同一区間を複数カテゴリで均等割同時記録する（spec: timeline-coactive-record / design.md D1・D4）。
+ * カテゴリ名を trim・重複除去・空白除外で正規化し、正規化後の件数 N に応じて:
+ *  - N=1: 従来どおりの単独記録（co_record_group_id=NULL, n=1）を1件作成。
+ *  - N≥2: 同一 co_record_group_id・n=N の MANUAL 行を N 件作成（区間全体を共有）。
+ * 作成は単一トランザクション。途中失敗ではどの行も残さない（MUST NOT 部分作成）。
+ * 返り値は作成したエントリ ID の配列（正規化後 0 件なら空配列）。
+ */
+export function addCoRecordEntries(db: DB, dayKey: string, input: CoRecordInput): number[] {
+  const cats = normalizeCategories(input.categories);
+  if (cats.length === 0) return [];
+  const now = Date.now();
+  const color = input.color ?? null;
+  const n = cats.length;
+
+  const tx = db.transaction(() => {
+    const ins = db.prepare(
+      `INSERT INTO activity_log_entry
+        (day_key, start_at, end_at, entry_type, title, color, category_key, coactive_group_keys,
+         n, co_record_group_id, edited, created_at, updated_at)
+       VALUES (?, ?, ?, 'MANUAL', ?, ?, ?, '[]', ?, ?, 0, ?, ?)`,
+    );
+    const ids: number[] = [];
+    // 単独（N=1）は co_record_group_id=NULL・n=1。グループ ID は先頭行の id を採用する。
+    let groupId: number | null = null;
+    for (const cat of cats) {
+      recordCategoryUse(db, cat, now);
+      const info = ins.run(dayKey, input.startAt, input.endAt, cat, color, cat, n, groupId, now, now);
+      const id = info.lastInsertRowid as number;
+      ids.push(id);
+      if (n > 1 && groupId === null) {
+        groupId = id;
+        db.prepare('UPDATE activity_log_entry SET co_record_group_id = ? WHERE id = ?').run(groupId, id);
+      }
+    }
+    return ids;
+  });
+  return tx();
+}
+
+/** カテゴリ名配列を trim → 空白除外 → 先勝ちで重複除去して正規化する（順序保持）。 */
+function normalizeCategories(categories: string[] | undefined): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of categories ?? []) {
+    const c = (raw ?? '').trim();
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
+    out.push(c);
+  }
+  return out;
+}
+
 export function updateEntry(
   db: DB,
   id: number,
@@ -245,8 +320,38 @@ export function updateEntry(
   return true;
 }
 
+/**
+ * MANUAL/AUTO エントリを削除する。同時記録グループのメンバーを削除した場合は、
+ * 残メンバーの n を新しい構成数へ更新して再按分する（spec: timeline-coactive-record / D2）。
+ * 残り1件になったら単独記録へ戻す（co_record_group_id=NULL, n=1 → 持ち分＝区間長）。
+ */
 export function deleteEntry(db: DB, id: number): boolean {
-  return db.prepare('DELETE FROM activity_log_entry WHERE id = ?').run(id).changes > 0;
+  const tx = db.transaction(() => {
+    const row = db
+      .prepare('SELECT co_record_group_id FROM activity_log_entry WHERE id = ?')
+      .get(id) as { co_record_group_id: number | null } | undefined;
+    const deleted = db.prepare('DELETE FROM activity_log_entry WHERE id = ?').run(id).changes > 0;
+    if (!deleted) return false;
+    const groupId = row?.co_record_group_id ?? null;
+    if (groupId !== null) {
+      const now = Date.now();
+      const remaining = db
+        .prepare('SELECT id FROM activity_log_entry WHERE co_record_group_id = ?')
+        .all(groupId) as { id: number }[];
+      if (remaining.length <= 1) {
+        // 単独へ戻す: グループ解消・n=1・持ち分＝区間長。
+        db.prepare(
+          'UPDATE activity_log_entry SET co_record_group_id = NULL, n = 1, updated_at = ? WHERE co_record_group_id = ?',
+        ).run(now, groupId);
+      } else {
+        db.prepare(
+          'UPDATE activity_log_entry SET n = ?, updated_at = ? WHERE co_record_group_id = ?',
+        ).run(remaining.length, now, groupId);
+      }
+    }
+    return true;
+  });
+  return tx();
 }
 
 /** ギャップを MANUAL AWAY へ昇格（task 6.5）。 */

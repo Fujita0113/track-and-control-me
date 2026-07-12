@@ -206,7 +206,7 @@ function assertGoalsSatisfied(db: DB, nowMs: number): void {
 }
 
 /** effectiveDate の実効ルールにおける時間条件（TOTAL_WORK/GROUP/TIMELINE）の condition_key → 閾値秒。 */
-function effectiveTimeThresholds(db: DB, effectiveDate: string, nowMs: number): Map<string, number | null> {
+export function effectiveTimeThresholds(db: DB, effectiveDate: string, nowMs: number): Map<string, number | null> {
   const eff = getEffectiveRuleSet(db, effectiveDate, nowMs);
   const map = new Map<string, number | null>();
   for (const c of eff?.conditions ?? []) {

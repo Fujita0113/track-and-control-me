@@ -3,6 +3,7 @@ import { nextDayKey } from '../aggregation/index.js';
 import {
   getEffectiveRuleSet,
   upsertFutureRuleSet,
+  effectiveTimeThresholds,
   type ConditionInput,
   type RuleConditionRow,
 } from '../rules/rules.js';
@@ -180,11 +181,19 @@ export interface GoalView {
     label: string;
     stableGroupId: string | null;
     signalKey: string | null;
+    /**
+     * 時間条件の当日実効閾値秒（timeline-tracked-highlight の強調バッジ用・D5）。
+     * 目標の実効日（active=当日 / upcoming=開始日）のルールで解決。非時間条件・未解決は null。
+     */
+    thresholdSeconds: number | null;
   }[];
 }
 
-function toView(db: DB, row: GoalRow, today: string): GoalView {
+function toView(db: DB, row: GoalRow, today: string, nowMs: number): GoalView {
   const status = deriveStatus(today, row.start_day, row.end_day);
+  // 閾値バッジ用: 目標が効く日（進行中は当日、開始前は開始日）の実効ルールから閾値を解決する。
+  const effDate = today < row.start_day ? row.start_day : today;
+  const thresholds = effectiveTimeThresholds(db, effDate, nowMs);
   return {
     id: row.id,
     name: row.name,
@@ -202,6 +211,7 @@ function toView(db: DB, row: GoalRow, today: string): GoalView {
       label: p.label_snapshot ?? p.condition_key,
       stableGroupId: p.stable_group_id,
       signalKey: p.signal_key,
+      thresholdSeconds: thresholds.get(p.condition_key) ?? null,
     })),
   };
 }
@@ -323,7 +333,7 @@ export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): 
     return goalId;
   });
   const goalId = tx();
-  return toView(db, getGoalRow(db, goalId), today);
+  return toView(db, getGoalRow(db, goalId), today, nowMs);
 }
 
 /** 目標一覧（導出 status 付き）。開始前・進行中・完走の順は日付降順。 */
@@ -332,11 +342,11 @@ export function listGoals(db: DB, nowMs = Date.now()): GoalView[] {
   const rows = db
     .prepare('SELECT * FROM goal ORDER BY start_day DESC, id DESC')
     .all() as GoalRow[];
-  return rows.map((r) => toView(db, r, today));
+  return rows.map((r) => toView(db, r, today, nowMs));
 }
 
 export function getGoal(db: DB, id: number, nowMs = Date.now()): GoalView {
-  return toView(db, getGoalRow(db, id), todayKey(db, nowMs));
+  return toView(db, getGoalRow(db, id), todayKey(db, nowMs), nowMs);
 }
 
 /** 作成当日限りの削除（誤作成の救済）。CASCADE で実践・日記も消える。 */

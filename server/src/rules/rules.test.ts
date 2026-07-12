@@ -539,4 +539,61 @@ describe('TIMELINE 条件（タイムライン記録）', () => {
     const rows = db.prepare('SELECT name FROM manual_category WHERE name = ?').all('運動') as { name: string }[];
     expect(rows.length).toBe(1);
   });
+
+  /** 同時記録グループ（n=構成数・同一 co_record_group_id）で MANUAL 行をシードする。 */
+  function seedCoRecord(categories: string[], seconds: number, startAt = jst(2026, 7, 10, 9, 0)): void {
+    const n = categories.length;
+    const groupId = n > 1 ? 9000 : null; // 任意の共有 ID（単独は NULL）。
+    const ins = db.prepare(
+      `INSERT INTO activity_log_entry (day_key, start_at, end_at, entry_type, title, category_key, n, co_record_group_id, created_at, updated_at)
+       VALUES (?, ?, ?, 'MANUAL', ?, ?, ?, ?, 0, 0)`,
+    );
+    for (const cat of categories) ins.run(DAY_TODAY, startAt, startAt + seconds * 1000, cat, cat, n, groupId);
+  }
+
+  it('同時記録は持ち分（区間長 ÷ N）で算入される（2時間・2カテゴリで1時間）', () => {
+    upsertFutureRuleSet(
+      db,
+      DAY_TODAY,
+      { combinator: 'ALL', conditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 1800 }] },
+      NOW_YESTERDAY,
+    );
+    // 2時間の区間を「掃除」「洗濯」で同時記録（各持ち分1時間 = 3600秒）。
+    seedCoRecord(['掃除', '洗濯'], 7200);
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    const p = r.perCondition.find((x) => x.target === 'TIMELINE' && x.conditionKey === 'timeline:掃除')!;
+    expect(p.actualSeconds).toBe(3600); // 区間長そのまま(7200)ではなく持ち分(3600)。
+    expect(p.met).toBe(true); // 3600 ≥ 1800。
+  });
+
+  it('単独記録の持ち分は区間長そのまま（n=1 で結果不変＝後方互換）', () => {
+    seedTimelineRule(1800);
+    seedCoRecord(['運動'], 2100); // n=1・単独。
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    const p = r.perCondition.find((x) => x.target === 'TIMELINE' && x.conditionKey === 'timeline:運動')!;
+    expect(p.actualSeconds).toBe(2100);
+    expect(p.met).toBe(true);
+  });
+
+  it('閾値バッジの有無は評価結果を変えない（表示専用・目標採用に非依存）', () => {
+    // ルール・記録だけの状態で評価。
+    seedTimelineRule(1800);
+    seedCoRecord(['運動'], 1200);
+    const before = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    const pb = before.perCondition.find((x) => x.conditionKey === 'timeline:運動')!;
+    // 目標を採用してもルール評価（met/actualSeconds）は同一。
+    db.prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)').run(
+      '運動チャレンジ', '', DAY_TODAY, '2026-08-08', NOW_YESTERDAY,
+    );
+    const gid = (db.prepare('SELECT id FROM goal').get() as { id: number }).id;
+    db.prepare('INSERT INTO goal_practice (goal_id, condition_key, target, sort_order) VALUES (?, ?, ?, 0)').run(
+      gid, 'timeline:運動', 'TIMELINE',
+    );
+    // is_final ではないので再評価される。
+    db.prepare('DELETE FROM unlock_evaluation WHERE day_key = ?').run(DAY_TODAY);
+    const after = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    const pa = after.perCondition.find((x) => x.conditionKey === 'timeline:運動')!;
+    expect(pa.actualSeconds).toBe(pb.actualSeconds);
+    expect(pa.met).toBe(pb.met);
+  });
 });

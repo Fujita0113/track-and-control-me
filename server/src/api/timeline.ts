@@ -3,6 +3,7 @@ import type { ApiDeps } from './types.js';
 import {
   getTimeline,
   addManualEntry,
+  addCoRecordEntries,
   updateEntry,
   deleteEntry,
   promoteGapToAway,
@@ -24,16 +25,44 @@ export function registerTimelineRoutes(app: FastifyInstance, deps: ApiDeps): voi
     const b = req.body as {
       startAt: number;
       endAt: number;
-      title: string;
+      title?: string;
       color?: string | null;
       categoryKey?: string | null;
       category?: string | null;
+      // 複数カテゴリの均等割同時記録（timeline-coactive-record）。
+      categories?: string[];
     };
-    if (b?.startAt == null || b?.endAt == null || !b?.title) {
+    if (b?.startAt == null || b?.endAt == null) {
+      reply.code(400);
+      return { error: 'startAt, endAt は必須' };
+    }
+    // 複数カテゴリ配列があれば同時記録として一括作成（正規化後 0 件は 400）。
+    if (Array.isArray(b.categories)) {
+      const ids = addCoRecordEntries(db, date, {
+        startAt: b.startAt,
+        endAt: b.endAt,
+        categories: b.categories,
+        color: b.color,
+      });
+      if (ids.length === 0) {
+        reply.code(400);
+        return { error: '有効なカテゴリを1つ以上指定してください' };
+      }
+      return { ids, id: ids[0] };
+    }
+    // 後方互換: 単一 body（title 必須）。
+    if (!b?.title) {
       reply.code(400);
       return { error: 'startAt, endAt, title は必須' };
     }
-    const id = addManualEntry(db, date, b);
+    const id = addManualEntry(db, date, {
+      startAt: b.startAt,
+      endAt: b.endAt,
+      title: b.title,
+      color: b.color,
+      categoryKey: b.categoryKey,
+      category: b.category,
+    });
     return { id };
   });
 
