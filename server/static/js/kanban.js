@@ -554,9 +554,11 @@ async function onDrop(e, colKey, colElm) {
   const src = S.tasks.filter((x) => normStatus(x.status) === fromCol && x.id !== t.id);
   t.status = colKey;
   if (t.done_at) t.done_at = null;
+  // ロック無しで due が実際に変わった場合のみ永続化対象にする（design D2）。
+  let dueChanged = false;
   if (!t.due_locked) {
     const dec = computeDue(fromCol, colKey, tomorrowMode(), state.today);
-    if (dec.change) t.due = dec.due;
+    if (dec.change) { t.due = dec.due; dueChanged = true; }
   }
   dest.splice(idx, 0, t);
   reindexColumn(colKey, dest);
@@ -567,6 +569,11 @@ async function onDrop(e, colKey, colElm) {
     { status: fromCol, ids: src.map((x) => x.id) },
     { status: colKey, ids: dest.map((x) => x.id) },
   ]);
+  // 並べ替え（status/sort_order）とは別に due の変更を永続化する（design D1/D3）。
+  if (dueChanged) {
+    try { await api.updateTask(t.id, { due: t.due }); }
+    catch (err) { toast(`保存に失敗: ${err.message}`, 'err'); }
+  }
 }
 
 function completeTask(t, x, y) {
