@@ -8,6 +8,8 @@ import {
   upsertFutureRuleSet,
   deleteRuleSet,
   FrozenRuleError,
+  GoalLockError,
+  ThresholdReasonRequiredError,
   type ConditionInput,
 } from '../rules/rules.js';
 import { evaluateDay } from '../rules/evaluate.js';
@@ -16,6 +18,7 @@ import { revealPasswords } from '../password/reveal.js';
 import { listManualCategories } from '../services/manual-categories.js';
 import { registerTimelineRoutes } from './timeline.js';
 import { registerPlanningRoutes } from './planning.js';
+import { registerGoalRoutes } from './goals.js';
 import type { ApiDeps } from './types.js';
 
 export type { ApiDeps };
@@ -92,10 +95,28 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
 
   app.put('/api/rules/:date', async (req, reply) => {
     const { date } = req.params as { date: string };
-    const b = req.body as { combinator?: 'ALL'; conditions: ConditionInput[] };
+    const b = req.body as {
+      combinator?: 'ALL';
+      conditions: ConditionInput[];
+      threshold_change_reason?: string | null;
+    };
     try {
-      return upsertFutureRuleSet(db, date, { combinator: b.combinator, conditions: b.conditions ?? [] });
+      return upsertFutureRuleSet(
+        db,
+        date,
+        { combinator: b.combinator, conditions: b.conditions ?? [] },
+        undefined,
+        { thresholdChangeReason: b.threshold_change_reason },
+      );
     } catch (err) {
+      if (err instanceof ThresholdReasonRequiredError) {
+        reply.code(400);
+        return { error: err.message, reasonRequired: true };
+      }
+      if (err instanceof GoalLockError) {
+        reply.code(409);
+        return { error: err.message, goalLocked: true };
+      }
       if (err instanceof FrozenRuleError) {
         reply.code(409);
         return { error: err.message, frozen: true };
@@ -109,6 +130,10 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
     try {
       return { deleted: deleteRuleSet(db, date) };
     } catch (err) {
+      if (err instanceof GoalLockError) {
+        reply.code(409);
+        return { error: err.message, goalLocked: true };
+      }
       if (err instanceof FrozenRuleError) {
         reply.code(409);
         return { error: err.message, frozen: true };
@@ -146,7 +171,8 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
     return revealPasswords(db, date, { auto: false });
   });
 
-  // --- タイムライン / 振り返り・カンバン ---------------------------------
+  // --- タイムライン / 振り返り・カンバン / 目標 --------------------------
   registerTimelineRoutes(app, deps);
   registerPlanningRoutes(app, deps);
+  registerGoalRoutes(app, deps);
 }

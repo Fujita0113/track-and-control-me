@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
-import { dayKeyFor } from '../aggregation/index.js';
+import { dayKeyFor, nextDayKey } from '../aggregation/index.js';
 
 /**
  * 日次ルールセットの CRUD と凍結（design.md D7 / spec: work-rules-engine）。
@@ -15,6 +15,25 @@ export class FrozenRuleError extends Error {
   constructor(dayKey: string) {
     super(`当日/過去のルールは凍結されています: ${dayKey}`);
     this.name = 'FrozenRuleError';
+  }
+}
+
+/**
+ * ジャンル固定（spec: goal-challenge / design.md D2）。編集の結果、アクティブな目標の残期間の
+ * いずれかの日で採用実践の condition_key が実効ルールから欠ける場合に投げる（トランザクション ABORT）。
+ */
+export class GoalLockError extends Error {
+  constructor(goalName: string, conditionKey: string, dayKey: string) {
+    super(`目標「${goalName}」が採用中の実践「${conditionKey}」が ${dayKey} の実効ルールから外れます（ジャンル固定）`);
+    this.name = 'GoalLockError';
+  }
+}
+
+/** 採用中条件の閾値変更に理由が伴わないとき投げる（API は 400・design.md D2）。 */
+export class ThresholdReasonRequiredError extends Error {
+  constructor(keys: string[]) {
+    super(`採用中の実践（${keys.join(', ')}）の閾値変更には理由が必要です`);
+    this.name = 'ThresholdReasonRequiredError';
   }
 }
 
@@ -143,12 +162,118 @@ export function listRuleSets(db: DB): RuleSetWithConditions[] {
   }));
 }
 
-/** 未来日のルールセットを作成/全置換する。当日・過去は FrozenRuleError。 */
+interface GoalLockRow {
+  id: number;
+  name: string;
+  start_day: string;
+  end_day: string;
+}
+
+/**
+ * ジャンル固定の適用後検証（design.md D2）。アクティブ（進行中/開始前）な各目標について、
+ * 残期間（max(明日, start_day)〜end_day）の各日の実効ルールを解決し、全採用実践 condition_key の
+ * 存在を確認する。欠けていれば GoalLockError。持ち越し・削除フォールバックも「解決して確認」で一括カバー。
+ * 目標が無い環境では goal テーブルが空なので完全な no-op（既存挙動を変えない）。
+ */
+function assertGoalsSatisfied(db: DB, nowMs: number): void {
+  const today = todayKey(db, nowMs);
+  const tomorrow = nextDayKey(today);
+  const goals = db
+    .prepare('SELECT id, name, start_day, end_day FROM goal WHERE end_day >= ?')
+    .all(tomorrow) as GoalLockRow[];
+  for (const g of goals) {
+    const keys = (
+      db.prepare('SELECT condition_key FROM goal_practice WHERE goal_id = ?').all(g.id) as {
+        condition_key: string;
+      }[]
+    ).map((r) => r.condition_key);
+    if (keys.length === 0) continue;
+    const from = g.start_day > tomorrow ? g.start_day : tomorrow; // max(明日, start_day)
+    let day = from;
+    let guard = 0;
+    while (day <= g.end_day && guard++ < 60) {
+      const eff = getEffectiveRuleSet(db, day, nowMs);
+      const present = new Set((eff?.conditions ?? []).map((c) => c.condition_key));
+      for (const k of keys) if (!present.has(k)) throw new GoalLockError(g.name, k, day);
+      day = nextDayKey(day);
+    }
+  }
+}
+
+/** effectiveDate の実効ルールにおける時間条件（TOTAL_WORK/GROUP）の condition_key → 閾値秒。 */
+function effectiveTimeThresholds(db: DB, effectiveDate: string, nowMs: number): Map<string, number | null> {
+  const eff = getEffectiveRuleSet(db, effectiveDate, nowMs);
+  const map = new Map<string, number | null>();
+  for (const c of eff?.conditions ?? []) {
+    if (c.target === 'TOTAL_WORK' || c.target === 'GROUP') map.set(c.condition_key, c.threshold_seconds);
+  }
+  return map;
+}
+
+/**
+ * 採用中の時間条件の閾値変更（上げ下げ問わず）を検出し、理由必須化＋記録する（design.md D2）。
+ * effectiveDate に稼働中（完走前・当日が期間内）の目標が採用する時間条件で、変更前後の閾値が
+ * 異なるものが対象。理由が無ければ ThresholdReasonRequiredError。記録は condition_key 単位で1本。
+ */
+function recordThresholdChanges(
+  db: DB,
+  effectiveDate: string,
+  beforeThresholds: Map<string, number | null>,
+  input: { conditions: ConditionInput[] },
+  reason: string | null | undefined,
+  nowMs: number,
+): void {
+  const today = todayKey(db, nowMs);
+  const tomorrow = nextDayKey(today);
+  const adopted = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT gp.condition_key AS key
+           FROM goal_practice gp JOIN goal g ON g.id = gp.goal_id
+           WHERE gp.target IN ('TOTAL_WORK', 'GROUP')
+             AND g.end_day >= ? AND g.start_day <= ? AND g.end_day >= ?`,
+        )
+        .all(tomorrow, effectiveDate, effectiveDate) as { key: string }[]
+    ).map((r) => r.key),
+  );
+  if (adopted.size === 0) return;
+
+  const afterThresholds = new Map<string, number | null>();
+  input.conditions.forEach((c, i) => {
+    if (c.target === 'TOTAL_WORK' || c.target === 'GROUP')
+      afterThresholds.set(deriveConditionKey(c, i), c.thresholdSeconds ?? null);
+  });
+
+  const changes: { key: string; before: number | null; after: number | null }[] = [];
+  for (const key of adopted) {
+    const before = beforeThresholds.get(key);
+    const after = afterThresholds.get(key);
+    // 「両方に存在し値が異なる」だけを変更として扱う（削除はジャンル固定が別途 ABORT）。
+    if (before != null && after != null && before !== after) changes.push({ key, before, after });
+  }
+  if (changes.length === 0) return;
+
+  const r = (reason ?? '').trim();
+  if (!r) throw new ThresholdReasonRequiredError(changes.map((c) => c.key));
+  const ins = db.prepare(
+    `INSERT INTO practice_threshold_change (condition_key, effective_date, old_seconds, new_seconds, reason, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  for (const c of changes) ins.run(c.key, effectiveDate, c.before, c.after, r, nowMs);
+}
+
+/**
+ * 未来日のルールセットを作成/全置換する。当日・過去は FrozenRuleError。
+ * 目標が採用中の条件はジャンル固定（削除・対象変更で GoalLockError）。閾値変更は理由必須
+ * （opts.thresholdChangeReason・無ければ ThresholdReasonRequiredError）で記録する。
+ */
 export function upsertFutureRuleSet(
   db: DB,
   effectiveDate: string,
   input: { combinator?: 'ALL'; conditions: ConditionInput[] },
   nowMs = Date.now(),
+  opts: { thresholdChangeReason?: string | null } = {},
 ): RuleSetWithConditions {
   const today = todayKey(db, nowMs);
   // 過去は常に凍結。当日は初期ブートストラップ時のみ許可（それ以外は凍結）。
@@ -162,6 +287,8 @@ export function upsertFutureRuleSet(
   // 論理時刻(nowMs)で記帳する。ブートストラップ判定(created_at の day_key)を
   // 評価時刻と一致させるため、実時計 Date.now() ではなく nowMs を用いる。
   const now = nowMs;
+  // 閾値変更検出のため、編集を書き込む前の実効閾値を先に取る（読み取り専用）。
+  const beforeThresholds = effectiveTimeThresholds(db, effectiveDate, nowMs);
 
   const tx = db.transaction(() => {
     let rs = db
@@ -202,12 +329,15 @@ export function upsertFutureRuleSet(
         sort: i,
       });
     });
+    // 適用後にジャンル固定を検証し、採用中条件の閾値変更を理由つきで記録する。
+    assertGoalsSatisfied(db, nowMs);
+    recordThresholdChanges(db, effectiveDate, beforeThresholds, input, opts.thresholdChangeReason, nowMs);
   });
   tx();
   return getRuleSet(db, effectiveDate)!;
 }
 
-/** 未来日のルールセットを削除する。当日・過去は FrozenRuleError。 */
+/** 未来日のルールセットを削除する。当日・過去は FrozenRuleError。採用中実践が消えるなら GoalLockError。 */
 export function deleteRuleSet(db: DB, effectiveDate: string, nowMs = Date.now()): boolean {
   const today = todayKey(db, nowMs);
   // 過去は常に凍結。当日は初期ブートストラップ（当日作成・未凍結）のみ削除可。
@@ -215,8 +345,13 @@ export function deleteRuleSet(db: DB, effectiveDate: string, nowMs = Date.now())
   if (effectiveDate === today && !canWriteTodayRule(db, today)) {
     throw new FrozenRuleError(effectiveDate);
   }
-  const res = db.prepare('DELETE FROM daily_rule_set WHERE effective_date = ?').run(effectiveDate);
-  return res.changes > 0;
+  const tx = db.transaction(() => {
+    const res = db.prepare('DELETE FROM daily_rule_set WHERE effective_date = ?').run(effectiveDate);
+    // 削除の持ち越しフォールバックを解決し、採用中実践が全日残ることを確認（欠ければ ABORT）。
+    assertGoalsSatisfied(db, nowMs);
+    return res.changes > 0;
+  });
+  return tx();
 }
 
 /**

@@ -38,3 +38,51 @@ describe('DB migrations & seed', () => {
     db.close();
   });
 });
+
+describe('migration v11: 30日チャレンジ', () => {
+  it('applies v11 and creates the goal tables', () => {
+    const db = openDb(':memory:');
+    expect(db.pragma('user_version', { simple: true })).toBeGreaterThanOrEqual(11);
+    const tables = new Set(
+      (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
+        (r) => r.name,
+      ),
+    );
+    for (const t of ['goal', 'goal_practice', 'practice_threshold_change', 'goal_journal']) {
+      expect(tables.has(t)).toBe(true);
+    }
+    db.close();
+  });
+
+  it('goal_practice / goal_journal は goal 削除で CASCADE 消去される', () => {
+    const db = openDb(':memory:');
+    const info = db
+      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('テスト目標', '目的', '2026-07-13', '2026-08-11', 0);
+    const goalId = info.lastInsertRowid as number;
+    db.prepare(
+      'INSERT INTO goal_practice (goal_id, condition_key, target, sort_order) VALUES (?, ?, ?, 0)',
+    ).run(goalId, 'total_work', 'TOTAL_WORK');
+    db.prepare(
+      'INSERT INTO goal_journal (goal_id, day_key, content, created_at, updated_at) VALUES (?, ?, ?, 0, 0)',
+    ).run(goalId, '2026-07-13', '初日');
+
+    db.prepare('DELETE FROM goal WHERE id = ?').run(goalId);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_practice').get() as { c: number }).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_journal').get() as { c: number }).c).toBe(0);
+    db.close();
+  });
+
+  it('goal_practice の PK は (goal_id, condition_key)（同一目標での重複採用を弾く）', () => {
+    const db = openDb(':memory:');
+    const goalId = db
+      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('g', '', '2026-07-13', '2026-08-11', 0).lastInsertRowid as number;
+    const ins = db.prepare(
+      'INSERT INTO goal_practice (goal_id, condition_key, target, sort_order) VALUES (?, ?, ?, 0)',
+    );
+    ins.run(goalId, 'total_work', 'TOTAL_WORK');
+    expect(() => ins.run(goalId, 'total_work', 'TOTAL_WORK')).toThrow(/UNIQUE|PRIMARY/i);
+    db.close();
+  });
+});

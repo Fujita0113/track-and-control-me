@@ -7,6 +7,8 @@ import {
   getRuleSet,
   ensureFrozenIfDue,
   FrozenRuleError,
+  GoalLockError,
+  ThresholdReasonRequiredError,
   todayKey,
 } from './rules.js';
 import { evaluateDay } from './evaluate.js';
@@ -258,5 +260,139 @@ describe('undefined_day_policy', () => {
     // DAY_TOMORROW は未設定 → フォールバックで当日ルールを継承。
     const r = evaluateDay(db, DAY_TOMORROW, jst(2026, 7, 11, 12, 0));
     expect(r.hasRuleSet).toBe(true);
+  });
+});
+
+describe('ジャンル固定・理由付き閾値変更（目標が採用中の条件）', () => {
+  const END = '2026-08-09'; // DAY_TOMORROW(2026-07-11) + 29
+
+  /** DAY_TOMORROW 発効の実効ルール（採用元）を作る。 */
+  function seedTomorrowRule(): void {
+    upsertFutureRuleSet(
+      db,
+      DAY_TOMORROW,
+      {
+        conditions: [
+          { target: 'TOTAL_WORK', thresholdSeconds: 14400 },
+          { target: 'GROUP', stableGroupId: 'g-atcoder', thresholdSeconds: 1800 },
+        ],
+      },
+      NOW_TODAY,
+    );
+  }
+
+  /** [DAY_TOMORROW..END] を稼働期間とする目標を直接挿入し、実践 keys を採用させる。 */
+  function seedGoal(keys: { key: string; target: string }[], startDay = DAY_TOMORROW, endDay = END): number {
+    const id = db
+      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('目標', '', startDay, endDay, NOW_TODAY).lastInsertRowid as number;
+    const ins = db.prepare(
+      'INSERT INTO goal_practice (goal_id, condition_key, target, sort_order) VALUES (?, ?, ?, ?)',
+    );
+    keys.forEach((k, i) => ins.run(id, k.key, k.target, i));
+    return id;
+  }
+
+  it('採用中条件の削除（対象から外す編集）は GoalLockError で拒否', () => {
+    seedTomorrowRule();
+    seedGoal([{ key: 'total_work', target: 'TOTAL_WORK' }]);
+    // DAY_TOMORROW を GROUP のみに置換 → total_work が残期間から消える。
+    expect(() =>
+      upsertFutureRuleSet(
+        db,
+        DAY_TOMORROW,
+        { conditions: [{ target: 'GROUP', stableGroupId: 'g-atcoder', thresholdSeconds: 1800 }] },
+        NOW_TODAY,
+      ),
+    ).toThrow(GoalLockError);
+    // ルールセットは変更されていない（total_work が残る）。
+    expect(getRuleSet(db, DAY_TOMORROW)!.conditions.some((c) => c.condition_key === 'total_work')).toBe(true);
+  });
+
+  it('削除フォールバックでも実践が残るなら許可される', () => {
+    seedTomorrowRule();
+    // 期間中の別日に明示ルールを作る（total_work を含む）。
+    upsertFutureRuleSet(
+      db,
+      '2026-07-15',
+      { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }] },
+      NOW_TODAY,
+    );
+    seedGoal([{ key: 'total_work', target: 'TOTAL_WORK' }]);
+    // 2026-07-15 を削除 → DAY_TOMORROW へフォールバックし total_work は残る。
+    expect(deleteRuleSet(db, '2026-07-15', NOW_TODAY)).toBe(true);
+  });
+
+  it('目標期間外の日だけに影響する編集は制約されない', () => {
+    seedTomorrowRule();
+    seedGoal([{ key: 'total_work', target: 'TOTAL_WORK' }]);
+    // end_day より後の日に total_work 無しのルールを作る → 期間内は DAY_TOMORROW にフォールバックのまま。
+    const rs = upsertFutureRuleSet(
+      db,
+      '2026-08-20',
+      { conditions: [{ target: 'GROUP', stableGroupId: 'g-atcoder', thresholdSeconds: 60 }] },
+      NOW_TODAY,
+    );
+    expect(rs.ruleSet.effective_date).toBe('2026-08-20');
+  });
+
+  it('採用中条件の閾値変更は理由なしだと ThresholdReasonRequiredError', () => {
+    seedTomorrowRule();
+    seedGoal([{ key: 'total_work', target: 'TOTAL_WORK' }]);
+    expect(() =>
+      upsertFutureRuleSet(
+        db,
+        DAY_TOMORROW,
+        {
+          conditions: [
+            { target: 'TOTAL_WORK', thresholdSeconds: 10800 },
+            { target: 'GROUP', stableGroupId: 'g-atcoder', thresholdSeconds: 1800 },
+          ],
+        },
+        NOW_TODAY,
+      ),
+    ).toThrow(ThresholdReasonRequiredError);
+  });
+
+  it('理由つきの閾値変更は成功し practice_threshold_change に記録される', () => {
+    seedTomorrowRule();
+    seedGoal([{ key: 'total_work', target: 'TOTAL_WORK' }]);
+    upsertFutureRuleSet(
+      db,
+      DAY_TOMORROW,
+      {
+        conditions: [
+          { target: 'TOTAL_WORK', thresholdSeconds: 10800 },
+          { target: 'GROUP', stableGroupId: 'g-atcoder', thresholdSeconds: 1800 },
+        ],
+      },
+      NOW_TODAY,
+      { thresholdChangeReason: '課題週間。ゼロにはしない' },
+    );
+    const rows = db
+      .prepare('SELECT * FROM practice_threshold_change WHERE condition_key = ?')
+      .all('total_work') as { old_seconds: number; new_seconds: number; reason: string }[];
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.old_seconds).toBe(14400);
+    expect(rows[0]!.new_seconds).toBe(10800);
+    expect(rows[0]!.reason).toContain('課題週間');
+  });
+
+  it('採用されていない条件の閾値変更は理由不要', () => {
+    seedTomorrowRule();
+    // 目標は GROUP のみ採用 → total_work の変更は自由。
+    seedGoal([{ key: 'group:g-atcoder', target: 'GROUP' }]);
+    const rs = upsertFutureRuleSet(
+      db,
+      DAY_TOMORROW,
+      {
+        conditions: [
+          { target: 'TOTAL_WORK', thresholdSeconds: 7200 },
+          { target: 'GROUP', stableGroupId: 'g-atcoder', thresholdSeconds: 1800 },
+        ],
+      },
+      NOW_TODAY,
+    );
+    expect(rs.conditions.find((c) => c.condition_key === 'total_work')!.threshold_seconds).toBe(7200);
   });
 });

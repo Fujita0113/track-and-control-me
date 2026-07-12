@@ -451,4 +451,59 @@ INSERT OR IGNORE INTO manual_category (name, last_used_at, use_count, created_at
   ('その他', 0, 0, CAST(strftime('%s','now') AS INTEGER) * 1000);
 `,
   },
+  {
+    version: 11,
+    name: 'goal-30day-challenge',
+    sql: /* sql */ `
+-- 30日チャレンジ（spec: goal-challenge / goal-journal / goal-report / design.md D1–D6）。
+-- 既存の計測・評価・凍結機構は無改造。目標はその上に「採用(adopt)モデル」で乗る。
+-- すべての day_key は TEXT 'YYYY-MM-DD'、タイムスタンプは INTEGER epoch ms。
+
+-- 目標本体。状態カラムは持たず、today との day_key 比較で 開始前/進行中/完走 を導出する（D3）。
+CREATE TABLE goal (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',        -- 目的の一文
+  start_day TEXT NOT NULL,                 -- 常に翌日（作成時に確定）
+  end_day TEXT NOT NULL,                   -- start_day + 29（30日固定）
+  created_at INTEGER NOT NULL              -- 作成当日限りの削除猶予の判定に使う
+);
+CREATE INDEX idx_goal_period ON goal(end_day);
+
+-- 採用実践。既存ルール条件を condition_key 文字列で「参照」する（注入しない・D1）。
+-- 表示用にターゲット種別とラベル等のスナップショットを持つ（グループ改名で表示が壊れないため）。
+CREATE TABLE goal_practice (
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  condition_key TEXT NOT NULL,             -- total_work | group:<id> | planning:<signal>
+  target TEXT NOT NULL,                    -- TOTAL_WORK | GROUP | PLANNING（採用時点）
+  label_snapshot TEXT,                     -- 表示用ラベル（グループ名/チェック名等）
+  stable_group_id TEXT,                    -- GROUP のとき採用時点の対象グループ
+  signal_key TEXT,                         -- PLANNING のとき
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (goal_id, condition_key)
+);
+
+-- 閾値変更ログ（理由必須・D2）。condition_key 単位（目標非依存）で1本記録する。
+CREATE TABLE practice_threshold_change (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  condition_key TEXT NOT NULL,
+  effective_date TEXT NOT NULL,            -- 変更が効く日（編集対象日）
+  old_seconds INTEGER,
+  new_seconds INTEGER,
+  reason TEXT NOT NULL,                    -- 非空（「自分との交渉ログ」）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_ptc_key ON practice_threshold_change(condition_key, effective_date);
+
+-- 目標日記（D4）。reflection_entry には触れない＝ reflection_done シグナルを汚染しない。
+CREATE TABLE goal_journal (
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  day_key TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (goal_id, day_key)
+);
+`,
+  },
 ];

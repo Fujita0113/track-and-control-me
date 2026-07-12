@@ -5,10 +5,11 @@ import * as today from './today.js';
 import * as timeline from './timeline.js';
 import * as kanban from './kanban.js';
 import * as reflection from './reflection.js';
+import * as goals from './goals.js';
 import * as settings from './settings.js';
 import { maybeShowOnboarding } from './onboarding.js';
 
-const SCREENS = { today, timeline, kanban, reflection, settings };
+const SCREENS = { today, timeline, kanban, reflection, goals, settings };
 let current = null;
 
 async function activate(name) {

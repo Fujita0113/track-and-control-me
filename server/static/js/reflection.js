@@ -71,7 +71,9 @@ export async function show(root) {
     ),
   );
 
-  const left = h('section', { class: 'rf-left' }, h('h1', { class: 'rf-title', text: '今日の振り返り' }), moodRow, card);
+  // 目標日記コーナー（進行中の目標ごと）。本文エディタの下に置き、同じ保存動線に相乗りする。
+  const journalsHost = h('div', { class: 'rf-journals' });
+  const left = h('section', { class: 'rf-left' }, h('h1', { class: 'rf-title', text: '今日の振り返り' }), moodRow, card, journalsHost);
 
   // --- 右レール ---
   const dateInput = h('input', { type: 'date', class: 'rf-cal', value: state.today });
@@ -89,15 +91,56 @@ export async function show(root) {
 
   root.appendChild(h('div', { class: 'rf-main' }, left, rail));
 
-  ctx = { date: state.today, satisfaction: 0, dirty: false, loading: false, editor, dateInput, historyHost, savedEl, syncMood, renderHistory };
+  ctx = { date: state.today, satisfaction: 0, dirty: false, loading: false, editor, dateInput, historyHost, savedEl, syncMood, renderHistory, journalsHost, journals: [], activeGoals: [] };
 
   // --- 挙動配線 ---
   saveBtn.addEventListener('click', () => doSave(saveBtn));
   planBtn.addEventListener('click', () => goToPlanning(planBtn));
   dateInput.addEventListener('change', () => { flush(); loadEditorForDate(dateInput.value || state.today); });
 
+  // 進行中の目標を取得（日記コーナーの対象）。
+  ctx.activeGoals = (await api.getGoals().catch(() => [])).filter((g) => g.status === 'active');
+
   await loadEditorForDate(state.today);
   await loadHistory();
+}
+
+/** 目標の日記コーナー（見出し + ライブ Markdown エディタ）。保存は振り返りと同じ動線に相乗り。 */
+function journalCorner(goal, content) {
+  const entry = { goalId: goal.id, dirty: false, editor: null };
+  const ph = h('div', { class: 'rf-ph', text: `${goal.name} の今日の記録。Markdown で自由にどうぞ。` });
+  const editor = createMarkdownEditor({
+    initial: content || '',
+    placeholder: `${goal.name} の今日の記録`,
+    onChange: (raw) => {
+      ph.style.display = raw.trim() === '' ? 'block' : 'none';
+      if (ctx && !ctx.loading) entry.dirty = true;
+    },
+  });
+  entry.editor = editor;
+  ctx.journals.push(entry);
+  return h('div', { class: 'rf-journal' },
+    h('div', { class: 'rf-journal-head' },
+      h('span', { class: 'rf-journal-title', text: goal.name }),
+      h('span', { class: 'rf-journal-tag', text: `Day ${goal.dayNumber}/${goal.dayCount}` }),
+    ),
+    h('div', { class: 'rf-ed-wrap' }, ph, editor.el),
+  );
+}
+
+/** 対象日 date に、その日書き込める進行中目標の日記コーナーを（再）構築する。 */
+async function loadJournals(date) {
+  if (!ctx) return;
+  clear(ctx.journalsHost);
+  ctx.journals = [];
+  const goals = (ctx.activeGoals || []).filter((g) => g.startDay <= date && date <= g.endDay);
+  if (!goals.length) return;
+  ctx.journalsHost.appendChild(h('h2', { class: 'rf-journal-h2', text: '目標の日記' }));
+  for (const g of goals) {
+    let content = '';
+    try { const r = await api.getGoalJournal(g.id, date); content = r.content || ''; } catch { /* noop */ }
+    ctx.journalsHost.appendChild(journalCorner(g, content));
+  }
 }
 
 function sep() { return h('span', { class: 'rf-hint-sep', text: '·' }); }
@@ -112,6 +155,7 @@ async function loadEditorForDate(date) {
   ctx.editor.setValue(r && r.content ? r.content : '');
   ctx.satisfaction = r && r.satisfaction ? r.satisfaction : 0;
   ctx.syncMood();
+  await loadJournals(date); // 同じ対象日の目標日記コーナーを再構築（loading 中は dirty を立てない）。
   ctx.loading = false;
   ctx.dirty = false;
 }
@@ -144,13 +188,21 @@ function renderHistory(items) {
   }
 }
 
-/** 未保存分を非同期フラッシュ（fire-and-forget）。 */
+/** 未保存分を非同期フラッシュ（fire-and-forget）。振り返り本文と目標日記の両方。 */
 function flush() {
-  if (!ctx || !ctx.dirty) return;
-  const { date, editor, satisfaction } = ctx;
-  api.putReflection(date, editor.getValue(), satisfaction || null).catch(() => { /* noop */ });
-  editor.markSaved();
-  ctx.dirty = false;
+  if (!ctx) return;
+  const date = ctx.date;
+  if (ctx.dirty) {
+    api.putReflection(date, ctx.editor.getValue(), ctx.satisfaction || null).catch(() => { /* noop */ });
+    ctx.editor.markSaved();
+    ctx.dirty = false;
+  }
+  for (const j of ctx.journals || []) {
+    if (!j.dirty) continue;
+    api.putGoalJournal(j.goalId, date, j.editor.getValue()).catch(() => { /* noop */ });
+    j.editor.markSaved();
+    j.dirty = false;
+  }
 }
 
 async function doSave(saveBtn) {
@@ -160,6 +212,17 @@ async function doSave(saveBtn) {
     await api.putReflection(ctx.date, ctx.editor.getValue(), ctx.satisfaction || null);
     ctx.editor.markSaved();
     ctx.dirty = false;
+    // 目標日記も同時保存（変更があったものだけ）。
+    for (const j of ctx.journals || []) {
+      if (!j.dirty) continue;
+      try {
+        await api.putGoalJournal(j.goalId, ctx.date, j.editor.getValue());
+        j.editor.markSaved();
+        j.dirty = false;
+      } catch (e) {
+        toast(`日記の保存に失敗: ${e.message}`, 'err');
+      }
+    }
     showSaved();
     await loadHistory();
   } catch (err) {

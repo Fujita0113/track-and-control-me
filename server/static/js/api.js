@@ -82,4 +82,13 @@ export const api = {
   reorder: (order) => req('POST', '/api/tasks/reorder', { order }),
   deleteTask: (id) => req('DELETE', `/api/tasks/${id}`),
   getPlanning: (date) => req('GET', `/api/planning/${date}`),
+
+  // 30日チャレンジ（目標）
+  getGoals: () => req('GET', '/api/goals'),
+  getGoalCandidates: () => req('GET', '/api/goals/candidates'),
+  createGoal: (b) => req('POST', '/api/goals', b),
+  deleteGoal: (id) => req('DELETE', `/api/goals/${id}`),
+  getGoalReport: (id) => req('GET', `/api/goals/${id}/report`),
+  getGoalJournal: (id, date) => req('GET', `/api/goals/${id}/journal/${date}`),
+  putGoalJournal: (id, date, content) => req('PUT', `/api/goals/${id}/journal/${date}`, { content }),
 };

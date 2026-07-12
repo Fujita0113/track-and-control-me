@@ -787,3 +787,79 @@ body.rf-page .content { max-width: 1200px; }
 .md-pre { margin: 8px 0; padding: 10px 12px; background: #1b2733; color: #e6edf3; border-radius: 8px; overflow-x: auto; }
 .md-pre code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
 .md-code { font-family: ui-monospace, Menlo, Consolas, monospace; background: var(--line-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+
+/* --- 目標（30日チャレンジ）タブ --- */
+.gr-goal-card { display: flex; flex-direction: column; gap: 8px; }
+.gr-goal-meta { display: flex; gap: 6px; }
+.gr-goal-card h3 { font-size: 16px; }
+.gr-purpose { font-size: 13.5px; }
+.gr-goal-card .period { font-size: 12px; color: var(--muted-2); }
+.gr-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.gr-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+.gr-input { width: 100%; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; font-family: inherit; }
+.gr-flabel { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 4px; }
+
+/* --- 完了レポート（design-brief: bg #eef1f6 / accent #3b5bb5 / white card r14）--- */
+.gr-report { --gr-accent: #3b5bb5; background: #eef1f6; margin: -20px; padding: 26px 30px 44px; min-height: 60vh; }
+.gr-back { border: none; background: transparent; color: var(--gr-accent); font-family: inherit; font-size: 13px; cursor: pointer; padding: 4px 0; margin-bottom: 14px; }
+.gr-back:hover { text-decoration: underline; }
+.gr-header { max-width: 820px; margin: 0 auto 26px; text-align: center; }
+.gr-eyebrow { font-size: 12px; letter-spacing: 0.28em; color: var(--gr-accent); font-weight: 700; text-transform: uppercase; }
+.gr-h1 { font-size: 30px; font-weight: 700; color: #26303f; margin: 8px 0 6px; }
+.gr-purpose-line { font-size: 15px; color: #57616f; margin: 0 0 12px; }
+.gr-header-meta { display: flex; gap: 12px; justify-content: center; align-items: center; color: #6b7686; font-size: 13.5px; }
+.gr-dot { color: #b6bfcc; }
+.gr-achieved { font-weight: 700; color: #26303f; }
+.gr-card { max-width: 820px; margin: 0 auto 20px; background: #ffffff; border-radius: 14px; padding: 22px 26px; box-shadow: 0 1px 2px rgba(30,45,70,0.05), 0 14px 34px -22px rgba(30,45,70,0.28); }
+.gr-block-title { font-size: 14px; font-weight: 700; color: #3a4656; margin: 0 0 16px; }
+
+/* ① 達成カレンダー */
+.gr-cal-scroll { overflow-x: auto; }
+.gr-cal { display: grid; gap: 2px; align-items: center; min-width: max-content; }
+.gr-cal-corner { }
+.gr-cal-dh { font-size: 9.5px; color: #97a1af; text-align: center; cursor: pointer; }
+.gr-cal-dh.sel { color: var(--gr-accent); font-weight: 700; }
+.gr-cal-label { font-size: 12px; color: #46505f; padding-right: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gr-cell { width: 17px; height: 17px; border-radius: 4px; border: none; padding: 0; cursor: pointer; }
+.gr-cell.done { background: var(--gr-accent); }
+.gr-cell.miss { background: #e3e7ee; }
+.gr-cell.sel { outline: 2px solid #26303f; outline-offset: 1px; }
+.gr-legend { display: flex; gap: 18px; margin-top: 14px; font-size: 12px; color: #6b7686; }
+.gr-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.gr-legend-swatch { width: 14px; height: 14px; cursor: default; }
+
+/* ② 時間の推移 */
+.gr-ts { margin-bottom: 20px; }
+.gr-ts:last-child { margin-bottom: 0; }
+.gr-ts-label { font-size: 13px; font-weight: 600; color: #46505f; margin-bottom: 8px; }
+.gr-chart-wrap { position: relative; height: 240px; }
+.gr-marker { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 10px; padding: 8px 12px; background: #f5f2ec; border-left: 3px solid #c9a86a; border-radius: 6px; }
+.gr-marker-day { font-size: 12px; font-weight: 700; color: #8a6d3b; }
+.gr-marker-delta { font-size: 12.5px; color: #46505f; font-variant-numeric: tabular-nums; }
+.gr-marker-reason { font-size: 13px; color: #57616f; }
+
+/* ③ Before / After */
+.gr-ba { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+@media (max-width: 720px) { .gr-ba { grid-template-columns: 1fr; } }
+.gr-ba-col { min-width: 0; }
+.gr-ba-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #edf0f5; }
+.gr-ba-tag { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700; color: var(--gr-accent); }
+.gr-ba-day { font-size: 12px; color: #97a1af; }
+
+/* ④ 日記リーダー */
+.gr-reader-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.gr-day-select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-family: inherit; font-size: 13px; }
+.gr-reader-src { font-size: 11px; color: #97a1af; }
+.gr-reader-src.on { color: var(--gr-accent); border: 1px solid #d5ddf0; border-radius: 999px; padding: 1px 9px; }
+.gr-reader-body { min-height: 60px; }
+.gr-empty { color: #a6afc0; font-size: 13.5px; }
+
+/* --- 振り返りタブの目標日記コーナー --- */
+.rf-journals { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; }
+.rf-journal-h2 { font-size: 15px; font-weight: 700; color: #46505f; margin: 4px 0 -2px; }
+.rf-journal { background: #ffffff; border: 1px solid #e4e9f1; border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(30,45,70,0.05); }
+.rf-journal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 20px 0; }
+.rf-journal-title { font-size: 14px; font-weight: 700; color: #33404f; }
+.rf-journal-tag { font-size: 12px; color: #3b5bb5; font-weight: 600; }
+.rf-journal .rf-ed { min-height: 140px; padding: 12px 20px 18px; font-size: 14.5px; line-height: 1.7; }
+.rf-journal .rf-ph { top: 12px; left: 20px; right: 20px; font-size: 14.5px; line-height: 1.7; }
