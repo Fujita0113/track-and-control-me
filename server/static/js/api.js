@@ -91,4 +91,13 @@ export const api = {
   getGoalReport: (id) => req('GET', `/api/goals/${id}/report`),
   getGoalJournal: (id, date) => req('GET', `/api/goals/${id}/journal/${date}`),
   putGoalJournal: (id, date, content) => req('PUT', `/api/goals/${id}/journal/${date}`, { content }),
+
+  // お試し（デモ）モード（読み取り専用・本番ゲート非到達）。now=仮想 day_key。
+  demo: {
+    reset: () => req('POST', '/api/demo/reset'),
+    goals: (now) => req('GET', `/api/demo/goals?${q({ now })}`),
+    report: (id, now) => req('GET', `/api/demo/goals/${id}/report?${q({ now })}`),
+    journal: (id, date) => req('GET', `/api/demo/goals/${id}/journal/${date}`),
+    today: (now) => req('GET', `/api/demo/today?${q({ now })}`),
+  },
 };

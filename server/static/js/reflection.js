@@ -5,9 +5,17 @@
 //  - スタイルは全て rf-* クラス + CSSOM(CSP: インライン style 属性なし)。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, toast } from './util.js';
+import { h, clear, toast, emptyState } from './util.js';
 import { createMarkdownEditor } from './md-editor.js';
 import { setTomorrowMode } from './kanban.js';
+import { renderMarkdown } from './markdown.js';
+import { isDemo } from './demo.js';
+
+/** b − a の日数差（UTC 計算）。 */
+function dayDiff(a, b) {
+  const toUtc = (k) => { const [y, m, d] = k.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+  return Math.round((toUtc(b) - toUtc(a)) / 86400000);
+}
 
 const MOOD_LABELS = ['いまひとつ', 'まあまあ', 'ふつう', '良い', 'とても良い'];
 
@@ -19,8 +27,44 @@ export function hide() {
   ctx = null;
 }
 
+/** デモ: 仮想日付の目標日記を読み取り専用で表示（保存動線なし・spec: 閲覧中心）。 */
+async function showDemo(root) {
+  ctx = null; // 書き込み ctx を持たない → hide() の flush は完全 no-op。
+  document.body.classList.remove('rf-page');
+  clear(root);
+  const wrap = h('div', { class: 'stack' });
+  root.appendChild(wrap);
+  wrap.appendChild(h('div', { class: 'section-head' },
+    h('h2', {}, '振り返り', h('span', { class: 'muted', style: { fontSize: '13px', fontWeight: '400' }, text: 'デモ・閲覧専用' })),
+  ));
+
+  const g = state.demo.goal;
+  const vd = state.demo.virtualDay;
+  if (!g || vd < g.startDay || vd > g.endDay) {
+    wrap.appendChild(emptyState('この仮想日付はデモの目標期間外です。上部バーで進行中（開始〜完走の間）に進めると、その日の目標日記を閲覧できます。'));
+    return;
+  }
+
+  const dayNum = dayDiff(g.startDay, vd) + 1;
+  const bodyHost = h('div', { class: 'gr-reader-body' });
+  const card = h('div', { class: 'card' },
+    h('div', { class: 'card-title', text: `${g.name} — Day ${dayNum}/${g.dayCount || 30}（${vd}）の日記` }),
+    bodyHost,
+  );
+  wrap.appendChild(card);
+
+  let content = '';
+  try { const r = await api.demo.journal(g.id, vd); content = r.content || ''; } catch { /* noop */ }
+  if (content.trim()) bodyHost.appendChild(renderMarkdown(content));
+  else bodyHost.appendChild(h('p', { class: 'muted', text: 'この日の記録はありません。' }));
+
+  wrap.appendChild(h('p', { class: 'muted', text: 'デモでは閲覧のみです。上部バーで日付を進めると、各日の日記を読み進められます。完走レポートの「毎日の日記」も同じ内容です。' }));
+}
+
 export async function show(root) {
   clear(root);
+  // デモ中は進行中サンプルの記入済み日記を仮想日付で閲覧表示（保存動線は出さない）。
+  if (isDemo()) { await showDemo(root); return; }
   document.body.classList.add('rf-page');
 
   // --- クローム更新（文字数・プレースホルダ・dirty） ---

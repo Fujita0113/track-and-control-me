@@ -2,6 +2,7 @@
 import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, copyText, toast } from './util.js';
+import { startDemo, stopDemo, resetSample } from './demo.js';
 
 export async function show(root) {
   clear(root);
@@ -16,6 +17,9 @@ async function render(body) {
   const cfg = await api.getConfig();
   state.config = cfg;
   clear(body);
+
+  // お試し（デモ）モードの入り口（spec: demo-mode / 入り口）。
+  body.appendChild(demoCard(body));
 
   // 拡張機能へ渡す接続情報
   const connCard = h('div', { class: 'card' }, h('div', { class: 'card-title', text: '拡張機能 接続情報' }));
@@ -112,6 +116,39 @@ async function render(body) {
     h('p', { class: 'muted', text: '時間計測は Edge 拡張が起動中のみ 30 秒周期で行われ、サーバー停止中は拡張側に最大 2000 件（約16時間分）退避 → 再接続時に集計されます。したがって「見たいときだけ npm run server」でも概ね成立します（バッファ超過分は失われます）。' }),
     h('p', { class: 'muted', style: { marginTop: '8px' }, text: 'ただし 04:00 の日次ロールオーバー / ルール凍結はサーバー常駐が前提です。オンデマンド起動のみだと境界処理は次回起動時にまとめて実行され、凍結タイミングがずれる可能性があります。厳密な運用が必要ならスタートアップ登録で常駐させてください。' }),
   ));
+}
+
+/** お試し（デモ）モードの入り口カード（開始/終了・サンプルリセット）。 */
+function demoCard(body) {
+  const card = h('div', { class: 'card' }, h('div', { class: 'card-title', text: 'お試し（デモ）モード' }));
+  card.appendChild(h('p', { class: 'muted', text: 'あらかじめ用意したサンプル目標（30日チャレンジ）を、日付を進めながら「読むだけ」で体験できます。デモの日付操作・サンプルは本番データにも本番の解禁判定にも一切影響しません。' }));
+
+  const row = h('div', { class: 'row', style: { marginTop: '10px', gap: '8px', flexWrap: 'wrap' } });
+  const rerender = () => render(body);
+
+  if (!state.demo.active) {
+    const startBtn = h('button', { class: 'btn primary', text: '🧪 デモを開始', type: 'button' });
+    startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      try { await startDemo(); toast('デモモードを開始しました', 'ok'); rerender(); }
+      catch (err) { toast(`デモを開始できませんでした: ${err.message}`, 'err'); startBtn.disabled = false; }
+    });
+    row.appendChild(startBtn);
+  } else {
+    const stopBtn = h('button', { class: 'btn', text: 'デモを終了', type: 'button' });
+    stopBtn.addEventListener('click', () => { stopDemo(); toast('デモモードを終了しました', 'ok'); rerender(); });
+    const resetBtn = h('button', { class: 'btn small', text: 'サンプルをリセット', type: 'button' });
+    resetBtn.addEventListener('click', async () => {
+      resetBtn.disabled = true;
+      try { await resetSample(); } catch (err) { toast(`リセットに失敗: ${err.message}`, 'err'); }
+      finally { resetBtn.disabled = false; }
+    });
+    row.appendChild(h('span', { class: 'badge accent', text: 'デモ中' }));
+    row.appendChild(stopBtn);
+    row.appendChild(resetBtn);
+  }
+  card.appendChild(row);
+  return card;
 }
 
 function copyRow(label, value) {

@@ -8,6 +8,7 @@ import { state } from './state.js';
 import { h, clear, fmtDur, fmtHM, colorHex, copyText, toast, emptyState } from './util.js';
 import { targetLabel, planningSignalLabel } from './targets.js';
 import { renderRuleEditing } from './rules.js';
+import { isDemo } from './demo.js';
 
 let charts = [];
 let timer = null;
@@ -27,6 +28,10 @@ export function hide() {
 export async function show(root) {
   clear(root);
   hide();
+
+  // デモ中は仮想日付のサンプル（解錠状態・条件進捗・ダミーパスワード）を静的表示。
+  // 本物の reveal / ルール編集（本番書き込み）は動かさない。
+  if (isDemo()) { await showDemo(root); return; }
 
   // 3 領域を用意し、それぞれ独立に描画・更新する。
   const overviewRegion = h('div', { class: 'stack' });
@@ -256,6 +261,90 @@ function pwEntry(e) {
     h('span', { class: 'pw-val mono grow', text: e.password }),
     copyBtn,
   );
+}
+
+// --- デモ: 仮想日付の今日ビュー（読み取り専用・ダミーパスワード）-----------
+async function showDemo(root) {
+  clear(root);
+  destroyCharts();
+  const overview = h('div', { class: 'stack' });
+  const gate = h('div', { class: 'stack', style: { marginTop: '18px' } });
+  root.appendChild(overview);
+  root.appendChild(gate);
+  overview.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
+
+  let data;
+  try { data = await api.demo.today(state.demo.virtualDay); }
+  catch (e) { clear(overview); overview.appendChild(emptyState(`読み込み失敗: ${e.message}`)); return; }
+
+  // (1) 概況: 総作業 KPI + グループ別ドーナツ。
+  clear(overview);
+  overview.appendChild(h('div', { class: 'card' },
+    h('div', { class: 'stat' },
+      h('div', { class: 'num', text: fmtDur(data.totalWorkSeconds) }),
+      h('div', { class: 'lbl', text: `総作業時間 (${data.dayKey})` }),
+    ),
+  ));
+  const groupCanvas = h('canvas', {});
+  overview.appendChild(h('div', { class: 'card' },
+    h('div', { class: 'card-title', text: 'グループ別' }),
+    data.groups.length ? h('div', { class: 'chart-wrap' }, groupCanvas) : emptyState('この日は作業データがありません（デモ期間外）'),
+  ));
+  if (data.groups.length) {
+    charts.push(doughnut(groupCanvas, {
+      labels: data.groups.map((g) => g.name),
+      values: data.groups.map((g) => Math.round(g.seconds / 60)),
+      colors: data.groups.map((g) => colorHex(g.color)),
+    }));
+  }
+
+  // (2) 解錠状態 + 条件進捗 + ダミーパスワード。
+  clear(gate);
+  const unlock = data.unlock; // EvalResult | null（デモ期間外は null）
+  if (!unlock) {
+    gate.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'card-title', text: '解錠状態' }),
+      h('p', { class: 'muted', text: 'この仮想日付はデモの目標期間外です。上部バーの「＋7日」などで期間内に進めると、解錠状態と条件の進捗が表示されます。' }),
+    ));
+    return;
+  }
+  const unlocked = unlock.status === 'UNLOCKED';
+  gate.appendChild(h('div', { class: `gate-hero ${unlocked ? 'unlocked' : 'locked'}` },
+    h('div', { class: 'lock-icon', text: unlocked ? '🔓' : '🔒' }),
+    h('div', { class: 'lock-text' },
+      h('div', { class: 'st', text: unlocked ? 'UNLOCKED — 達成済み' : 'LOCKED — 未達成' }),
+      h('div', { class: 'sub', text: `${data.dayKey} のサンプルを評価（デモ）` }),
+    ),
+  ));
+
+  const condCard = h('div', { class: 'card' }, h('div', { class: 'card-title', text: '条件の進捗' }));
+  const list = h('div', { class: 'list' });
+  const per = unlock.perCondition || [];
+  if (!per.length) list.appendChild(emptyState('条件が定義されていません'));
+  else for (const c of per) list.appendChild(condRow(c, null, data.dayKey));
+  condCard.appendChild(list);
+  gate.appendChild(condCard);
+
+  if (unlocked) {
+    gate.appendChild(demoPwCard(data.dummyPassword));
+  } else {
+    const remaining = per.filter((c) => !c.met).length;
+    gate.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'card-title', text: 'パスワード' }),
+      h('p', { class: 'muted', text: `未達成のためパスワードは表示できません。残り ${remaining} 条件（デモ）。` }),
+    ));
+  }
+}
+
+/** デモの解錠時に見せるダミーパスワード（本物の生成コマンドは呼ばない）。 */
+function demoPwCard(dummy) {
+  const card = h('div', { class: 'card' }, h('div', { class: 'card-title', text: 'パスワード' }));
+  card.appendChild(h('p', { class: 'muted', text: 'デモでは本物のパスワードは生成しません。以下はダミー表示です。' }));
+  card.appendChild(h('div', { class: 'pw-entry' },
+    h('span', { class: 'badge accent', text: 'デモ' }),
+    h('span', { class: 'pw-val mono grow', text: dummy || 'デモ用 123456' }),
+  ));
+  return card;
 }
 
 // --- charts --------------------------------------------------------------

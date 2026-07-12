@@ -19,6 +19,7 @@ import { listManualCategories } from '../services/manual-categories.js';
 import { registerTimelineRoutes } from './timeline.js';
 import { registerPlanningRoutes } from './planning.js';
 import { registerGoalRoutes } from './goals.js';
+import { registerDemoRoutes } from './demo.js';
 import type { ApiDeps } from './types.js';
 
 export type { ApiDeps };
@@ -175,4 +176,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
   registerTimelineRoutes(app, deps);
   registerPlanningRoutes(app, deps);
   registerGoalRoutes(app, deps);
+
+  // --- デモ（お試し）モード: 読み取り専用・本番ゲート非到達（design.md D3）---
+  registerDemoRoutes(app, deps);
 }

@@ -8,6 +8,7 @@ import * as reflection from './reflection.js';
 import * as goals from './goals.js';
 import * as settings from './settings.js';
 import { maybeShowOnboarding } from './onboarding.js';
+import { renderDemoBar } from './demo.js';
 
 const SCREENS = { today, timeline, kanban, reflection, goals, settings };
 let current = null;
@@ -27,6 +28,22 @@ async function activate(name) {
   const section = document.getElementById(`screen-${name}`);
   try {
     await SCREENS[name].show(section);
+  } catch (err) {
+    clear(section);
+    section.appendChild(h('div', { class: 'fatal', text: `画面の読み込みに失敗しました: ${err.message}` }));
+  }
+}
+
+/** デモの日付操作・開始/終了で現在画面を再取得・再描画する（demo.js が 'demo:refresh' を発火）。 */
+async function rerenderCurrent() {
+  if (!current) return;
+  const section = document.getElementById(`screen-${current}`);
+  if (SCREENS[current].hide) {
+    try { SCREENS[current].hide(); } catch { /* noop */ }
+  }
+  closeModal();
+  try {
+    await SCREENS[current].show(section);
   } catch (err) {
     clear(section);
     section.appendChild(h('div', { class: 'fatal', text: `画面の読み込みに失敗しました: ${err.message}` }));
@@ -54,6 +71,9 @@ function initialScreen() {
 
 async function boot() {
   bootNav();
+  // デモの日付操作・開始/終了は現在画面の再描画を要求する。
+  document.addEventListener('demo:refresh', () => { void rerenderCurrent(); });
+  renderDemoBar(); // 通常モードでは hidden のまま。
   const meta = document.getElementById('topbar-meta');
   try {
     await loadState();

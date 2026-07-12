@@ -2,9 +2,19 @@
 //  (spec: goal-challenge / goal-report). 合否・スコアの語や演出は出さない（「完走」のみ）。
 //  スタイルは gr-* クラス + CSSOM（CSP: インライン style 属性なし）。② は同梱 Chart.js。
 import { api } from './api.js';
+import { state } from './state.js';
 import { h, clear, toast, openModal, closeModal, emptyState, fmtHM } from './util.js';
 import { planningSignalLabel } from './targets.js';
 import { renderMarkdown } from './markdown.js';
+import { isDemo } from './demo.js';
+
+// デモ中は取得先を /api/demo/* + 仮想日付へ切替（通常モードは既存経路のまま）。
+function fetchGoals() {
+  return isDemo() ? api.demo.goals(state.demo.virtualDay).then((r) => r.goals) : api.getGoals();
+}
+function fetchReport(id) {
+  return isDemo() ? api.demo.report(id, state.demo.virtualDay) : api.getGoalReport(id);
+}
 
 let charts = [];
 function destroyCharts() {
@@ -36,23 +46,30 @@ async function renderList(root) {
   clear(root);
   destroyCharts();
 
-  const newBtn = h('button', { class: 'btn primary', text: '＋ 新しい目標', type: 'button' });
+  // デモは閲覧専用（追加ボタンを出さない・spec: 閲覧専用）。
+  const headRow = h('div', { class: 'row' });
+  if (!isDemo()) {
+    const newBtn = h('button', { class: 'btn primary', text: '＋ 新しい目標', type: 'button' });
+    newBtn.addEventListener('click', () => openCreateForm(() => renderList(root)));
+    headRow.appendChild(newBtn);
+  }
   root.appendChild(h('div', { class: 'section-head' },
-    h('h2', {}, '目標', h('span', { class: 'muted', style: { fontSize: '13px', fontWeight: '400' }, text: '30日チャレンジ' })),
-    h('div', { class: 'row' }, newBtn),
+    h('h2', {}, '目標', h('span', { class: 'muted', style: { fontSize: '13px', fontWeight: '400' }, text: isDemo() ? '30日チャレンジ（デモ・閲覧専用）' : '30日チャレンジ' })),
+    headRow,
   ));
-  newBtn.addEventListener('click', () => openCreateForm(() => renderList(root)));
 
   const body = h('div', { class: 'stack' });
   root.appendChild(body);
   body.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
 
   let goals = [];
-  try { goals = await api.getGoals(); } catch (e) { clear(body); body.appendChild(emptyState(`読み込み失敗: ${e.message}`)); return; }
+  try { goals = await fetchGoals(); } catch (e) { clear(body); body.appendChild(emptyState(`読み込み失敗: ${e.message}`)); return; }
   clear(body);
 
   if (!goals.length) {
-    body.appendChild(emptyState('まだ目標がありません。「＋ 新しい目標」から、翌日の実効ルールの実践を採用して30日チャレンジを始められます。'));
+    body.appendChild(emptyState(isDemo()
+      ? 'サンプルを読み込めませんでした。設定タブで「サンプルをリセット」をお試しください。'
+      : 'まだ目標がありません。「＋ 新しい目標」から、翌日の実効ルールの実践を採用して30日チャレンジを始められます。'));
     return;
   }
 
@@ -90,7 +107,8 @@ function goalCard(g, root) {
     const openBtn = h('button', { class: 'btn small primary', text: 'レポートを開く', type: 'button' });
     openBtn.addEventListener('click', () => renderReport(root, g.id));
     head.appendChild(openBtn);
-  } else if (g.canDelete) {
+  } else if (!isDemo() && g.canDelete) {
+    // デモは閲覧専用（削除手段を出さない・spec: 閲覧専用）。
     const del = h('button', { class: 'btn small danger', text: '削除', type: 'button' });
     del.addEventListener('click', async () => {
       if (!confirm(`「${g.name}」を削除しますか？（作成当日のみ可能）`)) return;
@@ -176,7 +194,7 @@ async function renderReport(root, goalId) {
   root.appendChild(h('div', { class: 'empty', text: 'レポートを読み込み中…' }));
 
   let rep;
-  try { rep = await api.getGoalReport(goalId); }
+  try { rep = await fetchReport(goalId); }
   catch (err) { clear(root); root.appendChild(emptyState(`レポートを開けません: ${err.data?.error || err.message}`)); backLink(root); return; }
   clear(root);
 
