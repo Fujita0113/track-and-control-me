@@ -33,6 +33,23 @@ function setExclude(db: DB, on: boolean): void {
   updateConfig(db, { exclude_ungrouped_from_total: on ? 1 : 0 });
 }
 
+/** 内訳(groups)は session 由来（today-group-breakdown）。表示検証用に1セッション行を投入する。 */
+function seedSession(
+  db: DB,
+  dayKey: string,
+  sid: string,
+  name: string,
+  color: string | null,
+  ms: number,
+): void {
+  db.prepare(
+    `INSERT INTO session
+       (stable_group_id, tab_group_name_snapshot, group_color_snapshot, category_key_snapshot,
+        started_at, ended_at, day_key, coactive_group_keys, n, credited_ms, close_reason, created_at)
+     VALUES (?, ?, ?, NULL, 0, ?, ?, '[]', 1, ?, 'NORMAL', 0)`,
+  ).run(sid, name, color, ms, dayKey, ms);
+}
+
 let db: DB;
 beforeEach(() => {
   db = openDb(':memory:');
@@ -121,6 +138,9 @@ describe('5.4 range サマリと当日サマリの総作業時間は同一規則
   it.each([false, true])('exclude=%s で daySummary と rangeSummary の総作業秒が一致', (on) => {
     seedTotals(db, DAY, 'g-dev', 40 * MIN);
     seedTotals(db, DAY, UNGROUPED_KEY, 20 * MIN);
+    // KPI は daily_totals 源泉、内訳(groups)は session 源泉。両者を揃えて投入する。
+    seedSession(db, DAY, 'g-dev', '開発', 'blue', 40 * MIN);
+    seedSession(db, DAY, UNGROUPED_KEY, 'ungrouped', null, 20 * MIN);
     setExclude(db, on);
     const day = daySummary(db, DAY);
     const range = rangeSummary(db, DAY, DAY);

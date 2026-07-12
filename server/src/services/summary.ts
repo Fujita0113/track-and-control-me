@@ -1,8 +1,49 @@
+import { UNGROUPED_KEY } from '@track/contract';
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { totalWorkSecondsForDay, countsTowardTotal } from './categories.js';
 import { getEvaluation, evaluateDay, type EvalResult } from '../rules/evaluate.js';
 import { dayKeyFor, nextDayKey } from '../aggregation/index.js';
+
+/**
+ * 内訳の合成キー区切り（US, 0x1f）。表示名・色に現れ得ない制御文字を採用し、
+ * `(name,color)` の identity 衝突を避ける（design.md D2）。
+ */
+const SNAP_KEY_SEP = '\x1f';
+
+interface SnapshotGroupRow {
+  sid: string;
+  name: string;
+  color: string | null;
+  ms: number;
+}
+
+/**
+ * 当日 `session` を記録時点スナップショット `(tab_group_name_snapshot, group_color_snapshot)` 単位で
+ * 集計し、内訳行（ms 降順）を返す（design.md D1/D2、spec: today-group-breakdown）。
+ * 未グループ（`stable_group_id = UNGROUPED_KEY`）は名前/色に依らず単一行 `UNGROUPED_KEY` へ集約する。
+ */
+function snapshotGroups(db: DB, dayKey: string): SnapshotGroupRow[] {
+  return db
+    .prepare(
+      `SELECT
+         CASE WHEN stable_group_id = @ung THEN @ung
+              ELSE tab_group_name_snapshot || @sep || COALESCE(group_color_snapshot, '') END AS sid,
+         tab_group_name_snapshot AS name,
+         group_color_snapshot AS color,
+         SUM(credited_ms) AS ms
+       FROM session
+       WHERE day_key = @day
+       GROUP BY sid
+       ORDER BY ms DESC`,
+    )
+    .all({ ung: UNGROUPED_KEY, sep: SNAP_KEY_SEP, day: dayKey }) as SnapshotGroupRow[];
+}
+
+/** スナップショット内訳行の表示名（未グループは固定ラベル）。 */
+function snapshotDisplayName(row: SnapshotGroupRow): string {
+  return row.sid === UNGROUPED_KEY ? 'その他（未グループ）' : row.name;
+}
 
 /**
  * ダッシュボード/ルール評価が使う集計サマリ（spec: work-time-summary）。
@@ -40,23 +81,14 @@ export function todayKey(db: DB, nowMs = Date.now()): string {
 
 export function daySummary(db: DB, dayKey: string): DaySummary {
   const cfg = getConfig(db);
-  const groupRows = db
-    .prepare(
-      `SELECT d.stable_group_id AS id, d.ms AS ms, g.name AS name, g.color AS color
-       FROM daily_totals_snapshot d
-       LEFT JOIN tab_group g ON g.stable_group_id = d.stable_group_id
-       WHERE d.day_key = ?
-       ORDER BY d.ms DESC`,
-    )
-    .all(dayKey) as { id: string; ms: number; name: string | null; color: string | null }[];
-
-  const groups: GroupTotal[] = groupRows.map((r) => ({
-    stableGroupId: r.id,
-    name: r.name ?? (r.id === 'ungrouped' ? 'その他（未グループ）' : r.id),
-    color: r.color,
+  // 内訳は権威集計(daily_totals)ではなく、記録時点スナップショット(session)由来で分類する（design.md D1）。
+  const groups: GroupTotal[] = snapshotGroups(db, dayKey).map((r) => ({
+    stableGroupId: r.sid,
+    name: snapshotDisplayName(r),
+    color: r.sid === UNGROUPED_KEY ? null : r.color,
     ms: r.ms,
     seconds: r.ms / 1000,
-    countsTowardTotal: countsTowardTotal(r.id, cfg),
+    countsTowardTotal: countsTowardTotal(r.sid, cfg),
   }));
 
   const excluded = (
@@ -82,31 +114,19 @@ export interface RangeDay {
 
 /** [from, to]（両端含む、day_key 文字列）のグループ別推移（棒グラフ用）。 */
 export function rangeSummary(db: DB, from: string, to: string): RangeDay[] {
-  const cfg = getConfig(db);
-  const stmt = db.prepare(
-    `SELECT d.stable_group_id AS id, d.ms AS ms, g.name AS name, g.color AS color
-     FROM daily_totals_snapshot d
-     LEFT JOIN tab_group g ON g.stable_group_id = d.stable_group_id
-     WHERE d.day_key = ?
-     ORDER BY d.ms DESC`,
-  );
   const out: RangeDay[] = [];
   let cur = from;
   let guard = 0;
   while (cur <= to && guard++ < 3660) {
-    const rows = stmt.all(cur) as { id: string; ms: number; name: string | null; color: string | null }[];
-    // 総作業時間は当日サマリと同一規則（未グループ除外を尊重）で算出。行自体は全グループ表示。
-    let totalMs = 0;
-    const groups = rows.map((r) => {
-      if (countsTowardTotal(r.id, cfg)) totalMs += r.ms;
-      return {
-        stableGroupId: r.id,
-        name: r.name ?? (r.id === 'ungrouped' ? 'その他（未グループ）' : r.id),
-        color: r.color,
-        seconds: r.ms / 1000,
-      };
-    });
-    out.push({ dayKey: cur, totalWorkSeconds: Math.floor(totalMs / 1000), groups });
+    // 内訳（棒グラフ系列）はスナップショット identity 由来（design.md D1）。系列 key＝合成キー。
+    const groups = snapshotGroups(db, cur).map((r) => ({
+      stableGroupId: r.sid,
+      name: snapshotDisplayName(r),
+      color: r.sid === UNGROUPED_KEY ? null : r.color,
+      seconds: r.ms / 1000,
+    }));
+    // 総作業時間 KPI は権威集計(daily_totals)源泉のまま（当日サマリと同一規則。未グループ除外を尊重）。
+    out.push({ dayKey: cur, totalWorkSeconds: totalWorkSecondsForDay(db, cur), groups });
     cur = nextDayKey(cur);
   }
   return out;
