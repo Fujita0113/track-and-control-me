@@ -163,19 +163,74 @@ async function openCreateForm(onDone) {
     }
   }
 
+  // --- その場で作る習慣（新規 TIMELINE 条件）を採用する（D5）--------------
+  // 既存候補の採用に加え、カテゴリ＋分数で新規条件を作り、作成時に翌日ルールへ追記して採用する。
+  body.appendChild(h('label', { class: 'gr-flabel', text: 'その場で作る習慣（タイムライン記録）' }));
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', margin: '0' }, text: 'まだルールに無いカテゴリを「◯分以上」の習慣として追加します。作成すると翌日のルールに加わり、この目標に採用されます。' }));
+
+  const newRows = []; // { label, minutes }
+  const newHost = h('div', { class: 'stack gr-newconds' });
+
+  // カテゴリ補完用 datalist（GET /api/categories・自由入力可）。
+  const catListId = 'goal-new-cat-list';
+  const datalist = h('datalist', { id: catListId });
+  api.getCategories().then((rows) => {
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      if (r && r.name) datalist.appendChild(h('option', { value: r.name }));
+    }
+  }).catch(() => { /* 補完が無くても自由入力できる */ });
+
+  const renderNewRows = () => {
+    clear(newHost);
+    newRows.forEach((r, i) => {
+      const rm = h('button', { class: 'btn small', text: '削除', type: 'button' });
+      rm.addEventListener('click', () => { newRows.splice(i, 1); renderNewRows(); });
+      newHost.appendChild(h('div', { class: 'gr-newcond-row' },
+        h('span', { class: 'gr-newcond-badge', text: 'これから作成' }),
+        h('span', { class: 'gr-newcond-text', text: `${r.label} ${r.minutes}分以上` }),
+        h('div', { class: 'spacer' }),
+        rm,
+      ));
+    });
+  };
+
+  const catInp = h('input', { type: 'text', class: 'gr-input', placeholder: 'カテゴリ（例: 掃除）', list: catListId });
+  const minInp = h('input', { type: 'number', class: 'gr-input gr-min-input', placeholder: '分', min: '1', step: '1' });
+  const addBtn = h('button', { class: 'btn', text: '＋ 習慣を追加', type: 'button' });
+  const addNewRow = () => {
+    const label = catInp.value.trim();
+    const minutes = Math.floor(Number(minInp.value));
+    if (!label) { toast('カテゴリ名を入力してください', 'err'); return; }
+    if (!(minutes > 0)) { toast('分数は1以上で入力してください', 'err'); return; }
+    newRows.push({ label, minutes });
+    catInp.value = ''; minInp.value = '';
+    renderNewRows();
+    catInp.focus();
+  };
+  addBtn.addEventListener('click', addNewRow);
+  // 分数欄で Enter 追加（IME 変換確定の Enter は無視）。
+  minInp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addNewRow(); }
+  });
+  body.appendChild(h('div', { class: 'gr-newcond-form' }, catInp, minInp, addBtn));
+  body.appendChild(datalist);
+  body.appendChild(newHost);
+
   const save = h('button', { class: 'btn primary', text: '作成', type: 'button' });
   save.addEventListener('click', async () => {
     const name = nameInp.value.trim();
     if (!name) { toast('目標名を入力してください', 'err'); return; }
     const practices = [...candHost.querySelectorAll('input[type="checkbox"]:checked')].map((b) => b.value);
-    if (!practices.length) { toast('実践を1つ以上選んでください', 'err'); return; }
+    const newConditions = newRows.map((r) => ({ target: 'TIMELINE', label: r.label, thresholdSeconds: r.minutes * 60 }));
+    if (!practices.length && !newConditions.length) { toast('実践を1つ以上選ぶか、習慣を追加してください', 'err'); return; }
     save.disabled = true;
     try {
-      await api.createGoal({ name, purpose: purposeInp.value.trim(), practices });
+      await api.createGoal({ name, purpose: purposeInp.value.trim(), practices, newConditions });
       toast('目標を作成しました', 'ok');
       closeModal();
       onDone();
     } catch (err) {
+      // 400（バリデーション・閾値理由）／409（ジャンル固定・凍結）をそのままトースト表示。
       toast(err.data?.error || `失敗: ${err.message}`, 'err');
       save.disabled = false;
     }

@@ -14,7 +14,9 @@ import {
   GoalDeleteWindowError,
   GoalReportNotReadyError,
   JournalNotWritableError,
+  type NewInlineCondition,
 } from '../services/goals.js';
+import { GoalLockError, ThresholdReasonRequiredError, FrozenRuleError } from '../rules/rules.js';
 
 /** 30日チャレンジ API（spec: goal-challenge / goal-journal / goal-report）。 */
 export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
@@ -26,12 +28,27 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
   app.get('/api/goals', async () => listGoals(db));
 
   app.post('/api/goals', async (req, reply) => {
-    const b = (req.body ?? {}) as { name?: string; purpose?: string; practices?: string[] };
+    const b = (req.body ?? {}) as {
+      name?: string;
+      purpose?: string;
+      practices?: string[];
+      newConditions?: NewInlineCondition[];
+    };
     try {
-      return createGoal(db, { name: b.name ?? '', purpose: b.purpose, practices: b.practices ?? [] });
+      return createGoal(db, {
+        name: b.name ?? '',
+        purpose: b.purpose,
+        practices: b.practices ?? [],
+        newConditions: b.newConditions ?? [],
+      });
     } catch (err) {
-      if (err instanceof GoalPracticeError) {
+      // バリデーション・閾値理由必須は 400、凍結・ジャンル固定は 409。
+      if (err instanceof GoalPracticeError || err instanceof ThresholdReasonRequiredError) {
         reply.code(400);
+        return { error: err.message };
+      }
+      if (err instanceof GoalLockError || err instanceof FrozenRuleError) {
+        reply.code(409);
         return { error: err.message };
       }
       throw err;

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { upsertFutureRuleSet } from '../rules/rules.js';
+import { upsertFutureRuleSet, getRuleSet } from '../rules/rules.js';
 import {
   adoptCandidates,
   createGoal,
@@ -115,6 +115,113 @@ describe('目標の作成・採用', () => {
     const g = createGoal(db, { name: '運動習慣', practices: ['timeline:運動'] }, NOW_TODAY);
     expect(g.practices[0]!.conditionKey).toBe('timeline:運動');
     expect(g.practices[0]!.target).toBe('TIMELINE');
+  });
+});
+
+describe('目標作成時のインライン条件作成（newConditions）', () => {
+  /** 翌日ルールの condition_key → 閾値秒 のマップ。 */
+  function ruleThresholds(dayKey: string): Map<string, number | null> {
+    const rs = getRuleSet(db, dayKey);
+    return new Map((rs?.conditions ?? []).map((c) => [c.condition_key, c.threshold_seconds]));
+  }
+
+  it('新規「掃除15分」を作成して採用でき、翌日ルールへ timeline:掃除（900秒）が追記される', () => {
+    seedTomorrowRule();
+    const g = createGoal(
+      db,
+      { name: '部屋をきれいにする', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }] },
+      NOW_TODAY,
+    );
+    // 採用実践に timeline:掃除 が含まれる。
+    expect(g.practices.map((p) => p.conditionKey)).toContain('timeline:掃除');
+    const p = g.practices.find((x) => x.conditionKey === 'timeline:掃除')!;
+    expect(p.target).toBe('TIMELINE');
+    // 翌日ルールへ追記されている（900秒）。
+    const th = ruleThresholds(START);
+    expect(th.get('timeline:掃除')).toBe(900);
+  });
+
+  it('インライン作成は既存の翌日条件（total_work 等）を据え置きで保持する', () => {
+    seedTomorrowRule();
+    const before = ruleThresholds(START);
+    createGoal(
+      db,
+      { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }] },
+      NOW_TODAY,
+    );
+    const after = ruleThresholds(START);
+    // 既存条件のキー・閾値は不変、TIMELINE 追記のみ。
+    expect(after.get('total_work')).toBe(before.get('total_work'));
+    expect(after.get('group:g-atcoder')).toBe(before.get('group:g-atcoder'));
+    expect(after.has('timeline:掃除')).toBe(true);
+  });
+
+  it('既存条件を採用中の別目標を壊さず（GoalLockError なし）、閾値据え置きで理由要求も出ない', () => {
+    seedTomorrowRule();
+    // 別目標が total_work を採用中。
+    createGoal(db, { name: '既存', practices: ['total_work'] }, NOW_TODAY);
+    // インライン TIMELINE 追加は既存条件を据え置くので成功する。
+    expect(() =>
+      createGoal(
+        db,
+        { name: '新規習慣', practices: [], newConditions: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }] },
+        NOW_TODAY,
+      ),
+    ).not.toThrow();
+    // 閾値変更ログは発生していない（据え置き）。
+    expect((db.prepare('SELECT COUNT(*) AS c FROM practice_threshold_change').get() as { c: number }).c).toBe(0);
+  });
+
+  it('TIMELINE 以外・label 空・分数0 は拒否され、目標もルールも作られない（rollback）', () => {
+    seedTomorrowRule();
+    // TIMELINE 以外。
+    expect(() =>
+      createGoal(
+        db,
+        { name: 'x', practices: [], newConditions: [{ target: 'TOTAL_WORK' as 'TIMELINE', label: 'a', thresholdSeconds: 60 }] },
+        NOW_TODAY,
+      ),
+    ).toThrow(GoalPracticeError);
+    // label 空。
+    expect(() =>
+      createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '  ', thresholdSeconds: 60 }] }, NOW_TODAY),
+    ).toThrow(GoalPracticeError);
+    // 分数0。
+    expect(() =>
+      createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 0 }] }, NOW_TODAY),
+    ).toThrow(GoalPracticeError);
+    // いずれも目標は作られない。
+    expect(listGoals(db, NOW_TODAY).length).toBe(0);
+    // 採用が失敗する経路（bogus キー同伴）でも、追記済み条件が rollback される。
+    expect(() =>
+      createGoal(
+        db,
+        {
+          name: 'x',
+          practices: ['group:does-not-exist'],
+          newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }],
+        },
+        NOW_TODAY,
+      ),
+    ).toThrow(GoalPracticeError);
+    expect(getRuleSet(db, START)!.conditions.some((c) => c.condition_key === 'timeline:掃除')).toBe(false);
+    expect(listGoals(db, NOW_TODAY).length).toBe(0);
+  });
+
+  it('フォールバック継承の翌日でも materialize されて追記・採用が成功する', () => {
+    // 当日(07-10)に明示ルールを作成 → 翌日(START=07-11)は明示ルールを持たずフォールバック継承。
+    upsertFutureRuleSet(db, '2026-07-10', { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }] }, NOW_TODAY);
+    expect(getRuleSet(db, START)).toBeNull(); // 翌日は明示ルール無し（継承）。
+    const g = createGoal(
+      db,
+      { name: '掃除習慣', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }] },
+      NOW_TODAY,
+    );
+    expect(g.practices.map((p) => p.conditionKey)).toContain('timeline:掃除');
+    // 継承内容(total_work)も materialize されて翌日へ明示化され、TIMELINE が追記される。
+    const rs = getRuleSet(db, START)!;
+    const keys = rs.conditions.map((c) => c.condition_key).sort();
+    expect(keys).toEqual(['timeline:掃除', 'total_work']);
   });
 });
 

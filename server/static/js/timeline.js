@@ -24,6 +24,29 @@ let laneRef = null; // 現在の lane 要素(yToMin 用)
 let ctx = null; // 現在の描画コンテキスト { startMs, endMs, totalMin, blocks, ... }
 let dragState = null;
 let categoryCache = null; // 直近使用順のカテゴリ名配列(メモリキャッシュ)。null=未取得。
+// 目標が追跡中の自己申告カテゴリ集合(timeline-tracked-highlight)。active/upcoming 目標の
+// timeline:<ラベル> 採用キーの接尾辞(=カテゴリ名)。強調は表示のみで評価・集計に非影響。
+let trackedCategories = new Set();
+
+/** active/upcoming 目標の timeline:* 採用キーから追跡中カテゴリ集合を導出する。失敗時は空集合。 */
+async function refreshTrackedCategories() {
+  try {
+    const goals = await api.getGoals();
+    const set = new Set();
+    for (const g of (Array.isArray(goals) ? goals : [])) {
+      if (g.status !== 'active' && g.status !== 'upcoming') continue;
+      for (const p of (g.practices || [])) {
+        if (p && typeof p.conditionKey === 'string' && p.conditionKey.startsWith('timeline:')) {
+          set.add(p.conditionKey.slice('timeline:'.length));
+        }
+      }
+    }
+    trackedCategories = set;
+  } catch {
+    trackedCategories = new Set(); // 取得失敗時は何も強調しない。
+  }
+  return trackedCategories;
+}
 
 /** レジストリからカテゴリ名を取得しキャッシュ更新。失敗・空時は既定へフォールバック。 */
 async function refreshCategories() {
@@ -52,6 +75,8 @@ export async function show(root) {
   clear(root);
   // 記録ポップオーバーのチップ用にカテゴリを先読み(失敗しても記録機能は既定でフォールバック)。
   refreshCategories();
+  // 追跡中カテゴリ(目標採用の timeline:*)を先読みし、手動記録/チップの強調に使う。
+  await refreshTrackedCategories();
   // ディープリンク: #timeline?from=&to= を読み取り、該当区間の記録ドラフトを自動オープンする。
   const link = consumeHashParams();
   const initialDate = link && link.from ? deriveDayKey(link.from) : state.today;
@@ -102,6 +127,7 @@ async function render(body, date) {
     endAt: m.endAt,
     title: m.title,
     color: m.color,
+    categoryKey: m.categoryKey ?? null, // 追跡強調の一致判定(category_key 完全一致)に使う。
   }));
 
   // 列分割は種別横断(ラン + MANUAL)。ゴーストスロットは占有ブロックと時間的に重ならないため別描画。
@@ -350,7 +376,9 @@ function blockEl(block, col, colCount) {
   const height = Math.max(18, yOf(block.endAt) - yOf(block.startAt));
   const short = height < 40;
   const leisure = block.kind === 'MANUAL';
-  const el = h('div', { class: `tlc-block${leisure ? ' leisure' : ''}${short ? ' short' : ''}` });
+  // 追跡中カテゴリ(目標が採用する timeline:<ラベル>)に category_key が一致する手動記録を強調(表示のみ)。
+  const tracked = leisure && block.categoryKey != null && trackedCategories.has(block.categoryKey);
+  const el = h('div', { class: `tlc-block${leisure ? ' leisure' : ''}${tracked ? ' tracked' : ''}${short ? ' short' : ''}` });
   el.style.top = `${top}px`;
   el.style.height = `${height}px`;
   el.style.left = `calc(${(col / colCount) * 100}% + 2px)`;
@@ -597,7 +625,9 @@ function openDraft(startMin, endMin, x, y) {
   const chipHost = h('div', { class: 'tlc-chips' });
   const catInp = h('input', { type: 'text', placeholder: '新しいカテゴリ名(例: 買い物)' });
   const chips = cats.map((c) => {
-    const chip = h('div', { class: 'tlc-chip', text: c });
+    // 追跡中カテゴリのチップは強調(表示のみ・選択状態 active とは独立)。
+    const isTracked = trackedCategories.has(c);
+    const chip = h('div', { class: `tlc-chip${isTracked ? ' tracked' : ''}`, text: c });
     chip.addEventListener('click', () => {
       st.category = c; catInp.value = '';
       syncChips();

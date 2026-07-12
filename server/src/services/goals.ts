@@ -1,6 +1,11 @@
 import type { DB } from '../db/index.js';
 import { nextDayKey } from '../aggregation/index.js';
-import { getEffectiveRuleSet } from '../rules/rules.js';
+import {
+  getEffectiveRuleSet,
+  upsertFutureRuleSet,
+  type ConditionInput,
+  type RuleConditionRow,
+} from '../rules/rules.js';
 import { getReflection } from './reflection.js';
 import { todayKey } from './summary.js';
 import type { ConditionResult } from '../rules/evaluate.js';
@@ -205,33 +210,95 @@ function dayKeyOf(db: DB, ms: number): string {
   return todayKey(db, ms);
 }
 
+/** 目標作成時にその場で作成して採用する新規条件（初期対応は TIMELINE のみ・D3/D4）。 */
+export interface NewInlineCondition {
+  target: 'TIMELINE';
+  label: string;
+  thresholdSeconds: number;
+}
+
 export interface CreateGoalInput {
   name: string;
   purpose?: string;
   practices: string[]; // condition_key の配列
+  newConditions?: NewInlineCondition[]; // その場で作成して採用する新規条件（翌日ルールへ追記・D3）。
 }
 
-/** 目標を作成する。開始日は常に翌日、期間は30日固定。採用実践は翌日実効ルールから検証（D1/D3）。 */
+/** 実効ルールの条件行を upsert 入力へ写す（materialize 用）。条件キー・閾値を据え置きで渡す。 */
+function conditionRowToInput(c: RuleConditionRow): ConditionInput {
+  return {
+    target: c.target,
+    stableGroupId: c.stable_group_id,
+    comparator: (c.comparator as 'GTE') || 'GTE',
+    thresholdSeconds: c.threshold_seconds,
+    label: c.label,
+    signalKey: c.signal_key,
+    conditionKey: c.condition_key,
+  };
+}
+
+/**
+ * 目標を作成する。開始日は常に翌日、期間は30日固定。採用実践は翌日実効ルールから検証（D1/D3）。
+ * `newConditions` があれば、翌日の実効ルールを materialize したうえで新規 TIMELINE 条件を追記し
+ * （`upsertFutureRuleSet`）、その `condition_key` を採用リストへ合流させる。作成→採用は同一
+ * トランザクションで、途中の失敗（凍結・ジャンル固定・採用不整合）は全体 rollback する。
+ */
 export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): GoalView {
   const name = (input.name ?? '').trim();
   if (!name) throw new GoalPracticeError('目標名は必須です');
-  const keys = Array.from(new Set(input.practices ?? []));
+
+  // インライン新規条件のバリデーション（TIMELINE のみ・label 非空・thresholdSeconds > 0）。
+  const newConditions = input.newConditions ?? [];
+  for (const nc of newConditions) {
+    if (nc.target !== 'TIMELINE')
+      throw new GoalPracticeError('その場で作成できる条件はタイムライン記録（TIMELINE）のみです');
+    if (!(nc.label ?? '').trim()) throw new GoalPracticeError('カテゴリ名を入力してください');
+    if (!(typeof nc.thresholdSeconds === 'number' && nc.thresholdSeconds > 0))
+      throw new GoalPracticeError('時間（分）は1分以上で指定してください');
+  }
+
+  const explicitKeys = input.practices ?? [];
+  const inlineKeys = newConditions.map((nc) => `timeline:${nc.label.trim()}`);
+  const keys = Array.from(new Set([...explicitKeys, ...inlineKeys]));
   if (keys.length === 0) throw new GoalPracticeError('実践を1つ以上採用してください');
 
   const today = todayKey(db, nowMs);
   const startDay = nextDayKey(today);
   const endDay = addDaysKey(startDay, GOAL_DAYS - 1);
 
-  // 採用候補（翌日実効ルール）に照合し、スナップショットを取る。
-  const candidates = new Map(adoptCandidates(db, nowMs).map((c) => [c.conditionKey, c]));
-  const chosen = keys.map((k) => {
-    const cand = candidates.get(k);
-    if (!cand)
-      throw new GoalPracticeError(`実践「${k}」は翌日の実効ルールに存在しません（採用できません）`);
-    return cand;
-  });
-
   const tx = db.transaction(() => {
+    // インライン条件があれば、翌日の実効ルールを materialize して新規 TIMELINE 条件を追記する。
+    // 既存条件は condition_key・閾値を据え置きで渡すため、閾値変更理由要求もジャンル固定も発火しない。
+    if (newConditions.length) {
+      const eff = getEffectiveRuleSet(db, startDay, nowMs);
+      const existing = (eff?.conditions ?? []).map(conditionRowToInput);
+      const seen = new Set(
+        existing.filter((c) => c.target === 'TIMELINE').map((c) => (c.label ?? '').trim()),
+      );
+      const appended: ConditionInput[] = [];
+      for (const nc of newConditions) {
+        const label = nc.label.trim();
+        if (seen.has(label)) continue; // 既存/重複ラベルは追記せず既存キー採用へ寄せる。
+        seen.add(label);
+        appended.push({ target: 'TIMELINE', label, thresholdSeconds: nc.thresholdSeconds, comparator: 'GTE' });
+      }
+      upsertFutureRuleSet(
+        db,
+        startDay,
+        { combinator: (eff?.ruleSet.combinator as 'ALL') || 'ALL', conditions: [...existing, ...appended] },
+        nowMs,
+      );
+    }
+
+    // 採用候補（翌日実効ルール・追記後）に照合し、スナップショットを取る。
+    const candidates = new Map(adoptCandidates(db, nowMs).map((c) => [c.conditionKey, c]));
+    const chosen = keys.map((k) => {
+      const cand = candidates.get(k);
+      if (!cand)
+        throw new GoalPracticeError(`実践「${k}」は翌日の実効ルールに存在しません（採用できません）`);
+      return cand;
+    });
+
     const info = db
       .prepare(
         'INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)',
