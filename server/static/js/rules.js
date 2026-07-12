@@ -4,14 +4,38 @@ import { state } from './state.js';
 import { h, clear, fmtHM, addDays, toast, openModal, closeModal, emptyState } from './util.js';
 import { targetLabel, planningSignalLabel, CONDITION_KINDS, conditionKindValue, conditionKindTarget } from './targets.js';
 
+// 当日追加（DRAFT_TODAY）の条件は sort_order にこの下駄を履いて格納される（server: SAME_DAY_BASE）。
+// baseline（day 開始時点の凍結条件）と当日追加分を UI 上で区別するのに使う。
+const SAME_DAY_BASE = 100000;
+
+/** effective 今日ルールを一覧から解決（当日の明示行 → 無ければ直近の過去行へフォールバック）。 */
+function effectiveTodayRule(rulesets, today) {
+  const explicit = rulesets.find((r) => r.ruleSet.effective_date === today);
+  if (explicit) return explicit;
+  return rulesets.find((r) => r.ruleSet.effective_date < today) || null;
+}
+
+/** 当日ルールの条件を baseline（凍結・当日ロック）と当日追加分に分ける。 */
+function splitTodayConditions(rule) {
+  const isDraftToday = rule.ruleSet && rule.ruleSet.status === 'DRAFT_TODAY';
+  const baseline = [], additions = [];
+  for (const c of rule.conditions) {
+    if (isDraftToday && (c.sort_order ?? 0) >= SAME_DAY_BASE) additions.push(c);
+    else baseline.push(c);
+  }
+  return { baseline, additions };
+}
+
 /** ルール編集セクション(見出し + 作成ボタン + ルールセット一覧)を root に描画する。
  * ゲート画面から合成して使うため、再描画は自身のセクション内に閉じる。 */
 export async function renderRuleEditing(root) {
   clear(root);
   const newBtn = h('button', { class: 'btn primary', text: '＋ ルールを作成', type: 'button' });
+  // 当日に「新しい条件だけ」を追加する動線（厳しくする方向のみ当日反映・既存条件はロック）。
+  const addTodayBtn = h('button', { class: 'btn', text: '＋ 当日に条件を追加', type: 'button' });
   root.appendChild(h('div', { class: 'section-head' },
     h('h2', {}, 'ルール編集'),
-    h('div', { class: 'row' }, newBtn),
+    h('div', { class: 'row' }, addTodayBtn, newBtn),
   ));
   const body = h('div', { class: 'stack' });
   root.appendChild(body);
@@ -26,6 +50,20 @@ export async function renderRuleEditing(root) {
     const goals = await api.getGoals().catch(() => []);
     const existing = await api.getRule(target).catch(() => null);
     openRuleEditor(target, existing && existing.ruleSet ? existing.conditions : [], groups, reload, computeLocked(goals));
+  });
+  addTodayBtn.addEventListener('click', async () => {
+    const [rulesets, groups] = await Promise.all([
+      api.getRules().catch(() => []),
+      api.getGroups().catch(() => []),
+    ]);
+    const eff = effectiveTodayRule(rulesets, state.today);
+    if (!eff || !eff.conditions.length) {
+      // baseline が無い（実効ルール皆無）＝ブートストラップ。通常の「＋ ルールを作成」で当日フル編集できる。
+      toast('当日の実効ルールがありません。「＋ ルールを作成」から今日のルールを作成してください。', 'err');
+      return;
+    }
+    const { baseline, additions } = splitTodayConditions(eff);
+    openTodayAddEditor(state.today, baseline, additions, groups, reload);
   });
   await reload();
 }
@@ -69,6 +107,7 @@ async function renderList(body, reload) {
 
 function statusBadge(status) {
   if (status === 'DRAFT_FUTURE') return h('span', { class: 'badge accent', text: '未来(編集可)' });
+  if (status === 'DRAFT_TODAY') return h('span', { class: 'badge accent', text: '当日追加(編集可)' });
   if (status === 'FROZEN_ACTIVE') return h('span', { class: 'badge warn', text: '凍結(当日)' });
   return h('span', { class: 'badge', text: '過去' });
 }
@@ -87,6 +126,7 @@ function condText(c, groupName) {
 
 export function rulesetCard(rs, groups, groupName, onChange, locked = { keys: new Set(), byKey: new Map() }) {
   const editable = rs.ruleSet.status === 'DRAFT_FUTURE';
+  const isDraftToday = rs.ruleSet.status === 'DRAFT_TODAY';
   const card = h('div', { class: 'card' });
   const head = h('div', { class: 'row' },
     h('h3', { text: rs.ruleSet.effective_date }),
@@ -110,13 +150,37 @@ export function rulesetCard(rs, groups, groupName, onChange, locked = { keys: ne
     });
     head.appendChild(edit);
     head.appendChild(del);
+  } else if (isDraftToday) {
+    // 当日追加あり: 既存条件はロックのまま、追加分の編集／撤回だけを許す。
+    const { baseline, additions } = splitTodayConditions(rs);
+    const edit = h('button', { class: 'btn small', text: '当日追加を編集', type: 'button' });
+    edit.addEventListener('click', () => openTodayAddEditor(rs.ruleSet.effective_date, baseline, additions, groups, onChange));
+    const del = h('button', { class: 'btn small danger', text: '追加を撤回', type: 'button' });
+    del.addEventListener('click', async () => {
+      if (!confirm('当日追加した条件をすべて撤回して、当日開始時点の状態に戻しますか?')) return;
+      try { await api.deleteRule(rs.ruleSet.effective_date); toast('当日追加を撤回しました', 'ok'); onChange(); }
+      catch (err) {
+        const msg = err.data?.goalLocked
+          ? '目標が採用中の当日追加条件は撤回できません（ジャンル固定）'
+          : `失敗: ${err.message}`;
+        toast(msg, 'err');
+      }
+    });
+    head.appendChild(edit);
+    head.appendChild(del);
   }
   card.appendChild(head);
 
+  const additionKeys = new Set(isDraftToday ? splitTodayConditions(rs).additions.map((c) => c.condition_key) : []);
   const list = h('div', { class: 'list', style: { marginTop: '10px' } });
   if (!rs.conditions.length) list.appendChild(emptyState('条件なし'));
   for (const c of rs.conditions) {
     const row = h('div', { class: 'list-row' }, h('span', { class: 'grow', text: condText(c, groupName) }));
+    if (isDraftToday && additionKeys.has(c.condition_key)) {
+      row.appendChild(h('span', { class: 'badge accent', text: '＋ 当日追加' }));
+    } else if (isDraftToday) {
+      row.appendChild(h('span', { class: 'badge warn', text: '🔒 当日ロック' }));
+    }
     if (locked.keys.has(c.condition_key)) {
       row.appendChild(h('span', {
         class: 'badge accent',
@@ -199,6 +263,81 @@ export function openRuleEditor(date, conditions, groups, onDone, locked = { keys
     save,
   ));
   openModal(body, `ルール編集 — ${date}`);
+}
+
+/** 保存済みの条件行を PUT 入力（ConditionInput）へ写す。conditionKey を明示し baseline 一致を保証する。 */
+function condToInput(c) {
+  return {
+    target: c.target,
+    stableGroupId: c.stable_group_id || undefined,
+    comparator: 'GTE',
+    thresholdSeconds: c.threshold_seconds ?? null,
+    label: c.label || undefined,
+    signalKey: c.signal_key || undefined,
+    conditionKey: c.condition_key,
+  };
+}
+
+/**
+ * 当日の条件追加エディタ（spec: same-day-rule-additions / 5.2・5.3）。
+ * 既存の baseline 条件は「当日ロック」で読み取り専用表示し、新しい条件の追加のみ許す。
+ * 追加分は同日中は自由に編集・削除できる。保存は PUT（baseline + 追加分の全体）で行い、
+ * baseline を緩める編集はサーバが baseline 違反（400）で拒否する。
+ */
+export function openTodayAddEditor(date, baseline, additions, groups, onDone) {
+  const groupName = new Map(groups.map((g) => [g.stable_group_id, g.name]));
+  const body = h('div', { class: 'modal-body' });
+  body.appendChild(h('p', { class: 'muted', text: `対象日: ${date}（当日）。既存の条件はロックされ、当日は「新しい条件の追加」だけができます（追加分は同日中は自由に編集・削除でき、翌日から凍結されます）。` }));
+
+  if (baseline.length) {
+    body.appendChild(h('label', { class: 'muted', text: '既存の条件（当日ロック）' }));
+    const bl = h('div', { class: 'list' });
+    for (const c of baseline) {
+      bl.appendChild(h('div', { class: 'list-row' },
+        h('span', { class: 'grow', text: condText(c, groupName) }),
+        h('span', { class: 'badge warn', text: '🔒 当日ロック' }),
+      ));
+    }
+    body.appendChild(bl);
+  }
+
+  body.appendChild(h('label', { class: 'muted', text: '当日に追加する条件' }));
+  const rowsHost = h('div', { class: 'list' });
+  body.appendChild(rowsHost);
+  const addRow = (c) => rowsHost.appendChild(condEditorRow(c, groups, false));
+  additions.forEach((c) => addRow(fromRow(c)));
+
+  const addBtn = h('button', { class: 'btn small', text: '＋ 条件を追加', type: 'button' });
+  // 当日追加はタイムライン記録（習慣）が主用途のため既定を TIMELINE にする。
+  addBtn.addEventListener('click', () => addRow({ target: 'TIMELINE', label: '', minutes: 30 }));
+  body.appendChild(addBtn);
+
+  const save = h('button', { class: 'btn primary', text: '保存（当日に追加）', type: 'button' });
+  save.addEventListener('click', async () => {
+    const addRows = [...rowsHost.querySelectorAll('.cond-editor')];
+    const adds = [];
+    for (const row of addRows) { const c = readEditorRow(row); if (c) adds.push(c); }
+    // baseline は据え置きで送る（条件キー・値を変えない＝緩めない）。追加分を末尾に足す。
+    const conditions = [...baseline.map(condToInput), ...adds];
+    save.disabled = true;
+    try {
+      await api.putRule(date, { combinator: 'ALL', conditions });
+      toast('当日に条件を追加しました', 'ok');
+      closeModal();
+      onDone();
+    } catch (err) {
+      if (err.data?.baselineViolation) toast('当日は既存条件を緩められません（新しい条件の追加のみ可能）', 'err');
+      else if (err.data?.reasonRequired) toast('採用中条件の閾値変更には理由が必要です', 'err');
+      else if (err.data?.goalLocked) toast('目標が採用中の実践は外せません（ジャンル固定）', 'err');
+      else toast(`失敗: ${err.message}`, 'err');
+      save.disabled = false;
+    }
+  });
+  body.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', text: 'キャンセル', type: 'button', onclick: closeModal }),
+    save,
+  ));
+  openModal(body, `当日に条件を追加 — ${date}`);
 }
 
 function fromRow(c) {

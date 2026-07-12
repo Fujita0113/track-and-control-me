@@ -8,6 +8,7 @@ import {
   upsertFutureRuleSet,
   deleteRuleSet,
   FrozenRuleError,
+  BaselineViolationError,
   GoalLockError,
   ThresholdReasonRequiredError,
   type ConditionInput,
@@ -114,6 +115,11 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
         reply.code(400);
         return { error: err.message, reasonRequired: true };
       }
+      // 当日の baseline 違反（既存凍結条件の緩和）は 400。FrozenRuleError の派生なので先に判定する。
+      if (err instanceof BaselineViolationError) {
+        reply.code(400);
+        return { error: err.message, baselineViolation: true };
+      }
       if (err instanceof GoalLockError) {
         reply.code(409);
         return { error: err.message, goalLocked: true };
@@ -131,6 +137,10 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
     try {
       return { deleted: deleteRuleSet(db, date) };
     } catch (err) {
+      if (err instanceof BaselineViolationError) {
+        reply.code(400);
+        return { error: err.message, baselineViolation: true };
+      }
       if (err instanceof GoalLockError) {
         reply.code(409);
         return { error: err.message, goalLocked: true };

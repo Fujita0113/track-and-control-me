@@ -25,10 +25,10 @@ export function runRollover(db: DB, nowMs = Date.now(), log?: (m: string) => voi
     db.prepare(
       "UPDATE unlock_evaluation SET is_final = 1 WHERE day_key = ?",
     ).run(yesterday);
-    // 過去に残った DRAFT（初期ブートストラップの当日ルール等）を凍結してから PAST 化する。
-    // 同日中は編集可としていたブートストラップ当日ルールも、翌日以降はここで確実に凍結される。
+    // 過去に残った DRAFT（初期ブートストラップの当日ルール・当日追加の DRAFT_TODAY 等）を
+    // 凍結してから PAST 化する。同日中は編集可としていた当日ルールも、翌日以降はここで確実に凍結される。
     db.prepare(
-      "UPDATE daily_rule_set SET status = 'FROZEN_ACTIVE', frozen_at = ? WHERE status = 'DRAFT_FUTURE' AND effective_date < ?",
+      "UPDATE daily_rule_set SET status = 'FROZEN_ACTIVE', frozen_at = ? WHERE status IN ('DRAFT_FUTURE', 'DRAFT_TODAY') AND effective_date < ?",
     ).run(nowMs, today);
     // 当日ルールを凍結、それ以前の凍結ルールを PAST へ。
     ensureFrozenIfDue(db, today, nowMs);

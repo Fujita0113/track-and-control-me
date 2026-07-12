@@ -1,9 +1,4 @@
-# goal-inline-condition Specification
-
-## Purpose
-TBD - created by syncing change goal-inline-rule-timeline-highlight. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 目標作成時に新規 TIMELINE 条件を作成して採用できる
 
@@ -46,4 +41,4 @@ TBD - created by syncing change goal-inline-rule-timeline-highlight. Update Purp
 #### Scenario: 既存採用条件のジャンル固定を破らない
 
 - **WHEN** 別目標が `total_work` を採用中の状態で、新規 TIMELINE 条件のインライン追加を行う
-- **THEN** `total_work` は翌日ルールに残るため GoalLockError は発生せず、追記と採用が成功する
+- **THEN** `total_work` は開始日ルールに残るため GoalLockError は発生せず、追記と採用が成功する

@@ -85,7 +85,9 @@ export const api = {
 
   // 30日チャレンジ（目標）
   getGoals: () => req('GET', '/api/goals'),
-  getGoalCandidates: () => req('GET', '/api/goals/candidates'),
+  // start = 'today' | 'tomorrow'（開始日の実効ルールから候補を出す・既定 today）
+  getGoalCandidates: (start) =>
+    req('GET', start ? `/api/goals/candidates?${q({ start })}` : '/api/goals/candidates'),
   createGoal: (b) => req('POST', '/api/goals', b),
   deleteGoal: (id) => req('DELETE', `/api/goals/${id}`),
   getGoalReport: (id) => req('GET', `/api/goals/${id}/report`),

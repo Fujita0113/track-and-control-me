@@ -7,6 +7,7 @@ import {
   getRuleSet,
   ensureFrozenIfDue,
   FrozenRuleError,
+  BaselineViolationError,
   GoalLockError,
   ThresholdReasonRequiredError,
   todayKey,
@@ -595,5 +596,165 @@ describe('TIMELINE 条件（タイムライン記録）', () => {
     const pa = after.perCondition.find((x) => x.conditionKey === 'timeline:運動')!;
     expect(pa.actualSeconds).toBe(pb.actualSeconds);
     expect(pa.met).toBe(pb.met);
+  });
+});
+
+describe('当日ルールへの新規条件追加（same-day-rule-additions）', () => {
+  const NOW_TOMORROW = jst(2026, 7, 11, 12, 0);
+
+  /** baseline: 前日にコミットされた「今日」発効ルール（当日は凍結される）。 */
+  function seedFrozenTodayRule(total = 3600): void {
+    upsertFutureRuleSet(
+      db,
+      DAY_TODAY,
+      { combinator: 'ALL', conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: total }] },
+      NOW_YESTERDAY,
+    );
+    ensureFrozenIfDue(db, DAY_TODAY, NOW_TODAY); // FROZEN_ACTIVE
+  }
+
+  /** baseline を保存しつつ TIMELINE を1本足した当日フルセット。 */
+  function withRunAddition(runSeconds = 1800): { conditions: { target: 'TOTAL_WORK' | 'TIMELINE'; thresholdSeconds: number; label?: string }[] } {
+    return {
+      conditions: [
+        { target: 'TOTAL_WORK', thresholdSeconds: 3600 },
+        { target: 'TIMELINE', label: '運動', thresholdSeconds: runSeconds },
+      ],
+    };
+  }
+
+  it('実効ルールがある当日でも新規条件を追加でき、baseline は不変（DRAFT_TODAY）', () => {
+    seedFrozenTodayRule();
+    const rs = upsertFutureRuleSet(db, DAY_TODAY, withRunAddition(1800), NOW_TODAY);
+    expect(rs.ruleSet.status).toBe('DRAFT_TODAY');
+    expect(rs.conditions.map((c) => c.condition_key).sort()).toEqual(['timeline:運動', 'total_work']);
+    expect(rs.conditions.find((c) => c.condition_key === 'total_work')!.threshold_seconds).toBe(3600);
+  });
+
+  it('既存の凍結条件を外す/緩める当日編集は BaselineViolationError で拒否', () => {
+    seedFrozenTodayRule();
+    // total_work を外す（削除）。
+    expect(() =>
+      upsertFutureRuleSet(db, DAY_TODAY, { conditions: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }] }, NOW_TODAY),
+    ).toThrow(BaselineViolationError);
+    // total_work を引き下げる。
+    expect(() =>
+      upsertFutureRuleSet(db, DAY_TODAY, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 60 }] }, NOW_TODAY),
+    ).toThrow(BaselineViolationError);
+    // ルールは変更されていない（total_work 3600 が残る）。
+    expect(getRuleSet(db, DAY_TODAY)!.conditions.find((c) => c.condition_key === 'total_work')!.threshold_seconds).toBe(3600);
+  });
+
+  it('当日追加分は同日中に自由に編集・削除でき baseline へ戻せる', () => {
+    seedFrozenTodayRule();
+    upsertFutureRuleSet(db, DAY_TODAY, withRunAddition(1800), NOW_TODAY);
+    // 追加分の閾値を変更（採用されていないので自由）。
+    const rs2 = upsertFutureRuleSet(db, DAY_TODAY, withRunAddition(3600), NOW_TODAY);
+    expect(rs2.conditions.find((c) => c.condition_key === 'timeline:運動')!.threshold_seconds).toBe(3600);
+    // 追加分を input から外す → baseline へ戻る（total_work のみ）。
+    const rs3 = upsertFutureRuleSet(db, DAY_TODAY, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }] }, NOW_TODAY);
+    expect(rs3.conditions.map((c) => c.condition_key)).toEqual(['total_work']);
+  });
+
+  it('当日の解錠判定に当日追加条件が算入される', () => {
+    seedFrozenTodayRule();
+    upsertFutureRuleSet(db, DAY_TODAY, withRunAddition(1800), NOW_TODAY);
+    // total_work だけ満たし、運動は未記録 → 追加条件が効いて未達成。
+    seedTotals(db, DAY_TODAY, 'g-dev', 4000 * 1000);
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    const run = r.perCondition.find((p) => p.conditionKey === 'timeline:運動')!;
+    expect(run.met).toBe(false);
+    expect(r.conditionsMet).toBe(false);
+  });
+
+  it('deleteRuleSet(today) は当日追加分だけを撤回し baseline（FROZEN）へ戻す', () => {
+    seedFrozenTodayRule();
+    upsertFutureRuleSet(db, DAY_TODAY, withRunAddition(1800), NOW_TODAY);
+    expect(deleteRuleSet(db, DAY_TODAY, NOW_TODAY)).toBe(true);
+    const rs = getRuleSet(db, DAY_TODAY)!;
+    expect(rs.ruleSet.status).toBe('FROZEN_ACTIVE'); // reopen 由来は再凍結。
+    expect(rs.conditions.map((c) => c.condition_key)).toEqual(['total_work']);
+  });
+
+  it('当日追加した条件は翌日から凍結され編集不可になる', () => {
+    seedFrozenTodayRule();
+    upsertFutureRuleSet(db, DAY_TODAY, withRunAddition(1800), NOW_TODAY);
+    ensureFrozenIfDue(db, DAY_TODAY, NOW_TOMORROW);
+    expect(getRuleSet(db, DAY_TODAY)!.ruleSet.status).toBe('FROZEN_ACTIVE');
+    expect(() =>
+      upsertFutureRuleSet(db, DAY_TODAY, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }] }, NOW_TOMORROW),
+    ).toThrow(FrozenRuleError);
+  });
+
+  it('materialize: 継承 baseline のある当日は追加で DRAFT_TODAY 行が作られ、撤回で継承へ戻る', () => {
+    upsertFutureRuleSet(db, '2026-07-08', { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }] }, jst(2026, 7, 7, 12, 0));
+    expect(getRuleSet(db, DAY_TODAY)).toBeNull(); // 当日は継承（明示行なし）。
+    const rs = upsertFutureRuleSet(db, DAY_TODAY, withRunAddition(1800), NOW_TODAY);
+    expect(rs.ruleSet.status).toBe('DRAFT_TODAY');
+    expect(rs.conditions.map((c) => c.condition_key).sort()).toEqual(['timeline:運動', 'total_work']);
+    // materialize 由来（当日作成行）の撤回は行ごと削除 → 継承へ戻る。
+    expect(deleteRuleSet(db, DAY_TODAY, NOW_TODAY)).toBe(true);
+    expect(getRuleSet(db, DAY_TODAY)).toBeNull();
+  });
+});
+
+describe('今日開始の目標: ジャンル固定・理由必須が当日から効く', () => {
+  /** baseline today rule + 当日追加した timeline:運動 を今日開始の目標が採用した状態を作る。 */
+  function seedTodayAdoptedRun(): void {
+    upsertFutureRuleSet(db, DAY_TODAY, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }] }, NOW_YESTERDAY);
+    ensureFrozenIfDue(db, DAY_TODAY, NOW_TODAY);
+    upsertFutureRuleSet(
+      db,
+      DAY_TODAY,
+      { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }, { target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }] },
+      NOW_TODAY,
+    );
+    const gid = db
+      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('運動', '', DAY_TODAY, '2026-08-08', NOW_TODAY).lastInsertRowid as number;
+    db.prepare('INSERT INTO goal_practice (goal_id, condition_key, target, sort_order) VALUES (?, ?, ?, 0)').run(
+      gid,
+      'timeline:運動',
+      'TIMELINE',
+    );
+  }
+
+  it('当日採用した当日追加条件は同日でも削除できない（GoalLockError）', () => {
+    seedTodayAdoptedRun();
+    // input から timeline:運動 を外す（撤回）→ 採用中のため拒否。
+    expect(() =>
+      upsertFutureRuleSet(db, DAY_TODAY, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }] }, NOW_TODAY),
+    ).toThrow(GoalLockError);
+    // deleteRuleSet でも拒否。
+    expect(() => deleteRuleSet(db, DAY_TODAY, NOW_TODAY)).toThrow(GoalLockError);
+    expect(getRuleSet(db, DAY_TODAY)!.conditions.some((c) => c.condition_key === 'timeline:運動')).toBe(true);
+  });
+
+  it('採用中の当日追加条件の閾値変更は理由必須・理由つきで記録される', () => {
+    seedTodayAdoptedRun();
+    // 1800→900 の変更を理由なしで送る → 拒否。
+    expect(() =>
+      upsertFutureRuleSet(
+        db,
+        DAY_TODAY,
+        { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }, { target: 'TIMELINE', label: '運動', thresholdSeconds: 900 }] },
+        NOW_TODAY,
+      ),
+    ).toThrow(ThresholdReasonRequiredError);
+    // 理由つきなら成功・記録される。
+    upsertFutureRuleSet(
+      db,
+      DAY_TODAY,
+      { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600 }, { target: 'TIMELINE', label: '運動', thresholdSeconds: 900 }] },
+      NOW_TODAY,
+      { thresholdChangeReason: '疲労気味。ゼロにはしない' },
+    );
+    const rows = db.prepare('SELECT * FROM practice_threshold_change WHERE condition_key = ?').all('timeline:運動') as {
+      old_seconds: number;
+      new_seconds: number;
+    }[];
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.old_seconds).toBe(1800);
+    expect(rows[0]!.new_seconds).toBe(900);
   });
 });

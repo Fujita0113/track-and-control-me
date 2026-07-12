@@ -20,7 +20,7 @@ const TZ = 'Asia/Tokyo';
 const jst = (y: number, mo: number, d: number, h: number, mi: number) =>
   zonedTimeToEpoch(y, mo, d, h, mi, 0, TZ);
 
-// 「今日」= 2026-07-10 → 目標は翌日 2026-07-11 開始・2026-08-09 完了。
+// 「今日」= 2026-07-10 → 明日開始の目標は 2026-07-11 開始・2026-08-09 完了。
 const NOW_TODAY = jst(2026, 7, 10, 12, 0);
 const NOW_NEXT = jst(2026, 7, 11, 12, 0);
 const NOW_COMPLETED = jst(2026, 8, 10, 12, 0);
@@ -32,7 +32,7 @@ beforeEach(() => {
   db = openDb(':memory:');
 });
 
-/** 翌日(2026-07-11)発効の実効ルール = 採用元。 */
+/** 翌日(2026-07-11)発効の実効ルール = 明日開始目標の採用元。 */
 function seedTomorrowRule(): void {
   upsertFutureRuleSet(
     db,
@@ -56,18 +56,18 @@ function seedEval(dayKey: string, per: unknown[]): void {
   ).run(dayKey, JSON.stringify(per));
 }
 
-describe('目標の作成・採用', () => {
+describe('目標の作成・採用（明日開始）', () => {
   it('採用候補は翌日実効ルールから出て MANUAL_CHECK を除外する', () => {
     seedTomorrowRule();
-    const cands = adoptCandidates(db, NOW_TODAY);
+    const cands = adoptCandidates(db, NOW_TODAY, 'tomorrow');
     const keys = cands.map((c) => c.conditionKey).sort();
     expect(keys).toEqual(['group:g-atcoder', 'planning:reflection_done', 'total_work']);
     expect(cands.some((c) => c.conditionKey.startsWith('manual:'))).toBe(false);
   });
 
-  it('作成すると翌日開始・30日固定（end=+29）で開始前になる', () => {
+  it('明日開始で作成すると翌日開始・30日固定（end=+29）で開始前になる', () => {
     seedTomorrowRule();
-    const g = createGoal(db, { name: 'メンタルを安定させる', purpose: '穏やかに', practices: ['total_work'] }, NOW_TODAY);
+    const g = createGoal(db, { name: 'メンタルを安定させる', purpose: '穏やかに', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
     expect(g.startDay).toBe(START);
     expect(g.endDay).toBe(END);
     expect(g.status).toBe('upcoming');
@@ -77,18 +77,18 @@ describe('目標の作成・採用', () => {
   it('翌日実効ルールに無い実践は採用できない', () => {
     seedTomorrowRule();
     expect(() =>
-      createGoal(db, { name: 'x', practices: ['group:does-not-exist'] }, NOW_TODAY),
+      createGoal(db, { name: 'x', practices: ['group:does-not-exist'], start: 'tomorrow' }, NOW_TODAY),
     ).toThrow(GoalPracticeError);
     // MANUAL_CHECK 由来のキーも候補外。
-    expect(() => createGoal(db, { name: 'x', practices: ['manual:3'] }, NOW_TODAY)).toThrow(
+    expect(() => createGoal(db, { name: 'x', practices: ['manual:3'], start: 'tomorrow' }, NOW_TODAY)).toThrow(
       GoalPracticeError,
     );
   });
 
   it('並行して2つ作成でき、採用実践の重複も許容される', () => {
     seedTomorrowRule();
-    createGoal(db, { name: 'A', practices: ['total_work'] }, NOW_TODAY);
-    createGoal(db, { name: 'B', practices: ['total_work', 'group:g-atcoder'] }, NOW_TODAY);
+    createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
+    createGoal(db, { name: 'B', practices: ['total_work', 'group:g-atcoder'], start: 'tomorrow' }, NOW_TODAY);
     const goals = listGoals(db, NOW_TODAY);
     expect(goals.length).toBe(2);
   });
@@ -105,20 +105,76 @@ describe('目標の作成・採用', () => {
       },
       NOW_TODAY,
     );
-    const cands = adoptCandidates(db, NOW_TODAY);
+    const cands = adoptCandidates(db, NOW_TODAY, 'tomorrow');
     const tl = cands.find((c) => c.conditionKey === 'timeline:運動');
     expect(tl).toBeTruthy();
     expect(tl!.target).toBe('TIMELINE');
     expect(tl!.label).toBe('運動 30分以上'); // 「<カテゴリ> ◯分以上」・生キーは出さない
     expect(cands.some((c) => c.conditionKey.startsWith('manual:'))).toBe(false);
     // 採用可能（timeline:<ラベル> の安定キーで保存される）。
-    const g = createGoal(db, { name: '運動習慣', practices: ['timeline:運動'] }, NOW_TODAY);
+    const g = createGoal(db, { name: '運動習慣', practices: ['timeline:運動'], start: 'tomorrow' }, NOW_TODAY);
     expect(g.practices[0]!.conditionKey).toBe('timeline:運動');
     expect(g.practices[0]!.target).toBe('TIMELINE');
   });
 });
 
-describe('目標作成時のインライン条件作成（newConditions）', () => {
+describe('目標の開始日選択（今日開始）', () => {
+  /** 「今日」(2026-07-10)発効の実効ルール（前日にコミット・当日凍結）を作る。 */
+  function seedTodayRule(): void {
+    upsertFutureRuleSet(
+      db,
+      '2026-07-10',
+      { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }] },
+      jst(2026, 7, 9, 12, 0), // 前日にコミット → 当日は凍結ルール。
+    );
+  }
+
+  it('既定（start 未指定）は今日開始になり、当日を Day1 として進行中で現れる', () => {
+    seedTodayRule();
+    const g = createGoal(db, { name: '今日から', practices: ['total_work'] }, NOW_TODAY);
+    expect(g.startDay).toBe('2026-07-10');
+    expect(g.endDay).toBe('2026-08-08'); // start + 29
+    expect(g.status).toBe('active');
+    expect(g.dayNumber).toBe(1);
+    expect(g.dayCount).toBe(30);
+  });
+
+  it('採用候補は今日開始では当日実効ルールから出る', () => {
+    seedTodayRule();
+    const cands = adoptCandidates(db, NOW_TODAY, 'today');
+    expect(cands.map((c) => c.conditionKey)).toContain('total_work');
+  });
+
+  it('明日開始は翌日から開始前で現れる', () => {
+    seedTomorrowRule();
+    const g = createGoal(db, { name: '明日から', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
+    expect(g.startDay).toBe(START);
+    expect(g.status).toBe('upcoming');
+  });
+
+  it('今日開始でインライン条件を作ると当日ルール（DRAFT_TODAY）へ追記され当日から採用される', () => {
+    seedTodayRule();
+    const g = createGoal(
+      db,
+      { name: '掃除習慣', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }], start: 'today' },
+      NOW_TODAY,
+    );
+    expect(g.practices.map((p) => p.conditionKey)).toContain('timeline:掃除');
+    // 当日ルールは DRAFT_TODAY になり、baseline(total_work)＋追加(timeline:掃除) を含む。
+    const rs = getRuleSet(db, '2026-07-10')!;
+    expect(rs.ruleSet.status).toBe('DRAFT_TODAY');
+    const keys = rs.conditions.map((c) => c.condition_key).sort();
+    expect(keys).toEqual(['timeline:掃除', 'total_work']);
+  });
+
+  it('削除は今日開始でも作成当日のみ可能', () => {
+    seedTodayRule();
+    const g = createGoal(db, { name: '今日から', practices: ['total_work'] }, NOW_TODAY);
+    expect(deleteGoal(db, g.id, NOW_TODAY)).toBe(true);
+  });
+});
+
+describe('目標作成時のインライン条件作成（newConditions・明日開始）', () => {
   /** 翌日ルールの condition_key → 閾値秒 のマップ。 */
   function ruleThresholds(dayKey: string): Map<string, number | null> {
     const rs = getRuleSet(db, dayKey);
@@ -129,7 +185,7 @@ describe('目標作成時のインライン条件作成（newConditions）', () 
     seedTomorrowRule();
     const g = createGoal(
       db,
-      { name: '部屋をきれいにする', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }] },
+      { name: '部屋をきれいにする', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }], start: 'tomorrow' },
       NOW_TODAY,
     );
     // 採用実践に timeline:掃除 が含まれる。
@@ -146,7 +202,7 @@ describe('目標作成時のインライン条件作成（newConditions）', () 
     const before = ruleThresholds(START);
     createGoal(
       db,
-      { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }] },
+      { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }], start: 'tomorrow' },
       NOW_TODAY,
     );
     const after = ruleThresholds(START);
@@ -159,12 +215,12 @@ describe('目標作成時のインライン条件作成（newConditions）', () 
   it('既存条件を採用中の別目標を壊さず（GoalLockError なし）、閾値据え置きで理由要求も出ない', () => {
     seedTomorrowRule();
     // 別目標が total_work を採用中。
-    createGoal(db, { name: '既存', practices: ['total_work'] }, NOW_TODAY);
+    createGoal(db, { name: '既存', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
     // インライン TIMELINE 追加は既存条件を据え置くので成功する。
     expect(() =>
       createGoal(
         db,
-        { name: '新規習慣', practices: [], newConditions: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }] },
+        { name: '新規習慣', practices: [], newConditions: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }], start: 'tomorrow' },
         NOW_TODAY,
       ),
     ).not.toThrow();
@@ -178,17 +234,17 @@ describe('目標作成時のインライン条件作成（newConditions）', () 
     expect(() =>
       createGoal(
         db,
-        { name: 'x', practices: [], newConditions: [{ target: 'TOTAL_WORK' as 'TIMELINE', label: 'a', thresholdSeconds: 60 }] },
+        { name: 'x', practices: [], newConditions: [{ target: 'TOTAL_WORK' as 'TIMELINE', label: 'a', thresholdSeconds: 60 }], start: 'tomorrow' },
         NOW_TODAY,
       ),
     ).toThrow(GoalPracticeError);
     // label 空。
     expect(() =>
-      createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '  ', thresholdSeconds: 60 }] }, NOW_TODAY),
+      createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '  ', thresholdSeconds: 60 }], start: 'tomorrow' }, NOW_TODAY),
     ).toThrow(GoalPracticeError);
     // 分数0。
     expect(() =>
-      createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 0 }] }, NOW_TODAY),
+      createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 0 }], start: 'tomorrow' }, NOW_TODAY),
     ).toThrow(GoalPracticeError);
     // いずれも目標は作られない。
     expect(listGoals(db, NOW_TODAY).length).toBe(0);
@@ -200,6 +256,7 @@ describe('目標作成時のインライン条件作成（newConditions）', () 
           name: 'x',
           practices: ['group:does-not-exist'],
           newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }],
+          start: 'tomorrow',
         },
         NOW_TODAY,
       ),
@@ -214,7 +271,7 @@ describe('目標作成時のインライン条件作成（newConditions）', () 
     expect(getRuleSet(db, START)).toBeNull(); // 翌日は明示ルール無し（継承）。
     const g = createGoal(
       db,
-      { name: '掃除習慣', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }] },
+      { name: '掃除習慣', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 900 }], start: 'tomorrow' },
       NOW_TODAY,
     );
     expect(g.practices.map((p) => p.conditionKey)).toContain('timeline:掃除');
@@ -225,25 +282,25 @@ describe('目標作成時のインライン条件作成（newConditions）', () 
   });
 });
 
-describe('削除猶予（作成当日のみ）', () => {
+describe('削除猶予（作成当日のみ・明日開始）', () => {
   it('作成当日は削除でき、実践・日記も CASCADE で消える', () => {
     seedTomorrowRule();
-    const g = createGoal(db, { name: 'A', practices: ['total_work'] }, NOW_TODAY);
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
     expect(deleteGoal(db, g.id, NOW_TODAY)).toBe(true);
     expect(listGoals(db, NOW_TODAY).length).toBe(0);
   });
 
   it('翌日以降は削除できない', () => {
     seedTomorrowRule();
-    const g = createGoal(db, { name: 'A', practices: ['total_work'] }, NOW_TODAY);
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
     expect(() => deleteGoal(db, g.id, NOW_NEXT)).toThrow(GoalDeleteWindowError);
   });
 });
 
-describe('目標日記', () => {
+describe('目標日記（明日開始）', () => {
   it('進行中の日は保存でき、reflection_done を汚染しない', () => {
     seedTomorrowRule();
-    const g = createGoal(db, { name: 'A', practices: ['total_work'] }, NOW_TODAY);
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
     // 進行中（today=2026-07-11 が start..end 内）で保存。
     saveJournal(db, g.id, START, '初日の日記', NOW_NEXT);
     expect(getJournal(db, g.id, START).content).toBe('初日の日記');
@@ -253,21 +310,21 @@ describe('目標日記', () => {
 
   it('完走後の日記書き込みは拒否される', () => {
     seedTomorrowRule();
-    const g = createGoal(db, { name: 'A', practices: ['total_work'] }, NOW_TODAY);
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
     expect(() => saveJournal(db, g.id, START, 'x', NOW_COMPLETED)).toThrow(JournalNotWritableError);
   });
 });
 
-describe('完了レポート', () => {
+describe('完了レポート（明日開始）', () => {
   it('完走前は 409（GoalReportNotReadyError）', () => {
     seedTomorrowRule();
-    const g = createGoal(db, { name: 'A', practices: ['total_work'] }, NOW_TODAY);
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
     expect(() => getGoalReport(db, g.id, NOW_TODAY)).toThrow(GoalReportNotReadyError);
   });
 
   it('欠測=未達成、達成日数=全実践 met の日数、閾値マーカー、日単位フォールバック', () => {
     seedTomorrowRule();
-    const g = createGoal(db, { name: 'A', practices: ['total_work', 'group:g-atcoder'] }, NOW_TODAY);
+    const g = createGoal(db, { name: 'A', practices: ['total_work', 'group:g-atcoder'], start: 'tomorrow' }, NOW_TODAY);
 
     // Day1(07-11): 両方 met。Day2(07-12): total_work のみ met。他28日: 評価行なし（欠測）。
     seedEval('2026-07-11', [
@@ -322,7 +379,7 @@ describe('完了レポート', () => {
       { conditions: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }] },
       NOW_TODAY,
     );
-    const g = createGoal(db, { name: '運動', practices: ['timeline:運動'] }, NOW_TODAY);
+    const g = createGoal(db, { name: '運動', practices: ['timeline:運動'], start: 'tomorrow' }, NOW_TODAY);
     seedEval('2026-07-11', [
       { conditionKey: 'timeline:運動', target: 'TIMELINE', met: true, actualSeconds: 2100, thresholdSeconds: 1800 },
     ]);

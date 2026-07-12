@@ -19,6 +19,8 @@ import type { ConditionResult } from '../rules/evaluate.js';
 
 const GOAL_DAYS = 30; // 30日固定（end_day = start_day + 29）。
 export type GoalStatus = 'upcoming' | 'active' | 'completed';
+/** 目標の開始日選択（既定=今日）。今日開始は当日を Day1 として即「進行中」（spec: goal-challenge / D3）。 */
+export type GoalStart = 'today' | 'tomorrow';
 export type GoalPracticeTarget = 'TOTAL_WORK' | 'GROUP' | 'PLANNING' | 'TIMELINE';
 const TIME_TARGETS = new Set<GoalPracticeTarget>(['TOTAL_WORK', 'GROUP', 'TIMELINE']);
 
@@ -118,9 +120,18 @@ export interface AdoptCandidate {
   thresholdSeconds: number | null;
 }
 
-/** 目標作成 UI 用: 開始日（＝翌日）の実効ルールから採用候補を出す。MANUAL_CHECK は除外（D1）。 */
-export function adoptCandidates(db: DB, nowMs = Date.now()): AdoptCandidate[] {
-  const startDay = nextDayKey(todayKey(db, nowMs));
+/** 開始日選択（today|tomorrow）から start_day を算出する。既定は今日（D3）。 */
+export function goalStartDay(db: DB, nowMs: number, start: GoalStart): string {
+  const today = todayKey(db, nowMs);
+  return start === 'tomorrow' ? nextDayKey(today) : today;
+}
+
+/**
+ * 目標作成 UI 用: 開始日（今日開始なら当日・明日開始なら翌日）の実効ルールから採用候補を出す。
+ * MANUAL_CHECK は除外（D1）。今日開始では当日実効ルール（当日追加を含む）が候補元になる。
+ */
+export function adoptCandidates(db: DB, nowMs = Date.now(), start: GoalStart = 'today'): AdoptCandidate[] {
+  const startDay = goalStartDay(db, nowMs, start);
   const eff = getEffectiveRuleSet(db, startDay, nowMs);
   if (!eff) return [];
   const groupNames = new Map(
@@ -231,7 +242,8 @@ export interface CreateGoalInput {
   name: string;
   purpose?: string;
   practices: string[]; // condition_key の配列
-  newConditions?: NewInlineCondition[]; // その場で作成して採用する新規条件（翌日ルールへ追記・D3）。
+  newConditions?: NewInlineCondition[]; // その場で作成して採用する新規条件（開始日ルールへ追記・D3/D4）。
+  start?: GoalStart; // 開始日の選択（today|tomorrow）。既定=today。
 }
 
 /** 実効ルールの条件行を upsert 入力へ写す（materialize 用）。条件キー・閾値を据え置きで渡す。 */
@@ -248,14 +260,16 @@ function conditionRowToInput(c: RuleConditionRow): ConditionInput {
 }
 
 /**
- * 目標を作成する。開始日は常に翌日、期間は30日固定。採用実践は翌日実効ルールから検証（D1/D3）。
- * `newConditions` があれば、翌日の実効ルールを materialize したうえで新規 TIMELINE 条件を追記し
- * （`upsertFutureRuleSet`）、その `condition_key` を採用リストへ合流させる。作成→採用は同一
- * トランザクションで、途中の失敗（凍結・ジャンル固定・採用不整合）は全体 rollback する。
+ * 目標を作成する。開始日は今日／明日の選択式（既定=今日）、期間は30日固定。
+ * 採用実践は開始日の実効ルール（今日開始なら当日実効ルール＝当日追加を含む）から検証（D1/D3）。
+ * `newConditions` があれば、開始日の実効ルールを materialize したうえで新規 TIMELINE 条件を追記し
+ * （今日開始は当日 DRAFT_TODAY 経路・明日開始は翌日ルール）、その `condition_key` を採用リストへ合流させる。
+ * 作成→採用は同一トランザクションで、途中の失敗（凍結・ジャンル固定・採用不整合）は全体 rollback する。
  */
 export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): GoalView {
   const name = (input.name ?? '').trim();
   if (!name) throw new GoalPracticeError('目標名は必須です');
+  const start: GoalStart = input.start === 'tomorrow' ? 'tomorrow' : 'today';
 
   // インライン新規条件のバリデーション（TIMELINE のみ・label 非空・thresholdSeconds > 0）。
   const newConditions = input.newConditions ?? [];
@@ -273,11 +287,12 @@ export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): 
   if (keys.length === 0) throw new GoalPracticeError('実践を1つ以上採用してください');
 
   const today = todayKey(db, nowMs);
-  const startDay = nextDayKey(today);
+  const startDay = goalStartDay(db, nowMs, start);
   const endDay = addDaysKey(startDay, GOAL_DAYS - 1);
 
   const tx = db.transaction(() => {
-    // インライン条件があれば、翌日の実効ルールを materialize して新規 TIMELINE 条件を追記する。
+    // インライン条件があれば、開始日（今日開始=当日 / 明日開始=翌日）の実効ルールを materialize して
+    // 新規 TIMELINE 条件を追記する。今日開始は当日 add-only 経路（DRAFT_TODAY・baseline 保存）になる。
     // 既存条件は condition_key・閾値を据え置きで渡すため、閾値変更理由要求もジャンル固定も発火しない。
     if (newConditions.length) {
       const eff = getEffectiveRuleSet(db, startDay, nowMs);
@@ -300,12 +315,12 @@ export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): 
       );
     }
 
-    // 採用候補（翌日実効ルール・追記後）に照合し、スナップショットを取る。
-    const candidates = new Map(adoptCandidates(db, nowMs).map((c) => [c.conditionKey, c]));
+    // 採用候補（開始日の実効ルール・追記後）に照合し、スナップショットを取る。
+    const candidates = new Map(adoptCandidates(db, nowMs, start).map((c) => [c.conditionKey, c]));
     const chosen = keys.map((k) => {
       const cand = candidates.get(k);
       if (!cand)
-        throw new GoalPracticeError(`実践「${k}」は翌日の実効ルールに存在しません（採用できません）`);
+        throw new GoalPracticeError(`実践「${k}」は開始日の実効ルールに存在しません（採用できません）`);
       return cand;
     });
 

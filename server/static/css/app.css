@@ -839,6 +839,13 @@ body.rf-page .content { max-width: 1200px; }
 .gr-newcond-badge { font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
 .gr-newcond-text { font-size: 13px; font-weight: 600; }
 
+/* --- 開始日セグメント（今日から／明日から）--- */
+.gr-start-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.gr-start-btn { border: none; background: var(--panel-2); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 600; padding: 7px 16px; cursor: pointer; }
+.gr-start-btn + .gr-start-btn { border-left: 1px solid var(--line); }
+.gr-start-btn.on { background: var(--accent); color: #fff; }
+.gr-start-btn:not(.on):hover { background: var(--panel); }
+
 /* --- 完了レポート（design-brief: bg #eef1f6 / accent #3b5bb5 / white card r14）--- */
 .gr-report { --gr-accent: #3b5bb5; background: #eef1f6; margin: -20px; padding: 26px 30px 44px; min-height: 60vh; }
 .gr-back { border: none; background: transparent; color: var(--gr-accent); font-family: inherit; font-size: 13px; cursor: pointer; padding: 4px 0; margin-bottom: 14px; }

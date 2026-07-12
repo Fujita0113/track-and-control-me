@@ -5,7 +5,7 @@
 //  - スタイルは全て rf-* クラス + CSSOM(CSP: インライン style 属性なし)。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, toast, emptyState } from './util.js';
+import { h, clear, toast, emptyState, addDays } from './util.js';
 import { createMarkdownEditor } from './md-editor.js';
 import { setTomorrowMode } from './kanban.js';
 import { renderMarkdown } from './markdown.js';
@@ -27,7 +27,11 @@ export function hide() {
   ctx = null;
 }
 
-/** デモ: 仮想日付の目標日記を読み取り専用で表示（保存動線なし・spec: 閲覧中心）。 */
+/**
+ * デモ: 目標ごとの記録コーナーの見え方を読み取り専用で表示（保存動線なし・spec: demo-mode）。
+ * 仮想「今日」が目標期間内ならその日のサンプル記録を、期間外（開始前を含む）なら期間内の
+ * 代表日のサンプル記録をプレビューとして表示する（デモ入場直後の空表示を解消）。
+ */
 async function showDemo(root) {
   ctx = null; // 書き込み ctx を持たない → hide() の flush は完全 no-op。
   document.body.classList.remove('rf-page');
@@ -40,25 +44,34 @@ async function showDemo(root) {
 
   const g = state.demo.goal;
   const vd = state.demo.virtualDay;
-  if (!g || vd < g.startDay || vd > g.endDay) {
-    wrap.appendChild(emptyState('この仮想日付はデモの目標期間外です。上部バーで進行中（開始〜完走の間）に進めると、その日の目標日記を閲覧できます。'));
+  if (!g) {
+    wrap.appendChild(emptyState('サンプルを読み込めませんでした。設定タブで「サンプルをリセット」をお試しください。'));
     return;
   }
 
-  const dayNum = dayDiff(g.startDay, vd) + 1;
-  const bodyHost = h('div', { class: 'gr-reader-body' });
-  const card = h('div', { class: 'card' },
-    h('div', { class: 'card-title', text: `${g.name} — Day ${dayNum}/${g.dayCount || 30}（${vd}）の日記` }),
-    bodyHost,
+  const dayCount = g.dayCount || 30;
+  const inPeriod = vd >= g.startDay && vd <= g.endDay;
+  // 期間内はその仮想日付、期間外（開始前含む）は代表日（Day 4・習慣が回っている好調日）を表示する。
+  const targetDay = inPeriod ? vd : addDays(g.startDay, 3);
+  const dayNum = dayDiff(g.startDay, targetDay) + 1;
+
+  const titleRow = h('div', { class: 'row' },
+    h('div', { class: 'card-title', text: `${g.name} — Day ${dayNum}/${dayCount}（${targetDay}）の記録` }),
+    h('div', { class: 'spacer' }),
   );
-  wrap.appendChild(card);
+  if (!inPeriod) titleRow.appendChild(h('span', { class: 'badge', text: 'プレビュー' }));
+
+  const bodyHost = h('div', { class: 'gr-reader-body' });
+  wrap.appendChild(h('div', { class: 'card' }, titleRow, bodyHost));
 
   let content = '';
-  try { const r = await api.demo.journal(g.id, vd); content = r.content || ''; } catch { /* noop */ }
+  try { const r = await api.demo.journal(g.id, targetDay); content = r.content || ''; } catch { /* noop */ }
   if (content.trim()) bodyHost.appendChild(renderMarkdown(content));
   else bodyHost.appendChild(h('p', { class: 'muted', text: 'この日の記録はありません。' }));
 
-  wrap.appendChild(h('p', { class: 'muted', text: 'デモでは閲覧のみです。上部バーで日付を進めると、各日の日記を読み進められます。完走レポートの「毎日の日記」も同じ内容です。' }));
+  wrap.appendChild(h('p', { class: 'muted', text: inPeriod
+    ? 'デモでは閲覧のみです。上部バーで日付を進めると、各日の日記を読み進められます。完走レポートの「毎日の日記」も同じ内容です。'
+    : 'この仮想日付は目標期間外のため、記録コーナーの見え方を代表日のサンプルでプレビューしています。上部バーで進行中（開始〜完走の間）に進めると、その日の記録を閲覧できます。' }));
 }
 
 export async function show(root) {

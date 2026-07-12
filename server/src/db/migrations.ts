@@ -518,4 +518,62 @@ CREATE TABLE goal_journal (
 ALTER TABLE activity_log_entry ADD COLUMN co_record_group_id INTEGER;
 `,
   },
+  {
+    version: 13,
+    name: 'same-day-rule-additions-triggers',
+    sql: /* sql */ `
+-- 当日ルールへの新規条件の追加を許可する（spec: same-day-rule-additions / design.md D1）。
+-- 凍結の DB トリガ backstop は残しつつ、「当日のみ可変」の新ステータス DRAFT_TODAY を
+-- DRAFT_FUTURE と同じく可変扱いにする（可変判定を status IN ('DRAFT_FUTURE','DRAFT_TODAY') へ緩める）。
+-- status は TEXT・CHECK 無しのため値追加にスキーマ変更は不要（既存行は無変更）。
+-- 真に凍結された FROZEN_ACTIVE/PAST 行は従来どおりハードロックのまま。
+-- v2/v4 と同一の 5 トリガを drop → 可変判定だけ緩めて再作成する。
+
+DROP TRIGGER trg_rule_set_no_content_edit_when_frozen;
+DROP TRIGGER trg_rule_set_no_delete_when_frozen;
+DROP TRIGGER trg_rule_cond_no_insert_when_frozen;
+DROP TRIGGER trg_rule_cond_no_update_when_frozen;
+DROP TRIGGER trg_rule_cond_no_delete_when_frozen;
+
+CREATE TRIGGER trg_rule_set_no_content_edit_when_frozen
+BEFORE UPDATE ON daily_rule_set
+FOR EACH ROW
+WHEN OLD.status NOT IN ('DRAFT_FUTURE', 'DRAFT_TODAY') AND NEW.combinator <> OLD.combinator
+BEGIN
+  SELECT RAISE(ABORT, 'frozen rule set: content edit rejected');
+END;
+
+CREATE TRIGGER trg_rule_set_no_delete_when_frozen
+BEFORE DELETE ON daily_rule_set
+FOR EACH ROW
+WHEN OLD.status NOT IN ('DRAFT_FUTURE', 'DRAFT_TODAY')
+BEGIN
+  SELECT RAISE(ABORT, 'frozen rule set: delete rejected');
+END;
+
+CREATE TRIGGER trg_rule_cond_no_insert_when_frozen
+BEFORE INSERT ON rule_condition
+FOR EACH ROW
+WHEN (SELECT status FROM daily_rule_set WHERE id = NEW.rule_set_id) NOT IN ('DRAFT_FUTURE', 'DRAFT_TODAY')
+BEGIN
+  SELECT RAISE(ABORT, 'frozen rule set: condition insert rejected');
+END;
+
+CREATE TRIGGER trg_rule_cond_no_update_when_frozen
+BEFORE UPDATE ON rule_condition
+FOR EACH ROW
+WHEN (SELECT status FROM daily_rule_set WHERE id = OLD.rule_set_id) NOT IN ('DRAFT_FUTURE', 'DRAFT_TODAY')
+BEGIN
+  SELECT RAISE(ABORT, 'frozen rule set: condition update rejected');
+END;
+
+CREATE TRIGGER trg_rule_cond_no_delete_when_frozen
+BEFORE DELETE ON rule_condition
+FOR EACH ROW
+WHEN (SELECT status FROM daily_rule_set WHERE id = OLD.rule_set_id) NOT IN ('DRAFT_FUTURE', 'DRAFT_TODAY')
+BEGIN
+  SELECT RAISE(ABORT, 'frozen rule set: condition delete rejected');
+END;
+`,
+  },
 ];

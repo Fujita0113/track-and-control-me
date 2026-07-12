@@ -15,15 +15,24 @@ import {
   GoalReportNotReadyError,
   JournalNotWritableError,
   type NewInlineCondition,
+  type GoalStart,
 } from '../services/goals.js';
-import { GoalLockError, ThresholdReasonRequiredError, FrozenRuleError } from '../rules/rules.js';
+import { GoalLockError, ThresholdReasonRequiredError, BaselineViolationError, FrozenRuleError } from '../rules/rules.js';
+
+/** 開始日クエリ/ボディを today|tomorrow に正規化（既定=today）。 */
+function normalizeStart(raw: unknown): GoalStart {
+  return raw === 'tomorrow' ? 'tomorrow' : 'today';
+}
 
 /** 30日チャレンジ API（spec: goal-challenge / goal-journal / goal-report）。 */
 export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
   const { db } = deps;
 
-  // 採用候補（翌日実効ルール）。:id より先に定義する（静的セグメント優先の明示）。
-  app.get('/api/goals/candidates', async () => adoptCandidates(db));
+  // 採用候補（開始日の実効ルール）。:id より先に定義する（静的セグメント優先の明示）。
+  // ?start=today|tomorrow で解決元を切替（既定=today）。
+  app.get('/api/goals/candidates', async (req) =>
+    adoptCandidates(db, undefined, normalizeStart((req.query as { start?: string }).start)),
+  );
 
   app.get('/api/goals', async () => listGoals(db));
 
@@ -33,6 +42,7 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
       purpose?: string;
       practices?: string[];
       newConditions?: NewInlineCondition[];
+      start?: string;
     };
     try {
       return createGoal(db, {
@@ -40,10 +50,16 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
         purpose: b.purpose,
         practices: b.practices ?? [],
         newConditions: b.newConditions ?? [],
+        start: normalizeStart(b.start),
       });
     } catch (err) {
-      // バリデーション・閾値理由必須は 400、凍結・ジャンル固定は 409。
-      if (err instanceof GoalPracticeError || err instanceof ThresholdReasonRequiredError) {
+      // バリデーション・閾値理由必須・baseline 違反は 400、凍結・ジャンル固定は 409。
+      // BaselineViolationError は FrozenRuleError の派生なので先に判定する。
+      if (
+        err instanceof GoalPracticeError ||
+        err instanceof ThresholdReasonRequiredError ||
+        err instanceof BaselineViolationError
+      ) {
         reply.code(400);
         return { error: err.message };
       }

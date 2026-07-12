@@ -69,7 +69,7 @@ async function renderList(root) {
   if (!goals.length) {
     body.appendChild(emptyState(isDemo()
       ? 'サンプルを読み込めませんでした。設定タブで「サンプルをリセット」をお試しください。'
-      : 'まだ目標がありません。「＋ 新しい目標」から、翌日の実効ルールの実践を採用して30日チャレンジを始められます。'));
+      : 'まだ目標がありません。「＋ 新しい目標」から、開始日（今日／明日）の実効ルールの実践を採用して30日チャレンジを始められます。'));
     return;
   }
 
@@ -131,7 +131,8 @@ function goalCard(g, root) {
 // --- 新規作成フォーム -----------------------------------------------------
 async function openCreateForm(onDone) {
   const body = h('div', { class: 'modal-body stack' });
-  body.appendChild(h('p', { class: 'muted', text: '目標は翌日から30日間の固定期間で始まります。採用した実践は期間中ジャンル固定になります（閾値の変更は理由つきで可能）。' }));
+  const introEl = h('p', { class: 'muted' });
+  body.appendChild(introEl);
 
   const nameInp = h('input', { type: 'text', class: 'gr-input', placeholder: '目標名（例: メンタルを安定させる）' });
   const purposeInp = h('input', { type: 'text', class: 'gr-input', placeholder: '目的の一文（任意）' });
@@ -140,17 +141,56 @@ async function openCreateForm(onDone) {
   body.appendChild(h('label', { class: 'gr-flabel', text: '目的' }));
   body.appendChild(purposeInp);
 
-  body.appendChild(h('label', { class: 'gr-flabel', text: '採用する実践（翌日の実効ルールから）' }));
+  // --- 開始日の選択（今日から／明日から・既定=今日から）------------------
+  // 今日開始は当日を Day1 として即「進行中」。採用候補は選んだ開始日の実効ルールから解決する。
+  let start = 'today';
+  body.appendChild(h('label', { class: 'gr-flabel', text: '開始日' }));
+  const startSeg = h('div', { class: 'gr-start-seg' });
+  const startBtns = [
+    { v: 'today', label: '今日から' },
+    { v: 'tomorrow', label: '明日から' },
+  ].map(({ v, label }) => {
+    const b = h('button', { class: 'gr-start-btn', type: 'button', text: label });
+    if (v === start) b.classList.add('on');
+    b.addEventListener('click', () => {
+      if (start === v) return;
+      start = v;
+      for (const x of startSeg.children) x.classList.toggle('on', x === b);
+      syncIntro();
+      loadCandidates();
+    });
+    startSeg.appendChild(b);
+    return b;
+  });
+  body.appendChild(startSeg);
+  const syncIntro = () => {
+    introEl.textContent = start === 'today'
+      ? '目標は今日から30日間の固定期間で始まり、当日を Day 1 として進行します。採用した実践は期間中ジャンル固定になります（当日に採用した条件は当日から固定・閾値の変更は理由つきで可能）。'
+      : '目標は明日から30日間の固定期間で始まります。採用した実践は期間中ジャンル固定になります（閾値の変更は理由つきで可能）。';
+  };
+  syncIntro();
+
+  const candLabel = h('label', { class: 'gr-flabel' });
+  body.appendChild(candLabel);
   const candHost = h('div', { class: 'list' });
   body.appendChild(candHost);
-  candHost.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
 
-  let candidates = [];
-  try { candidates = await api.getGoalCandidates(); } catch { candidates = []; }
-  clear(candHost);
-  if (!candidates.length) {
-    candHost.appendChild(emptyState('翌日の実効ルールに採用できる実践がありません。先に「今日」タブでルールを作成してください。'));
-  } else {
+  // 開始日に連動して採用候補を解決・再描画する。
+  const loadCandidates = async () => {
+    candLabel.textContent = start === 'today'
+      ? '採用する実践（今日の実効ルールから）'
+      : '採用する実践（明日の実効ルールから）';
+    clear(candHost);
+    candHost.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
+    let candidates = [];
+    try { candidates = await api.getGoalCandidates(start); } catch { candidates = []; }
+    clear(candHost);
+    if (!candidates.length) {
+      candHost.appendChild(emptyState(start === 'today'
+        ? '今日の実効ルールに採用できる実践がありません。先に「今日」タブでルールを作成するか、下の「その場で作る習慣」を追加してください。'
+        : '明日の実効ルールに採用できる実践がありません。先に「今日」タブでルールを作成してください。'));
+      return;
+    }
     for (const c of candidates) {
       const box = h('input', { type: 'checkbox', value: c.conditionKey });
       const label = niceLabel(c.target, c.conditionKey, c.label);
@@ -161,12 +201,13 @@ async function openCreateForm(onDone) {
         h('div', { class: 'cond-main' }, h('div', { class: 'cond-title', text: label + sub })),
       ));
     }
-  }
+  };
+  await loadCandidates();
 
   // --- その場で作る習慣（新規 TIMELINE 条件）を採用する（D5）--------------
   // 既存候補の採用に加え、カテゴリ＋分数で新規条件を作り、作成時に翌日ルールへ追記して採用する。
   body.appendChild(h('label', { class: 'gr-flabel', text: 'その場で作る習慣（タイムライン記録）' }));
-  body.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', margin: '0' }, text: 'まだルールに無いカテゴリを「◯分以上」の習慣として追加します。作成すると翌日のルールに加わり、この目標に採用されます。' }));
+  body.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', margin: '0' }, text: 'まだルールに無いカテゴリを「◯分以上」の習慣として追加します。作成すると開始日（今日／明日）のルールに加わり、この目標に採用されます。' }));
 
   const newRows = []; // { label, minutes }
   const newHost = h('div', { class: 'stack gr-newconds' });
@@ -225,7 +266,7 @@ async function openCreateForm(onDone) {
     if (!practices.length && !newConditions.length) { toast('実践を1つ以上選ぶか、習慣を追加してください', 'err'); return; }
     save.disabled = true;
     try {
-      await api.createGoal({ name, purpose: purposeInp.value.trim(), practices, newConditions });
+      await api.createGoal({ name, purpose: purposeInp.value.trim(), practices, newConditions, start });
       toast('目標を作成しました', 'ok');
       closeModal();
       onDone();
