@@ -339,7 +339,10 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
   color: #fff; cursor: pointer; z-index: 10; box-shadow: 0 1px 2px rgba(0,0,0,0.18);
   display: flex; flex-direction: column; gap: 1px;
 }
-.tlc-block.short { padding: 3px 8px; }
+/* 短ブロック: 名前1行を縦中央・行間詰めで収め、縦に見切れさせない(timeline-tweaks-2 D4)。 */
+.tlc-block.short { padding: 3px 8px; justify-content: center; line-height: 1.1; }
+/* 極短ブロック: テキスト非描画・色バーのみ(名前はホバー tooltip / クリック詳細)。 */
+.tlc-block.tiny { padding: 0; }
 .tlc-block.leisure {
   background: #f1f3f4; border: 1px dashed var(--muted-2); box-shadow: none; color: #5f6368;
 }
@@ -348,7 +351,9 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
   background: var(--accent-weak); border: 1px solid var(--accent); border-left: 3px solid var(--accent); color: var(--accent);
 }
 .tlc-block.leisure.tracked .tlc-b-time { color: var(--accent); opacity: 0.85; }
-.tlc-b-name { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* flex:none で名前は縮まず1行を保持し、溢れは末尾の補助行(時間帯/バッジ)側で切る。
+   これが無いと固定高ブロックで先頭の名前が縦に潰れて見切れる(timeline-tweaks-2)。 */
+.tlc-b-name { flex: none; font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tlc-block.leisure .tlc-b-name { padding-right: 52px; }
 .tlc-b-time { font-size: 11px; color: rgba(255,255,255,0.9); }
 .tlc-block.leisure .tlc-b-time { color: #80868b; }
@@ -396,7 +401,10 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
 .tlc-pop {
   position: fixed; z-index: 50; background: var(--panel); border-radius: 12px; padding: 16px;
   box-shadow: 0 8px 28px rgba(0,0,0,0.22), 0 2px 6px rgba(0,0,0,0.12);
+  max-height: calc(100vh - 24px); overflow-y: auto;
 }
+/* ヘッダーを掴んで移動できることを示す(timeline-tweaks-2: ドラッグ移動)。 */
+.tlc-pop [data-drag-handle], .tlc-pop-title { cursor: move; }
 .tlc-pop-head { display: flex; align-items: flex-start; gap: 10px; }
 .tlc-pop-head .grow { flex: 1; min-width: 0; }
 .tlc-pop-dot { width: 14px; height: 14px; border-radius: 4px; flex: none; margin-top: 3px; }
