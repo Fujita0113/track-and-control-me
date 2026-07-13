@@ -4,6 +4,7 @@ import {
   getEffectiveRuleSet,
   upsertFutureRuleSet,
   effectiveTimeThresholds,
+  deriveConditionKey,
   type ConditionInput,
   type RuleConditionRow,
 } from '../rules/rules.js';
@@ -249,11 +250,19 @@ function dayKeyOf(db: DB, ms: number): string {
   return todayKey(db, ms);
 }
 
-/** 目標作成時にその場で作成して採用する新規条件（初期対応は TIMELINE のみ・D3/D4）。 */
+/**
+ * 目標作成時にその場で作成して採用する新規条件（全5ターゲット対応・D3）。
+ * 今日タブの条件エディタ `condEditorRow._get()` と同形の target 別フィールドを持つ:
+ * 時間型（`TOTAL_WORK`/`GROUP`/`TIMELINE`）は `thresholdSeconds`、`GROUP` は `stableGroupId`、
+ * `TIMELINE`/`MANUAL_CHECK` は `label`、`PLANNING` は `signalKey`。バリデーションは createGoal 側で target 別に行う。
+ * TIMELINE 形（`{ target:'TIMELINE', label, thresholdSeconds }`）は後方互換でそのまま受理される。
+ */
 export interface NewInlineCondition {
-  target: 'TIMELINE';
-  label: string;
-  thresholdSeconds: number;
+  target: GoalPracticeTarget;
+  thresholdSeconds?: number;
+  stableGroupId?: string | null;
+  label?: string | null;
+  signalKey?: string | null;
 }
 
 export interface CreateGoalInput {
@@ -262,6 +271,23 @@ export interface CreateGoalInput {
   practices: string[]; // condition_key の配列
   newConditions?: NewInlineCondition[]; // その場で作成して採用する新規条件（開始日ルールへ追記・D3/D4）。
   start?: GoalStart; // 開始日の選択（today|tomorrow）。既定=today。
+}
+
+/**
+ * インライン新規条件（NewInlineCondition）を upsert 入力（ConditionInput）へ写す。
+ * label は前後空白を除いて渡す（TIMELINE の condition_key＝`timeline:<ラベル>` とスナップショットを揃える）。
+ * conditionKey は指定せず、deriveConditionKey に target 別の導出を委ねる。
+ */
+function inlineToInput(nc: NewInlineCondition): ConditionInput {
+  const label = (nc.label ?? '').toString().trim();
+  return {
+    target: nc.target,
+    stableGroupId: (nc.stableGroupId ?? '').toString().trim() || null,
+    comparator: 'GTE',
+    thresholdSeconds: typeof nc.thresholdSeconds === 'number' ? nc.thresholdSeconds : null,
+    label: label || null,
+    signalKey: (nc.signalKey ?? null) as string | null,
+  };
 }
 
 /** 実効ルールの条件行を upsert 入力へ写す（materialize 用）。条件キー・閾値を据え置きで渡す。 */
@@ -289,18 +315,30 @@ export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): 
   if (!name) throw new GoalPracticeError('目標名は必須です');
   const start: GoalStart = input.start === 'tomorrow' ? 'tomorrow' : 'today';
 
-  // インライン新規条件のバリデーション（TIMELINE のみ・label 非空・thresholdSeconds > 0）。
+  // インライン新規条件のバリデーション（全5ターゲット・target 別）。今日タブの条件エディタと同等。
   const newConditions = input.newConditions ?? [];
   for (const nc of newConditions) {
-    if (nc.target !== 'TIMELINE')
-      throw new GoalPracticeError('その場で作成できる条件はタイムライン記録（TIMELINE）のみです');
-    if (!(nc.label ?? '').trim()) throw new GoalPracticeError('カテゴリ名を入力してください');
-    if (!(typeof nc.thresholdSeconds === 'number' && nc.thresholdSeconds > 0))
+    const t = nc.target;
+    if (t !== 'TOTAL_WORK' && t !== 'GROUP' && t !== 'TIMELINE' && t !== 'MANUAL_CHECK' && t !== 'PLANNING')
+      throw new GoalPracticeError('その場で作成できない条件種別です');
+    // 時間型（TOTAL_WORK / GROUP / TIMELINE）は分数 > 0 必須。
+    if (TIME_TARGETS.has(t) && !(typeof nc.thresholdSeconds === 'number' && nc.thresholdSeconds > 0))
       throw new GoalPracticeError('時間（分）は1分以上で指定してください');
+    if (t === 'GROUP') {
+      const sg = (nc.stableGroupId ?? '').trim();
+      if (!sg) throw new GoalPracticeError('グループを選択してください');
+      const exists = db.prepare('SELECT 1 FROM tab_group WHERE stable_group_id = ?').get(sg);
+      if (!exists) throw new GoalPracticeError('選択したグループが存在しません');
+    }
+    // TIMELINE はカテゴリ名、MANUAL_CHECK はチェック名として label 非空必須。
+    if ((t === 'TIMELINE' || t === 'MANUAL_CHECK') && !(nc.label ?? '').trim())
+      throw new GoalPracticeError(t === 'TIMELINE' ? 'カテゴリ名を入力してください' : 'チェック名を入力してください');
+    if (t === 'PLANNING' && !String(nc.signalKey ?? '').trim())
+      throw new GoalPracticeError('翌日計画のシグナルを選択してください');
   }
 
   const explicitKeys = input.practices ?? [];
-  const inlineKeys = newConditions.map((nc) => `timeline:${nc.label.trim()}`);
+  const inlineKeys = newConditions.map((nc) => deriveConditionKey(inlineToInput(nc)));
   const keys = Array.from(new Set([...explicitKeys, ...inlineKeys]));
   if (keys.length === 0) throw new GoalPracticeError('実践を1つ以上採用してください');
 
@@ -315,22 +353,27 @@ export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): 
     if (newConditions.length) {
       const eff = getEffectiveRuleSet(db, startDay, nowMs);
       const existing = (eff?.conditions ?? []).map(conditionRowToInput);
-      const seen = new Set(
-        existing.filter((c) => c.target === 'TIMELINE').map((c) => (c.label ?? '').trim()),
-      );
+      // 既存キー（singleton の total_work/planning:* や同名 group:/timeline:/manual: を含む）は
+      // deriveConditionKey で突合し、追記から除外して既存採用へ寄せる（重複追記しない）。
+      const seen = new Set(existing.map((c) => deriveConditionKey(c)));
       const appended: ConditionInput[] = [];
       for (const nc of newConditions) {
-        const label = nc.label.trim();
-        if (seen.has(label)) continue; // 既存/重複ラベルは追記せず既存キー採用へ寄せる。
-        seen.add(label);
-        appended.push({ target: 'TIMELINE', label, thresholdSeconds: nc.thresholdSeconds, comparator: 'GTE' });
+        const ci = inlineToInput(nc);
+        const key = deriveConditionKey(ci);
+        if (seen.has(key)) continue; // 既存/重複キーは追記せず既存キー採用へ寄せる。
+        seen.add(key);
+        appended.push(ci);
       }
-      upsertFutureRuleSet(
-        db,
-        startDay,
-        { combinator: (eff?.ruleSet.combinator as 'ALL') || 'ALL', conditions: [...existing, ...appended] },
-        nowMs,
-      );
+      // 追記が1つでもあれば開始日ルールへ追記（今日開始は当日 add-only 経路・明日開始は翌日ルール）。
+      // 全て既存キーで追記不要なら書き込みを省く（既存採用のみへ寄せる）。
+      if (appended.length) {
+        upsertFutureRuleSet(
+          db,
+          startDay,
+          { combinator: (eff?.ruleSet.combinator as 'ALL') || 'ALL', conditions: [...existing, ...appended] },
+          nowMs,
+        );
+      }
     }
 
     // 採用候補（開始日の実効ルール・追記後）に照合し、スナップショットを取る。

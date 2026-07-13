@@ -5,6 +5,7 @@ import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, toast, openModal, closeModal, emptyState, fmtHM } from './util.js';
 import { planningSignalLabel } from './targets.js';
+import { condEditorRow } from './rules.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
 import { shrinkImage, isImageFile } from './images.js';
@@ -231,16 +232,38 @@ async function openCreateForm(onDone) {
   };
   syncIntro();
 
-  const candLabel = h('label', { class: 'gr-flabel' });
-  body.appendChild(candLabel);
+  // --- 毎日やること（既存項目の選択 ＋ その場で新規作成を1ブロックに統合）--------
+  // 見出し横の＋から、今日タブと同じ条件エディタ（condEditorRow）で全5ターゲットを新規作成できる。
+  // 既存の実効ルール項目はチェックで選び、新規行は「これから作成」として開始日ルールへ追記される。
+  const groups = await api.getGroups().catch(() => []);
+
+  // ＋で追加する新規行のホスト（condEditorRow をそのまま挿す）。
+  const addHost = h('div', { class: 'list gr-newconds' });
+  const addBtn = h('button', {
+    class: 'btn small', type: 'button', text: '＋ 追加', title: '毎日やることを追加', 'aria-label': '毎日やることを追加',
+  });
+  addBtn.addEventListener('click', () => {
+    // 既定は TIMELINE（カテゴリ＋分数）。種別セレクトで全5ターゲットへ切替できる。削除も可能。
+    const row = condEditorRow({ target: 'TIMELINE', label: '', minutes: 30 }, groups, false);
+    row.classList.add('gr-newcond-editor');
+    addHost.appendChild(row);
+  });
+  body.appendChild(h('div', { class: 'section-head gr-daily-head' },
+    h('label', { class: 'gr-flabel', text: '毎日やること' }),
+    addBtn,
+  ));
+  const noteEl = h('p', { class: 'muted', style: { fontSize: '12px', margin: '0' } });
+  body.appendChild(noteEl);
+
   const candHost = h('div', { class: 'list' });
   body.appendChild(candHost);
+  body.appendChild(addHost);
 
-  // 開始日に連動して採用候補を解決・再描画する。
+  // 開始日に連動して既存項目（実効ルール）を解決・再描画する。＋の新規行は開始日に依らないので保持する。
   const loadCandidates = async () => {
-    candLabel.textContent = start === 'today'
-      ? '採用する実践（今日の実効ルールから）'
-      : '採用する実践（明日の実効ルールから）';
+    noteEl.textContent = start === 'today'
+      ? '今日の実効ルールにある項目を選ぶか、＋から新しく作れます（作成すると今日のルールに加わります）。'
+      : '明日の実効ルールにある項目を選ぶか、＋から新しく作れます（作成すると明日のルールに加わります）。';
     clear(candHost);
     candHost.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
     let candidates = [];
@@ -248,8 +271,8 @@ async function openCreateForm(onDone) {
     clear(candHost);
     if (!candidates.length) {
       candHost.appendChild(emptyState(start === 'today'
-        ? '今日の実効ルールに採用できる実践がありません。先に「今日」タブでルールを作成するか、下の「その場で作る習慣」を追加してください。'
-        : '明日の実効ルールに採用できる実践がありません。先に「今日」タブでルールを作成してください。'));
+        ? '今日の実効ルールに選べる項目がありません。＋から新しく作れます。'
+        : '明日の実効ルールに選べる項目がありません。＋から新しく作れます。'));
       return;
     }
     for (const c of candidates) {
@@ -268,59 +291,6 @@ async function openCreateForm(onDone) {
   };
   await loadCandidates();
 
-  // --- その場で作る習慣（新規 TIMELINE 条件）を採用する（D5）--------------
-  // 既存候補の採用に加え、カテゴリ＋分数で新規条件を作り、作成時に翌日ルールへ追記して採用する。
-  body.appendChild(h('label', { class: 'gr-flabel', text: 'その場で作る習慣（タイムライン記録）' }));
-  body.appendChild(h('p', { class: 'muted', style: { fontSize: '12px', margin: '0' }, text: 'まだルールに無いカテゴリを「◯分以上」の習慣として追加します。作成すると開始日（今日／明日）のルールに加わり、この目標に採用されます。' }));
-
-  const newRows = []; // { label, minutes }
-  const newHost = h('div', { class: 'stack gr-newconds' });
-
-  // カテゴリ補完用 datalist（GET /api/categories・自由入力可）。
-  const catListId = 'goal-new-cat-list';
-  const datalist = h('datalist', { id: catListId });
-  api.getCategories().then((rows) => {
-    for (const r of (Array.isArray(rows) ? rows : [])) {
-      if (r && r.name) datalist.appendChild(h('option', { value: r.name }));
-    }
-  }).catch(() => { /* 補完が無くても自由入力できる */ });
-
-  const renderNewRows = () => {
-    clear(newHost);
-    newRows.forEach((r, i) => {
-      const rm = h('button', { class: 'btn small', text: '削除', type: 'button' });
-      rm.addEventListener('click', () => { newRows.splice(i, 1); renderNewRows(); });
-      newHost.appendChild(h('div', { class: 'gr-newcond-row' },
-        h('span', { class: 'gr-newcond-badge', text: 'これから作成' }),
-        h('span', { class: 'gr-newcond-text', text: `${r.label} ${r.minutes}分以上` }),
-        h('div', { class: 'spacer' }),
-        rm,
-      ));
-    });
-  };
-
-  const catInp = h('input', { type: 'text', class: 'gr-input', placeholder: 'カテゴリ（例: 掃除）', list: catListId });
-  const minInp = h('input', { type: 'number', class: 'gr-input gr-min-input', placeholder: '分', min: '1', step: '1' });
-  const addBtn = h('button', { class: 'btn', text: '＋ 習慣を追加', type: 'button' });
-  const addNewRow = () => {
-    const label = catInp.value.trim();
-    const minutes = Math.floor(Number(minInp.value));
-    if (!label) { toast('カテゴリ名を入力してください', 'err'); return; }
-    if (!(minutes > 0)) { toast('分数は1以上で入力してください', 'err'); return; }
-    newRows.push({ label, minutes });
-    catInp.value = ''; minInp.value = '';
-    renderNewRows();
-    catInp.focus();
-  };
-  addBtn.addEventListener('click', addNewRow);
-  // 分数欄で Enter 追加（IME 変換確定の Enter は無視）。
-  minInp.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addNewRow(); }
-  });
-  body.appendChild(h('div', { class: 'gr-newcond-form' }, catInp, minInp, addBtn));
-  body.appendChild(datalist);
-  body.appendChild(newHost);
-
   // 初日写真のステージング（作成時に Day1 へ保存）。
   const stager = buildCreateImageStager();
   body.appendChild(h('label', { class: 'gr-flabel', text: '初日の写真（任意）' }));
@@ -331,8 +301,9 @@ async function openCreateForm(onDone) {
     const name = nameInp.value.trim();
     if (!name) { toast('目標名を入力してください', 'err'); return; }
     const practices = [...candHost.querySelectorAll('input[type="checkbox"]:checked')].map((b) => b.value);
-    const newConditions = newRows.map((r) => ({ target: 'TIMELINE', label: r.label, thresholdSeconds: r.minutes * 60 }));
-    if (!practices.length && !newConditions.length) { toast('実践を1つ以上選ぶか、習慣を追加してください', 'err'); return; }
+    // ＋で追加した各行の _get()（{target, thresholdSeconds?, stableGroupId?, label?, signalKey?}）をそのまま送る。
+    const newConditions = [...addHost.querySelectorAll('.cond-editor')].map((row) => row._get && row._get()).filter(Boolean);
+    if (!practices.length && !newConditions.length) { toast('毎日やることを1つ以上選ぶか、＋から追加してください', 'err'); return; }
     save.disabled = true;
     try {
       const g = await api.createGoal({ name, purpose: purposeInp.value.trim(), practices, newConditions, start });

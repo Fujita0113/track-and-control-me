@@ -380,7 +380,12 @@ function fromRow(c) {
   };
 }
 
-function condEditorRow(c, groups, locked = false) {
+/**
+ * 単一の条件エディタ行（純粋な行ビルダー）。全5ターゲット＋PLANNING フラット化・カテゴリ補完・
+ * グループ選択を1つの <select> で扱う。goals.js の「毎日やること」からも再利用する（locked=false）。
+ * `row._get()` が `{ target, thresholdSeconds?, stableGroupId?, label?, signalKey? }` を返す。
+ */
+export function condEditorRow(c, groups, locked = false) {
   // 条件はフラットな1つの <select>。PLANNING は signal_key ごとの項目(今日の振り返り / 明日のタスク登録 …)。
   const kindSel = h('select', {}, ...CONDITION_KINDS.map((k) => h('option', { value: k.v }, k.label)));
   const kindVal = conditionKindValue(c.target, c.signalKey);

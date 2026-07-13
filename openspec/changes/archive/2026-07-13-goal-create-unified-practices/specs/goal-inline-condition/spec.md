@@ -1,9 +1,9 @@
-# goal-inline-condition Specification
+## RENAMED Requirements
 
-## Purpose
-TBD - created by syncing change goal-inline-rule-timeline-highlight. Update Purpose after archive.
+- FROM: `### Requirement: 目標作成時に新規 TIMELINE 条件を作成して採用できる`
+- TO: `### Requirement: 目標作成時に新規条件を作成して採用できる`
 
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 目標作成時に新規条件を作成して採用できる
 
@@ -58,17 +58,3 @@ TBD - created by syncing change goal-inline-rule-timeline-highlight. Update Purp
 
 - **WHEN** 目標作成のインライン作成で全5ターゲット以外の未知ターゲットを指定する
 - **THEN** 400 エラーで拒否され、目標もルールも変更されない
-
-### Requirement: インライン作成は既存の採用条件・ルールを壊さない
-
-目標作成時のインライン条件追記は、**開始日（今日／明日）**の実効ルールに現存する条件を据え置きで保持したうえで新規条件を加える SHALL。既存条件の `condition_key`・閾値を変更しないため、既存採用条件のジャンル固定を破らず、閾値変更の理由要求も発生させない（MUST NOT）。開始日が明示ルールを持たずフォールバック継承である場合、その継承内容を明示ルールとして materialize したうえで追記 SHALL する（内容は同一のため既存採用条件は残存する）。今日開始で当日ルールへ materialize/追記する場合も、baseline（day 開始時点の実効条件）を保存し、既存条件を欠かせない SHALL。
-
-#### Scenario: 既存の開始日条件が保持される
-
-- **WHEN** 開始日の実効ルールに `total_work` 条件がある状態で、新規「掃除15分」条件を追加して目標を作成する
-- **THEN** 開始日ルールには `total_work` と `timeline:掃除` の両方が存在し、`total_work` の閾値・キーは変わらない
-
-#### Scenario: 既存採用条件のジャンル固定を破らない
-
-- **WHEN** 別目標が `total_work` を採用中の状態で、新規 TIMELINE 条件のインライン追加を行う
-- **THEN** `total_work` は翌日ルールに残るため GoalLockError は発生せず、追記と採用が成功する

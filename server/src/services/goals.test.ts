@@ -22,6 +22,7 @@ import {
   JournalImageError,
   JournalImageNotFoundError,
   GoalPracticeError,
+  type GoalPracticeTarget,
 } from './goals.js';
 
 /** テスト用 data URL（バイト内容は検証しないので任意バイト列でよい）。 */
@@ -253,13 +254,111 @@ describe('目標作成時のインライン条件作成（newConditions・明日
     expect((db.prepare('SELECT COUNT(*) AS c FROM practice_threshold_change').get() as { c: number }).c).toBe(0);
   });
 
-  it('TIMELINE 以外・label 空・分数0 は拒否され、目標もルールも作られない（rollback）', () => {
+  it('TOTAL_WORK をその場で作成して採用でき、開始日ルールへ total_work（14400秒）が追記される', () => {
+    // 開始日ルールに total_work が無い状態（TIMELINE のみ）を作る。
+    upsertFutureRuleSet(db, START, { conditions: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 }] }, NOW_TODAY);
+    const g = createGoal(
+      db,
+      { name: '総作業4h', practices: [], newConditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    expect(g.practices.map((p) => p.conditionKey)).toContain('total_work');
+    expect(ruleThresholds(START).get('total_work')).toBe(14400);
+  });
+
+  it('GROUP をその場で作成して採用でき、group:<id>（7200秒）が追記される', () => {
+    upsertFutureRuleSet(db, START, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }] }, NOW_TODAY);
+    // 既存グループを1つ用意する（バリデーションが tab_group の存在を要求する）。
+    db.prepare(
+      `INSERT INTO tab_group (stable_group_id, name, color, external_group_id, first_seen_at, last_seen_at)
+       VALUES ('g-reading', '読書', NULL, NULL, ?, ?)`,
+    ).run(NOW_TODAY, NOW_TODAY);
+    const g = createGoal(
+      db,
+      { name: '読書2h', practices: [], newConditions: [{ target: 'GROUP', stableGroupId: 'g-reading', thresholdSeconds: 7200 }], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    expect(g.practices.map((p) => p.conditionKey)).toContain('group:g-reading');
+    const p = g.practices.find((x) => x.conditionKey === 'group:g-reading')!;
+    expect(p.target).toBe('GROUP');
+    expect(ruleThresholds(START).get('group:g-reading')).toBe(7200);
+  });
+
+  it('MANUAL_CHECK をその場で作成して採用でき、manual:<ラベル>（閾値なし）が追記される', () => {
+    upsertFutureRuleSet(db, START, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }] }, NOW_TODAY);
+    const g = createGoal(
+      db,
+      { name: '筋トレ習慣', practices: [], newConditions: [{ target: 'MANUAL_CHECK', label: '筋トレ' }], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    expect(g.practices.map((p) => p.conditionKey)).toContain('manual:筋トレ');
+    const p = g.practices.find((x) => x.conditionKey === 'manual:筋トレ')!;
+    expect(p.target).toBe('MANUAL_CHECK');
+    expect(p.label).toBe('筋トレ');
+    // 非時間型なので閾値は無い。
+    const rs = getRuleSet(db, START)!;
+    expect(rs.conditions.find((c) => c.condition_key === 'manual:筋トレ')!.threshold_seconds).toBeNull();
+  });
+
+  it('PLANNING をその場で作成して採用でき、planning:<signalKey> が追記される', () => {
+    upsertFutureRuleSet(db, START, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }] }, NOW_TODAY);
+    const g = createGoal(
+      db,
+      { name: '計画習慣', practices: [], newConditions: [{ target: 'PLANNING', signalKey: 'reflection_done' }], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    expect(g.practices.map((p) => p.conditionKey)).toContain('planning:reflection_done');
+    expect(g.practices.find((x) => x.conditionKey === 'planning:reflection_done')!.target).toBe('PLANNING');
+    expect(getRuleSet(db, START)!.conditions.some((c) => c.condition_key === 'planning:reflection_done')).toBe(true);
+  });
+
+  it('既存キーと重複する新規作成は重複追記されず既存採用へ寄る（singleton の total_work / planning）', () => {
+    // 開始日ルールに total_work（14400秒）と planning:reflection_done が既存。
     seedTomorrowRule();
-    // TIMELINE 以外。
+    const before = ruleThresholds(START);
+    const g = createGoal(
+      db,
+      {
+        name: '重複回避',
+        practices: [],
+        // total_work は閾値違いを送っても追記せず既存を採用（閾値変更ログも出ない）。
+        newConditions: [
+          { target: 'TOTAL_WORK', thresholdSeconds: 3600 },
+          { target: 'PLANNING', signalKey: 'reflection_done' },
+        ],
+        start: 'tomorrow',
+      },
+      NOW_TODAY,
+    );
+    const keys = g.practices.map((p) => p.conditionKey);
+    expect(keys).toContain('total_work');
+    expect(keys).toContain('planning:reflection_done');
+    // 既存 total_work の閾値は据え置き（重複追記されていない）。
+    expect(ruleThresholds(START).get('total_work')).toBe(before.get('total_work'));
+    // 条件は重複せず1本のまま。
+    const rs = getRuleSet(db, START)!;
+    expect(rs.conditions.filter((c) => c.condition_key === 'total_work').length).toBe(1);
+    expect(rs.conditions.filter((c) => c.condition_key === 'planning:reflection_done').length).toBe(1);
+    // 閾値変更ログは出ない（据え置き）。
+    expect((db.prepare('SELECT COUNT(*) AS c FROM practice_threshold_change').get() as { c: number }).c).toBe(0);
+  });
+
+  it('label 空・分数0・GROUP 不正・未対応 target は拒否され、目標もルールも作られない（rollback）', () => {
+    seedTomorrowRule();
+    const timelineCount = () => getRuleSet(db, START)!.conditions.filter((c) => c.condition_key.startsWith('timeline:')).length;
+    // 未対応 target。
     expect(() =>
       createGoal(
         db,
-        { name: 'x', practices: [], newConditions: [{ target: 'TOTAL_WORK' as 'TIMELINE', label: 'a', thresholdSeconds: 60 }], start: 'tomorrow' },
+        { name: 'x', practices: [], newConditions: [{ target: 'BOGUS' as GoalPracticeTarget }], start: 'tomorrow' },
+        NOW_TODAY,
+      ),
+    ).toThrow(GoalPracticeError);
+    // GROUP の stableGroupId が存在しない。
+    expect(() =>
+      createGoal(
+        db,
+        { name: 'x', practices: [], newConditions: [{ target: 'GROUP', stableGroupId: 'no-such', thresholdSeconds: 3600 }], start: 'tomorrow' },
         NOW_TODAY,
       ),
     ).toThrow(GoalPracticeError);
@@ -267,12 +366,17 @@ describe('目標作成時のインライン条件作成（newConditions・明日
     expect(() =>
       createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '  ', thresholdSeconds: 60 }], start: 'tomorrow' }, NOW_TODAY),
     ).toThrow(GoalPracticeError);
+    // MANUAL_CHECK label 空。
+    expect(() =>
+      createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'MANUAL_CHECK', label: '' }], start: 'tomorrow' }, NOW_TODAY),
+    ).toThrow(GoalPracticeError);
     // 分数0。
     expect(() =>
       createGoal(db, { name: 'x', practices: [], newConditions: [{ target: 'TIMELINE', label: '掃除', thresholdSeconds: 0 }], start: 'tomorrow' }, NOW_TODAY),
     ).toThrow(GoalPracticeError);
-    // いずれも目標は作られない。
+    // いずれも目標は作られず、TIMELINE も追記されない。
     expect(listGoals(db, NOW_TODAY).length).toBe(0);
+    expect(timelineCount()).toBe(0);
     // 採用が失敗する経路（bogus キー同伴）でも、追記済み条件が rollback される。
     expect(() =>
       createGoal(

@@ -883,14 +883,18 @@ body.rf-page .content { max-width: 1200px; }
 .gr-input { width: 100%; padding: 8px 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; font-family: inherit; }
 .gr-flabel { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 4px; }
 
-/* --- その場で作る習慣（インライン TIMELINE 条件・goal-inline-condition）--- */
-.gr-newcond-form { display: flex; gap: 8px; align-items: center; }
-.gr-newcond-form .gr-input { flex: 1; }
-.gr-newcond-form .gr-min-input { flex: 0 0 72px; width: 72px; }
-.gr-newconds { gap: 6px; }
-.gr-newcond-row { display: flex; align-items: center; gap: 8px; padding: 8px 11px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel-2); }
-.gr-newcond-badge { font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
-.gr-newcond-text { font-size: 13px; font-weight: 600; }
+/* --- 毎日やること（既存項目の選択＋その場で新規作成・goal-inline-condition）--- */
+/* 見出し「毎日やること」の横に＋ボタンを置く。 */
+.gr-daily-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+.gr-daily-head .gr-flabel { margin-top: 0; }
+.gr-newconds { gap: 6px; margin-top: 2px; }
+/* ＋で追加した新規行は「これから作成」を示す破線＋アクセント（今日タブと同じ condEditorRow を流用）。 */
+.gr-newcond-editor { border-style: dashed; border-color: var(--accent); }
+.gr-newcond-editor::before {
+  content: 'これから作成'; align-self: center; white-space: nowrap;
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  border: 1px solid var(--accent); border-radius: 999px; padding: 1px 7px;
+}
 
 /* --- 開始日セグメント（今日から／明日から）--- */
 .gr-start-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }

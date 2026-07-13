@@ -145,7 +145,7 @@ function canWriteTodayRule(db: DB, today: string): boolean {
   return prior === undefined; // 継承元も無い＝真の初期状態のみ許可
 }
 
-function deriveConditionKey(c: ConditionInput): string {
+export function deriveConditionKey(c: ConditionInput): string {
   if (c.conditionKey) return c.conditionKey;
   switch (c.target) {
     case 'TOTAL_WORK':
