@@ -806,6 +806,59 @@ body.rf-page .content { max-width: 1200px; }
 /* チェック済み行の本文 = 取り消し線 + ミュート */
 .rf-ed-task.checked .rf-ed-task-text { text-decoration: line-through; color: rgba(55, 53, 47, 0.55); }
 
+/* --- 一日概観 (reflection-day-overview): 配分ドーナツ + 右オーバーレイのテキストタイムライン --- */
+/* タイトル行（振り返り見出し + タイムライン トグル） */
+.rf-head-row { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+.rf-head-row .rf-title { margin: 0; }
+.rf-head-row .spacer { flex: 1; }
+/* トグルは目立つアクセント色の CTA。閉じている時ほど鮮やか（＝再発見しやすく）、開いている時はグレーで「閉じる」を示す。 */
+.rf-tl-toggle { display: inline-flex; align-items: center; gap: 8px; font-family: inherit; font-size: 14px; font-weight: 700; color: #ffffff; background: #3b5bb5; border: none; border-radius: 10px; padding: 10px 18px; cursor: pointer; letter-spacing: 0.02em; box-shadow: 0 3px 10px -3px rgba(59,91,181,0.55); transition: background .15s ease, box-shadow .15s ease, color .15s ease; }
+.rf-tl-toggle:hover { background: #2c4593; box-shadow: 0 4px 14px -3px rgba(59,91,181,0.6); }
+.rf-tl-ico { font-size: 15px; line-height: 1; }
+.rf-tl-chevron { font-size: 11px; line-height: 1; transition: transform .2s ease; }
+.rf-tl-toggle.on { color: #eef2fb; background: #6b7688; box-shadow: none; }
+.rf-tl-toggle.on:hover { background: #5a6678; }
+.rf-tl-toggle.on .rf-tl-chevron { transform: rotate(180deg); }
+
+/* 配分バーリスト（エディタ上部・常設）: 時間降順・未記録は最下部固定 */
+.rf-alloc { margin-bottom: 22px; }
+.rf-alloc-card { background: #ffffff; border: 1px solid #e4e9f1; border-radius: 14px; box-shadow: 0 1px 2px rgba(30,45,70,0.05), 0 10px 30px -18px rgba(30,45,70,0.22); padding: 16px 20px 18px; }
+.rf-alloc-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.rf-alloc-title { font-size: 15px; font-weight: 700; color: #22303f; letter-spacing: 0.01em; }
+.rf-alloc-sub { font-size: 12px; color: #8b95a7; }
+.rf-alloc-empty { margin: 14px 4px 6px; font-size: 13px; line-height: 1.7; color: #8b95a7; text-align: center; }
+.rf-bars { display: flex; flex-direction: column; gap: 11px; }
+.rf-bar-row { display: flex; align-items: center; gap: 12px; }
+.rf-bar-label { flex: 0 0 92px; font-size: 13px; color: #22303f; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rf-bar-row.gap .rf-bar-label { color: #8b95a7; }
+.rf-bar-track { flex: 1; height: 16px; background: #f1f4f9; border-radius: 8px; overflow: hidden; }
+.rf-bar-fill { height: 100%; border-radius: 8px; min-width: 3px; transition: width .3s ease; }
+.rf-bar-val { flex: 0 0 auto; min-width: 52px; text-align: right; font-size: 12.5px; color: #5a6678; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rf-bar-row.gap .rf-bar-val { color: #8b95a7; }
+
+/* 右オーバーレイのグラフィカル縦帯タイムライン（トグル・読み取り専用・position:fixed） */
+.rf-tlpanel { position: fixed; top: 0; right: 0; bottom: 0; width: 340px; max-width: 88vw; background: #ffffff; border-left: 1px solid #e4e9f1; box-shadow: -12px 0 34px -20px rgba(30,45,70,0.4); transform: translateX(100%); transition: transform .24s cubic-bezier(.4,0,.2,1); z-index: 60; display: flex; flex-direction: column; }
+.rf-tlpanel.open { transform: translateX(0); }
+.rf-tlpanel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 16px 18px; border-bottom: 1px solid #eef1f7; background: #f6f8fc; }
+.rf-tlpanel-title { font-size: 15px; font-weight: 700; color: #22303f; }
+.rf-tlpanel-close { font-family: inherit; font-size: 20px; line-height: 1; color: #8b95a7; background: transparent; border: none; cursor: pointer; padding: 2px 6px; border-radius: 7px; }
+.rf-tlpanel-close:hover { background: #eef2f9; color: #5a6678; }
+.rf-tlpanel-body { flex: 1; overflow-y: auto; padding: 14px 18px 24px; }
+.rf-tlpanel-date { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #8b95a7; letter-spacing: 0.02em; margin-bottom: 12px; }
+.rf-tlpanel-empty { margin: 20px 4px; font-size: 13px; line-height: 1.7; color: #a6afc0; text-align: center; }
+/* グラフィカル縦帯: 左に連続する色帯（同時作業＝斜め縞）、右に時刻レンジ＋ラベル。高さ∝持続時間。 */
+.rf-ribbon { display: flex; flex-direction: column; }
+.rf-seg { display: flex; align-items: stretch; gap: 11px; }
+.rf-seg-bar { flex: 0 0 11px; border-radius: 3px; background: #dfe3ee; }
+.rf-seg-bar.gap { background: #e7eaf1; }
+.rf-seg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 6px 0; border-bottom: 1px solid #f2f4f9; }
+.rf-seg:last-child .rf-seg-main { border-bottom: none; }
+.rf-seg-time { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; color: #5a6678; }
+.rf-seg-label { font-size: 13.5px; color: #22303f; line-height: 1.45; word-break: break-word; }
+.rf-seg-label.gap { color: #a6afc0; }
+.rf-seg .rf-seg-time.gap, .rf-seg-main .rf-seg-time.gap { color: #a6afc0; }
+@media (max-width: 560px) { .rf-tlpanel { width: 100%; max-width: 100%; } }
+
 /* --- Markdown 読み取り専用レンダラ (md-*): markdown.js。kanban のタスクノート等と共用 --- */
 .md-body { line-height: 1.6; font-size: 13.5px; }
 .md-body > *:first-child { margin-top: 0; }

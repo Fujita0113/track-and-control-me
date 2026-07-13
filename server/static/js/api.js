@@ -64,6 +64,7 @@ export const api = {
 
   // タイムライン
   getTimeline: (date) => req('GET', date ? `/api/timeline/${date}` : '/api/timeline'),
+  getAllocation: (date) => req('GET', `/api/timeline/${date}/allocation`),
   addManual: (date, b) => req('POST', `/api/timeline/${date}/manual`, b),
   patchEntry: (id, b) => req('PATCH', `/api/timeline/entry/${id}`, b),
   deleteEntry: (id) => req('DELETE', `/api/timeline/entry/${id}`),

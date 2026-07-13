@@ -5,7 +5,7 @@
 //  - スタイルは全て rf-* クラス + CSSOM(CSP: インライン style 属性なし)。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, toast, emptyState, addDays } from './util.js';
+import { h, clear, toast, emptyState, addDays, colorHex, fmtDur, fmtClock } from './util.js';
 import { createMarkdownEditor } from './md-editor.js';
 import { setTomorrowMode } from './kanban.js';
 import { renderMarkdown } from './markdown.js';
@@ -19,12 +19,23 @@ function dayDiff(a, b) {
 
 const MOOD_LABELS = ['いまひとつ', 'まあまあ', 'ふつう', '良い', 'とても良い'];
 
+/** 未記録スライス／ギャップ帯の中立色。 */
+const NEUTRAL = '#c3cbd8';
+
 let ctx = null;
 
 export function hide() {
   flush();
+  destroyOverview();
   document.body.classList.remove('rf-page');
   ctx = null;
+}
+
+/** 右オーバーレイパネルの DOM 破棄（多重生成・リーク防止）。 */
+function destroyOverview() {
+  if (!ctx) return;
+  if (ctx.panel && ctx.panel.parentNode) ctx.panel.parentNode.removeChild(ctx.panel);
+  ctx.panel = null;
 }
 
 /**
@@ -132,7 +143,33 @@ export async function show(root) {
 
   // 目標日記コーナー（進行中の目標ごと）。本文エディタの下に置き、同じ保存動線に相乗りする。
   const journalsHost = h('div', { class: 'rf-journals' });
-  const left = h('section', { class: 'rf-left' }, h('h1', { class: 'rf-title', text: '今日の振り返り' }), moodRow, card, journalsHost);
+
+  // 一日の配分バー（エディタ上部・常設）＋ 右オーバーレイの縦帯タイムライン トグル。
+  const allocHost = h('div', { class: 'rf-alloc' });
+  // トグルは目立つアクセント色＋アイコン＋シェブロン（開閉状態が一目で分かる）。既定は開。
+  const tlToggle = h('button', { class: 'rf-tl-toggle', type: 'button' },
+    h('span', { class: 'rf-tl-ico', text: '▤' }),
+    h('span', { class: 'rf-tl-lbl', text: 'タイムライン' }),
+    h('span', { class: 'rf-tl-chevron', text: '❯' }),
+  );
+  const titleRow = h('div', { class: 'rf-head-row' },
+    h('h1', { class: 'rf-title', text: '今日の振り返り' }),
+    h('div', { class: 'spacer' }),
+    tlToggle,
+  );
+  const left = h('section', { class: 'rf-left' }, titleRow, moodRow, allocHost, card, journalsHost);
+
+  // 右オーバーレイの縦帯タイムライン パネル（既定は開・position:fixed、body 直下に配置）。
+  const panelBody = h('div', { class: 'rf-tlpanel-body' });
+  const panelClose = h('button', { class: 'rf-tlpanel-close', type: 'button', text: '×' });
+  const panel = h('aside', { class: 'rf-tlpanel' },
+    h('div', { class: 'rf-tlpanel-head' },
+      h('span', { class: 'rf-tlpanel-title', text: 'タイムライン' }),
+      panelClose,
+    ),
+    panelBody,
+  );
+  document.body.appendChild(panel);
 
   // --- 右レール ---
   const dateInput = h('input', { type: 'date', class: 'rf-cal', value: state.today });
@@ -150,9 +187,22 @@ export async function show(root) {
 
   root.appendChild(h('div', { class: 'rf-main' }, left, rail));
 
-  ctx = { date: state.today, satisfaction: 0, dirty: false, loading: false, editor, dateInput, historyHost, savedEl, saveBtn, syncMood, renderHistory, journalsHost, journals: [], activeGoals: [] };
+  // 既定でパネルを開く（issue #17: 初めは開いていてほしい／閉じられるようにはする）。
+  ctx = { date: state.today, satisfaction: 0, dirty: false, loading: false, editor, dateInput, historyHost, savedEl, saveBtn, syncMood, renderHistory, journalsHost, journals: [], activeGoals: [],
+    allocHost, panel, panelBody, panelOpen: true };
+  panel.classList.add('open');
+  tlToggle.classList.add('on');
 
   // --- 挙動配線 ---
+  const togglePanel = () => {
+    ctx.panelOpen = !ctx.panelOpen;
+    ctx.panel.classList.toggle('open', ctx.panelOpen);
+    tlToggle.classList.toggle('on', ctx.panelOpen);
+    // 開いた時のみ対象日の timeline を取得（閉じている間はフェッチしない・task 4.5）。
+    if (ctx.panelOpen) renderTimelinePanel(ctx.date);
+  };
+  tlToggle.addEventListener('click', togglePanel);
+  panelClose.addEventListener('click', () => { if (ctx.panelOpen) togglePanel(); });
   saveBtn.addEventListener('click', () => doSave(saveBtn));
   planBtn.addEventListener('click', () => goToPlanning(planBtn));
   dateInput.addEventListener('change', () => { flush(); loadEditorForDate(dateInput.value || state.today); });
@@ -227,6 +277,174 @@ async function loadEditorForDate(date) {
   await loadJournals(date); // 同じ対象日の目標日記コーナーを再構築（loading 中は dirty を立てない）。
   ctx.loading = false;
   ctx.dirty = false;
+  // 配分ドーナツ・（開いていれば）テキストタイムラインを対象日で再描画。
+  // 本文ロードとは独立に失敗を握り、本文編集を妨げない（design D7）。
+  renderDayOverview(date).catch(() => { /* noop */ });
+}
+
+/** 対象日連動の一日概観（配分ドーナツ＋開いていればテキストタイムライン）を再描画する。 */
+async function renderDayOverview(date) {
+  await renderAlloc(date);
+  if (ctx && ctx.panelOpen) await renderTimelinePanel(date);
+}
+
+/**
+ * 配分バーリスト（エディタ上部・常設）。持ち分秒を横棒で表示する。
+ * 未記録以外は時間の長い順（降順）に上から並べ、未記録は常に最下部（中立色）に固定する。
+ * 母数ゼロの日は棒を描かず空状態メッセージ。
+ */
+async function renderAlloc(date) {
+  if (!ctx) return;
+  const host = ctx.allocHost;
+  clear(host);
+
+  let alloc = null;
+  try { alloc = await api.getAllocation(date); } catch { /* noop */ }
+  if (!ctx || ctx.date !== date) return; // 描画中に対象日が変わっていたら破棄。
+
+  const head = h('div', { class: 'rf-alloc-head' },
+    h('span', { class: 'rf-alloc-title', text: '一日の配分' }),
+    h('span', { class: 'rf-alloc-sub', text: '覚醒時間中（記録の端〜端）' }),
+  );
+
+  if (!alloc || !alloc.totalSeconds || !alloc.slices) {
+    host.appendChild(h('div', { class: 'rf-alloc-card' }, head,
+      h('p', { class: 'rf-alloc-empty', text: 'この日はまだ記録がありません。作業や休憩が記録されると、一日の配分が表示されます。' })));
+    return;
+  }
+
+  // 作業／自己申告スライスを時間降順に、未記録は常に最下部へ。
+  const rows = [...alloc.slices]
+    .sort((a, b) => b.seconds - a.seconds)
+    .map((s) => ({ label: s.label, color: colorHex(s.color), seconds: s.seconds, gap: false }));
+  if (alloc.untrackedSeconds > 0) {
+    rows.push({ label: '未記録', color: NEUTRAL, seconds: alloc.untrackedSeconds, gap: true });
+  }
+
+  const total = alloc.totalSeconds;
+  const bars = h('div', { class: 'rf-bars' });
+  for (const r of rows) {
+    const pct = total > 0 ? (r.seconds / total) * 100 : 0;
+    const fill = h('div', { class: `rf-bar-fill${r.gap ? ' gap' : ''}`, style: { width: `${pct.toFixed(1)}%`, background: r.color } });
+    bars.appendChild(h('div', { class: `rf-bar-row${r.gap ? ' gap' : ''}` },
+      h('span', { class: 'rf-bar-label', text: r.label }),
+      h('div', { class: 'rf-bar-track' }, fill),
+      h('span', { class: 'rf-bar-val', text: fmtDur(r.seconds) }),
+    ));
+  }
+  host.appendChild(h('div', { class: 'rf-alloc-card' }, head, bars));
+}
+
+/**
+ * 右オーバーレイのグラフィカル縦帯タイムライン（既存タイムラインの短縮版・読み取り専用）を対象日で再構築する。
+ * 記録の端〜端を上→下の縦帯で表し、各ブロックの高さは持続時間に比例。同時作業（並行記録）は
+ * 青×紫などの斜め縞ストライプ1本で表現し、未記録は中立色の帯で明示する。
+ * 連続する同一構成の細切れブロックは1つに結合してコンパクトにする。
+ */
+async function renderTimelinePanel(date) {
+  if (!ctx) return;
+  const body = ctx.panelBody;
+  clear(body);
+  body.appendChild(h('div', { class: 'rf-tlpanel-date', text: date }));
+
+  let tl = null;
+  try { tl = await api.getTimeline(date); } catch { /* noop */ }
+  if (!ctx || !ctx.panelOpen) return;
+
+  const segs = buildRibbon(tl, date);
+  if (!segs.length) {
+    body.appendChild(h('p', { class: 'rf-tlpanel-empty', text: 'この日の記録はまだありません。' }));
+    return;
+  }
+  const ribbon = h('div', { class: 'rf-ribbon' });
+  for (const s of segs) {
+    const bar = h('div', { class: `rf-seg-bar${s.gap ? ' gap' : ''}` });
+    if (!s.gap) bar.style.background = s.colors.length > 1 ? stripeBg(s.colors) : s.colors[0];
+    const seg = h('div', { class: 'rf-seg', style: { minHeight: `${segHeight(s.seconds)}px` } },
+      bar,
+      h('div', { class: 'rf-seg-main' },
+        h('span', { class: 'rf-seg-time', text: `${fmtClock(s.startAt)}–${fmtClock(s.endAt)}` }),
+        h('span', { class: `rf-seg-label${s.gap ? ' gap' : ''}`, text: s.label }),
+      ),
+    );
+    ribbon.appendChild(seg);
+  }
+  body.appendChild(ribbon);
+}
+
+/** ブロック持続秒 → 縦帯の高さ px（短いブロックも読める下限・長すぎは上限でクランプ）。 */
+function segHeight(seconds) {
+  return Math.max(34, Math.min(150, Math.round((seconds / 60) * 0.9)));
+}
+
+/** 複数色 → 斜め縞（repeating-linear-gradient）。同時作業を1本の帯で表す。 */
+function stripeBg(colors) {
+  const band = 9; // px
+  const stops = colors.map((c, i) => `${c} ${i * band}px ${(i + 1) * band}px`).join(', ');
+  return `repeating-linear-gradient(45deg, ${stops})`;
+}
+
+/**
+ * timeline ペイロード（auto/manual/gaps）→ グラフィカル縦帯のブロック配列。
+ * 記録の端〜端に絞り、重なる記録はクラスタ（同時作業＝多色）へまとめ、gap（未記録）と合わせて
+ * 時系列に並べ、連続する同一構成ブロックを結合して細切れを畳む。
+ */
+function buildRibbon(tl, date) {
+  if (!tl) return [];
+  const records = [];
+  for (const b of tl.auto || []) records.push({ s: b.startAt, e: b.endAt, label: b.title, color: colorHex(b.color) });
+  for (const m of tl.manual || []) records.push({ s: m.startAt, e: m.endAt, label: m.title, color: colorHex(m.color) });
+  if (!records.length) return [];
+  records.sort((a, b) => a.s - b.s || a.e - b.e);
+
+  // 端〜端（対象日が当日なら現在時刻を上限に含める）。
+  const extentStart = Math.min(...records.map((r) => r.s));
+  let extentEnd = Math.max(...records.map((r) => r.e));
+  if (date === state.today && tl.window && tl.window.now) extentEnd = Math.max(extentEnd, tl.window.now);
+
+  // 重なる記録を1クラスタ（同時作業）へまとめる。
+  const clusters = [];
+  let cur = null;
+  for (const r of records) {
+    if (cur && r.s < cur.e) { cur.members.push(r); cur.e = Math.max(cur.e, r.e); }
+    else { cur = { s: r.s, e: r.e, members: [r] }; clusters.push(cur); }
+  }
+
+  const blocks = [];
+  for (const c of clusters) {
+    // 構成＝重複ラベル除去（持続の長い順に色を並べ、主色が縞の先頭に来る）。
+    const seen = new Set();
+    const comp = [];
+    for (const m of [...c.members].sort((a, b) => (b.e - b.s) - (a.e - a.s))) {
+      if (seen.has(m.label)) continue;
+      seen.add(m.label);
+      comp.push(m);
+    }
+    blocks.push({ startAt: c.s, endAt: c.e, gap: false, labels: comp.map((m) => m.label), colors: comp.map((m) => m.color) });
+  }
+  for (const g of tl.gaps || []) {
+    if (g.endAt <= extentStart || g.startAt >= extentEnd) continue; // 端〜端の外側は除外。
+    blocks.push({ startAt: Math.max(g.startAt, extentStart), endAt: Math.min(g.endAt, extentEnd), gap: true, labels: ['（未記録）'], colors: [NEUTRAL] });
+  }
+  blocks.sort((a, b) => a.startAt - b.startAt);
+
+  // 連続する同一構成ブロックを結合（閾値未満の細切れギャップを橋渡ししコンパクト化）。
+  const merged = [];
+  for (const b of blocks) {
+    const key = b.gap ? 'gap' : [...b.labels].sort().join('|');
+    const last = merged[merged.length - 1];
+    if (last && last._key === key) { last.endAt = Math.max(last.endAt, b.endAt); }
+    else { merged.push({ ...b, _key: key }); }
+  }
+
+  return merged.map((b) => ({
+    startAt: b.startAt,
+    endAt: b.endAt,
+    gap: b.gap,
+    seconds: (b.endAt - b.startAt) / 1000,
+    colors: b.colors,
+    label: b.gap ? '（未記録）' : b.labels.join(' ＋'),
+  }));
 }
 
 async function loadHistory() {

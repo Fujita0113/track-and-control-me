@@ -10,6 +10,7 @@ import {
   setSplitOverride,
 } from '../services/timeline.js';
 import { todayKey } from '../services/summary.js';
+import { getDayAllocation } from '../services/day-allocation.js';
 
 /** タイムライン API（tasks 6.3–6.5, 6.7）。 */
 export function registerTimelineRoutes(app: FastifyInstance, deps: ApiDeps): void {
@@ -18,6 +19,12 @@ export function registerTimelineRoutes(app: FastifyInstance, deps: ApiDeps): voi
   app.get('/api/timeline/:date', async (req) => {
     const { date } = req.params as { date: string };
     return getTimeline(db, date);
+  });
+
+  // 一日の配分集計（spec: reflection-day-overview）。対象日が当日なら now を上限に含める。
+  app.get('/api/timeline/:date/allocation', async (req) => {
+    const { date } = req.params as { date: string };
+    return getDayAllocation(db, date);
   });
 
   app.post('/api/timeline/:date/manual', async (req, reply) => {
