@@ -73,6 +73,23 @@ describe('migration v11: 30日チャレンジ', () => {
     db.close();
   });
 
+  it('goal_journal_image は goal 削除で CASCADE 消去される（v14）', () => {
+    const db = openDb(':memory:');
+    expect(db.pragma('user_version', { simple: true })).toBeGreaterThanOrEqual(14);
+    const goalId = db
+      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('画像目標', '', '2026-07-13', '2026-08-11', 0).lastInsertRowid as number;
+    db.prepare(
+      `INSERT INTO goal_journal_image (goal_id, day_key, caption, mime, bytes, width, height, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(goalId, '2026-07-13', '台所', 'image/jpeg', Buffer.from([1, 2, 3]), 100, 80, 0, 0);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_journal_image').get() as { c: number }).c).toBe(1);
+
+    db.prepare('DELETE FROM goal WHERE id = ?').run(goalId);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_journal_image').get() as { c: number }).c).toBe(0);
+    db.close();
+  });
+
   it('goal_practice の PK は (goal_id, condition_key)（同一目標での重複採用を弾く）', () => {
     const db = openDb(':memory:');
     const goalId = db

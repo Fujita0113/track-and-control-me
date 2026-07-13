@@ -7,6 +7,7 @@ import { h, clear, toast, openModal, closeModal, emptyState, fmtHM } from './uti
 import { planningSignalLabel } from './targets.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
+import { shrinkImage, isImageFile } from './images.js';
 
 // デモ中は取得先を /api/demo/* + 仮想日付へ切替（通常モードは既存経路のまま）。
 function fetchGoals() {
@@ -129,6 +130,66 @@ function goalCard(g, root) {
 }
 
 // --- 新規作成フォーム -----------------------------------------------------
+
+/**
+ * 作成フォームの「初日写真」ステージング（design D7）。goalId 未確定のため縮小済み data URL を
+ * クライアントに溜め、作成成功後に Day1 へ保存する。3方式（ファイル/貼付/D&D）対応。
+ * 返り値の `staged` は `{ dataUrl, caption }` の配列（作成ハンドラが参照）。
+ */
+function buildCreateImageStager() {
+  const staged = [];
+  const thumbs = h('div', { class: 'rf-thumbs' });
+  const errorEl = h('div', { class: 'rf-img-error', hidden: true });
+  const fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'rf-img-file' });
+  const addLabel = h('label', { class: 'rf-img-add' }, '＋ 写真を追加', fileInput);
+  const zone = h('div', { class: 'rf-imgzone gr-stage' },
+    h('div', { class: 'rf-imgzone-head' },
+      h('span', { class: 'rf-imgzone-title', text: '初日の写真（任意・Before）' }),
+      addLabel,
+      h('span', { class: 'rf-img-hint', text: '貼り付け・ドラッグ＆ドロップも可。作成時に Day1 へ保存されます' }),
+    ),
+    errorEl,
+    thumbs,
+  );
+  const showErr = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
+  const clearErr = () => { errorEl.hidden = true; };
+  const addThumb = (item) => {
+    const cap = h('input', { type: 'text', class: 'rf-thumb-cap', value: item.caption, placeholder: 'キャプション（任意）' });
+    cap.addEventListener('input', () => { item.caption = cap.value; });
+    const del = h('button', { class: 'rf-thumb-del', type: 'button', title: '削除', text: '×' });
+    const cell = h('div', { class: 'rf-thumb' },
+      h('img', { class: 'rf-thumb-img', src: item.dataUrl, alt: item.caption }), cap, del);
+    del.addEventListener('click', () => { const i = staged.indexOf(item); if (i >= 0) staged.splice(i, 1); cell.remove(); });
+    thumbs.appendChild(cell);
+  };
+  const stage = async (files) => {
+    const arr = [...(files || [])];
+    const images = arr.filter(isImageFile);
+    if (images.length < arr.length) showErr('画像ファイル以外は追加できません');
+    for (const file of images) {
+      try {
+        const dataUrl = await shrinkImage(file);
+        const item = { dataUrl, caption: '' };
+        staged.push(item);
+        addThumb(item);
+        clearErr();
+      } catch (e) { showErr(`画像を読み込めません: ${e.message}`); }
+    }
+  };
+  fileInput.addEventListener('change', () => { stage(fileInput.files); fileInput.value = ''; });
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', (e) => { if (e.target === zone) zone.classList.remove('drag'); });
+  zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('drag'); if (e.dataTransfer) stage(e.dataTransfer.files); });
+  zone.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const it of items) { if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); } }
+    if (files.length && files.some(isImageFile)) { e.preventDefault(); stage(files); }
+  });
+  return { el: zone, staged };
+}
+
 async function openCreateForm(onDone) {
   const body = h('div', { class: 'modal-body stack' });
   const introEl = h('p', { class: 'muted' });
@@ -257,6 +318,11 @@ async function openCreateForm(onDone) {
   body.appendChild(datalist);
   body.appendChild(newHost);
 
+  // 初日写真のステージング（作成時に Day1 へ保存）。
+  const stager = buildCreateImageStager();
+  body.appendChild(h('label', { class: 'gr-flabel', text: '初日の写真（任意）' }));
+  body.appendChild(stager.el);
+
   const save = h('button', { class: 'btn primary', text: '作成', type: 'button' });
   save.addEventListener('click', async () => {
     const name = nameInp.value.trim();
@@ -266,7 +332,12 @@ async function openCreateForm(onDone) {
     if (!practices.length && !newConditions.length) { toast('実践を1つ以上選ぶか、習慣を追加してください', 'err'); return; }
     save.disabled = true;
     try {
-      await api.createGoal({ name, purpose: purposeInp.value.trim(), practices, newConditions, start });
+      const g = await api.createGoal({ name, purpose: purposeInp.value.trim(), practices, newConditions, start });
+      // ステージ済みの初日写真を Day1（start_day）へ保存（個別失敗はトーストのみ・作成は成立済み）。
+      for (const item of stager.staged) {
+        try { await api.addGoalJournalImage(g.id, g.startDay, { dataUrl: item.dataUrl, caption: (item.caption || '').trim() }); }
+        catch (e) { toast(`写真の保存に失敗: ${e.data?.error || e.message}`, 'err'); }
+      }
       toast('目標を作成しました', 'ok');
       closeModal();
       onDone();
@@ -316,14 +387,17 @@ async function renderReport(root, goalId) {
   // 読み手状態（④ で使う。①のマス/日付セレクタから連動）。
   const readerState = { selected: 1, cellsByDay: new Map(), headerByDay: new Map(), renderReader: null };
 
+  // 画像バイナリのベース URL（デモは /api/demo/… 経路へ切替・design D8）。
+  const imgBase = `${isDemo() ? '/api/demo/goals/' : '/api/goals/'}${rep.goal.id}/journal`;
+
   // ① 達成カレンダー
   page.appendChild(blockCalendar(rep, readerState));
   // ② 時間の推移（時間型実践がある場合のみ）
   if (rep.hasTimeType) page.appendChild(blockTimeSeries(rep));
-  // ③ Before / After
-  page.appendChild(blockBeforeAfter(rep));
+  // ③ Before / After（2モード＋最終日CTA）
+  page.appendChild(blockBeforeAfter(rep, imgBase));
   // ④ 日記リーダー
-  page.appendChild(blockReader(rep, readerState));
+  page.appendChild(blockReader(rep, readerState, imgBase));
 
   readerState.renderReader();
 }
@@ -429,15 +503,58 @@ function blockTimeSeries(rep) {
   return card;
 }
 
-// ③ Before / After（Day1 / Day30 の文面並置）
-function blockBeforeAfter(rep) {
-  const card = grCard('③ Before / After');
+// ③ Before / After（文面並置 ＋ 2モードの画像比較 ＋ 最終日CTA・design D6/D6b）
+function blockBeforeAfter(rep, imgBase) {
+  const card = h('section', { class: 'gr-card' });
+  const state = { mode: 'default' }; // 'default'（最古/最新）| 'all'（全枚数）
+
+  // 見出し＋モード切替トグル。
+  const modeSeg = h('div', { class: 'gr-mode-seg' });
+  const modeBtns = [
+    { v: 'default', label: 'Before / After' },
+    { v: 'all', label: '全部くらべる' },
+  ].map(({ v, label }) => {
+    const b = h('button', { class: 'gr-mode-btn', type: 'button', text: label });
+    if (v === state.mode) b.classList.add('on');
+    b.addEventListener('click', () => {
+      if (state.mode === v) return;
+      state.mode = v;
+      for (const x of modeSeg.children) x.classList.toggle('on', x === b);
+      renderImgs();
+    });
+    modeSeg.appendChild(b);
+    return b;
+  });
+  const hasImages = () => (rep.reportImages || []).length > 0;
+  card.appendChild(h('div', { class: 'gr-block-head' },
+    h('h2', { class: 'gr-block-title', style: { margin: '0' }, text: '③ Before / After' }),
+    h('div', { class: 'spacer' }),
+    hasImages() ? modeSeg : null,
+  ));
+
+  // 文面並置（従来どおり・画像とは独立）。
   const first = rep.days[0];
   const last = rep.days[rep.days.length - 1];
-  card.appendChild(h('div', { class: 'gr-ba' },
-    baCol('Before', first),
-    baCol('After', last),
-  ));
+  card.appendChild(h('div', { class: 'gr-ba' }, baCol('Before', first), baCol('After', last)));
+
+  // 最終日（Day30）の写真を追加する CTA（デモは閲覧専用なので出さない）。
+  if (!isDemo()) card.appendChild(finalPhotoCta(rep, () => { syncToggleVisibility(); renderImgs(); }));
+
+  // 画像領域（モードで再描画）。
+  const imgHost = h('div', { class: 'gr-img-host' });
+  card.appendChild(imgHost);
+  const renderImgs = () => {
+    clear(imgHost);
+    const el = state.mode === 'all' ? renderAllMode(rep, imgBase) : renderDefaultMode(rep, imgBase);
+    if (el) imgHost.appendChild(el);
+    else imgHost.appendChild(h('p', { class: 'gr-empty', text: 'まだ写真がありません。上の「＋ 最終日の写真を追加」から追加できます。' }));
+  };
+  // CTA で最初の1枚が入るとトグルが必要になるので表示を同期する。
+  const syncToggleVisibility = () => {
+    const head = card.querySelector('.gr-block-head');
+    if (hasImages() && !head.contains(modeSeg)) head.appendChild(modeSeg);
+  };
+  renderImgs();
   return card;
 }
 
@@ -452,8 +569,135 @@ function baCol(tag, day) {
   return col;
 }
 
+/**
+ * reportImages を trim 済みキャプションでグループ化する（design D6）。
+ * 空キャプションは各1枚を単独グループ扱い。グループ内は reportImages の並び（dayNumber→sortOrder）を保つ。
+ */
+function groupImagesByCaption(reportImages) {
+  const byCap = new Map();
+  const singles = [];
+  for (const im of reportImages || []) {
+    const cap = (im.caption || '').trim();
+    if (!cap) { singles.push({ caption: '', images: [im] }); continue; }
+    if (!byCap.has(cap)) byCap.set(cap, []);
+    byCap.get(cap).push(im);
+  }
+  return [...[...byCap.entries()].map(([caption, images]) => ({ caption, images })), ...singles];
+}
+
+/** デフォルト: 各グループの最古(Before)/最新(After)の2枚を左右並置（1枚なら単独）。 */
+function renderDefaultMode(rep, imgBase) {
+  const groups = groupImagesByCaption(rep.reportImages);
+  if (!groups.length) return null;
+  const wrap = h('div', { class: 'gr-ba-imgs' });
+  for (const g of groups) {
+    const oldest = g.images[0];
+    const newest = g.images[g.images.length - 1];
+    if (g.images.length === 1) {
+      wrap.appendChild(h('div', { class: 'gr-ba-pair' },
+        imgFig(imgBase, oldest, `Before · Day ${oldest.dayNumber}`), h('div', { class: 'gr-ba-figslot' })));
+    } else {
+      wrap.appendChild(h('div', { class: 'gr-ba-pair' },
+        imgFig(imgBase, oldest, `Before · Day ${oldest.dayNumber}`),
+        imgFig(imgBase, newest, `After · Day ${newest.dayNumber}`)));
+    }
+  }
+  return wrap;
+}
+
+/** 全比較: グループ＝行、古い→新しい順に全枚数を横スクロールで並置。 */
+function renderAllMode(rep, imgBase) {
+  const groups = groupImagesByCaption(rep.reportImages);
+  if (!groups.length) return null;
+  const wrap = h('div', { class: 'gr-allrows' });
+  for (const g of groups) {
+    const row = h('div', { class: 'gr-allrow' });
+    row.appendChild(h('div', { class: 'gr-allrow-cap', text: g.caption || '（キャプションなし）' }));
+    const strip = h('div', { class: 'gr-allstrip' });
+    for (const im of g.images) strip.appendChild(imgFig(imgBase, im, `Day ${im.dayNumber}`));
+    row.appendChild(strip);
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+/**
+ * 最終日（Day30＝end_day）の写真を追加する CTA（3方式）。追加後 `onAdded(meta)` を呼ぶ。
+ * 完走後でも保存できる（サーバの D4b により status 不問）。
+ */
+function finalPhotoCta(rep, onAdded) {
+  const goalId = rep.goal.id;
+  const endDay = rep.goal.endDay;
+  const capInp = h('input', { type: 'text', class: 'gr-cta-cap', placeholder: 'キャプション（例: 体・正面）' });
+  const fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'gr-cta-file' });
+  const addLabel = h('label', { class: 'gr-cta-btn' }, '＋ 最終日の写真を追加', fileInput);
+  const errorEl = h('div', { class: 'gr-cta-error', hidden: true });
+  const el = h('div', { class: 'gr-cta' },
+    h('div', { class: 'gr-cta-lead' },
+      h('span', { class: 'gr-cta-title', text: '最終日の写真を残しましょう' }),
+      h('span', { class: 'gr-cta-sub', text: `Day ${rep.goal.dayCount}（${endDay}）の姿を撮って、初日と並べて変化を確かめられます。` }),
+    ),
+    h('div', { class: 'gr-cta-form' }, capInp, addLabel),
+    errorEl,
+  );
+
+  const showErr = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
+  const clearErr = () => { errorEl.hidden = true; };
+  const attach = async (files) => {
+    const arr = [...(files || [])];
+    const images = arr.filter(isImageFile);
+    if (images.length < arr.length) showErr('画像ファイル以外は追加できません');
+    for (const file of images) {
+      let dataUrl;
+      try { dataUrl = await shrinkImage(file); } catch (e) { showErr(`画像を読み込めません: ${e.message}`); continue; }
+      try {
+        const meta = await api.addGoalJournalImage(goalId, endDay, { dataUrl, caption: capInp.value.trim() });
+        // レポートのメタへ反映（Day30・末尾）→ ③再描画に使う。
+        const dayNumber = rep.goal.dayCount;
+        rep.reportImages = rep.reportImages || [];
+        rep.reportImages.push({ imageId: meta.imageId, caption: meta.caption, dayKey: endDay, dayNumber, sortOrder: meta.sortOrder });
+        rep.reportImages.sort((a, b) => (a.caption || '').trim().localeCompare((b.caption || '').trim()) || a.dayNumber - b.dayNumber || a.sortOrder - b.sortOrder);
+        const lastDay = rep.days[rep.days.length - 1];
+        if (lastDay) { lastDay.images = lastDay.images || []; lastDay.images.push({ imageId: meta.imageId, caption: meta.caption }); }
+        clearErr();
+        capInp.value = '';
+        onAdded(meta);
+      } catch (e) {
+        showErr(e.status === 400 ? (e.data?.error || '画像を追加できません') : `追加に失敗: ${e.message}`);
+      }
+    }
+  };
+  fileInput.addEventListener('change', () => { attach(fileInput.files); fileInput.value = ''; });
+  el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drag'); });
+  el.addEventListener('dragleave', (e) => { if (e.target === el) el.classList.remove('drag'); });
+  el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('drag'); if (e.dataTransfer) attach(e.dataTransfer.files); });
+  el.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const it of items) { if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); } }
+    if (files.length && files.some(isImageFile)) { e.preventDefault(); attach(files); }
+  });
+  return el;
+}
+
+/** 画像1枚（バイナリ URL ＋ タグ／キャプション）。imgBase は `/api/[demo/]goals/:id/journal`。 */
+function imgFig(imgBase, meta, tag) {
+  const cap = (meta.caption || '').trim();
+  const fig = h('figure', { class: 'gr-fig' },
+    h('img', { class: 'gr-fig-img', src: `${imgBase}/images/${meta.imageId}`, alt: cap, loading: 'lazy' }),
+  );
+  if (tag || cap) {
+    fig.appendChild(h('figcaption', { class: 'gr-fig-cap' },
+      tag ? h('span', { class: 'gr-fig-tag', text: tag }) : null,
+      cap ? h('span', { class: 'gr-fig-text', text: cap }) : null,
+    ));
+  }
+  return fig;
+}
+
 // ④ 日記リーダー（常に1件）
-function blockReader(rep, rs) {
+function blockReader(rep, rs, imgBase) {
   const card = grCard('④ 毎日の日記');
 
   const sel = h('select', { class: 'gr-day-select' });
@@ -486,6 +730,13 @@ function blockReader(rep, rs) {
     srcTag.className = `gr-reader-src${day && day.source ? ' on' : ''}`;
     if (day && day.text.trim()) bodyHost.appendChild(renderMarkdown(day.text));
     else bodyHost.appendChild(h('p', { class: 'gr-empty', text: 'この日の記録はありません' }));
+    // 選択日の画像（読み取り専用・他日の画像は出さない・design D6 / 7.2）。
+    const imgs = (day && day.images) || [];
+    if (imgs.length) {
+      const gallery = h('div', { class: 'gr-reader-imgs' });
+      for (const m of imgs) gallery.appendChild(imgFig(imgBase, m, ''));
+      bodyHost.appendChild(gallery);
+    }
   };
   return card;
 }

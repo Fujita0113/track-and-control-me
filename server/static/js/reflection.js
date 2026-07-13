@@ -10,6 +10,7 @@ import { createMarkdownEditor } from './md-editor.js';
 import { setTomorrowMode } from './kanban.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
+import { shrinkImage, isImageFile } from './images.js';
 
 /** b − a の日数差（UTC 計算）。 */
 function dayDiff(a, b) {
@@ -222,8 +223,8 @@ export async function show(root) {
   await loadHistory();
 }
 
-/** 目標の日記コーナー（見出し + ライブ Markdown エディタ）。保存は振り返りと同じ動線に相乗り。 */
-function journalCorner(goal, content) {
+/** 目標の日記コーナー（見出し + ライブ Markdown エディタ + 画像ゾーン）。本文保存は振り返りと同じ動線に相乗り。 */
+function journalCorner(goal, content, date) {
   const entry = { goalId: goal.id, dirty: false, editor: null };
   const ph = h('div', { class: 'rf-ph', text: `${goal.name} の今日の記録。Markdown で自由にどうぞ。` });
   const editor = createMarkdownEditor({
@@ -238,13 +239,129 @@ function journalCorner(goal, content) {
   });
   entry.editor = editor;
   ctx.journals.push(entry);
-  return h('div', { class: 'rf-journal' },
+
+  const corner = h('div', { class: 'rf-journal' },
     h('div', { class: 'rf-journal-head' },
       h('span', { class: 'rf-journal-title', text: goal.name }),
       h('span', { class: 'rf-journal-tag', text: `Day ${goal.dayNumber}/${goal.dayCount}` }),
     ),
     h('div', { class: 'rf-ed-wrap' }, ph, editor.el),
   );
+  // 画像ゾーン（追加導線＋サムネイル一覧）。画像操作は本文の dirty/flush と独立（reflection_done 非汚染）。
+  corner.appendChild(buildImageZone(goal.id, date, corner));
+  return corner;
+}
+
+// --- 目標日記の画像ゾーン（design D7 / spec: goal-journal）------------------
+
+/** 画像ゾーンを構築し、その日の画像を非同期で読み込む（本文編集を妨げない・失敗は局所表示）。 */
+function buildImageZone(goalId, date, corner) {
+  const thumbs = h('div', { class: 'rf-thumbs' });
+  const errorEl = h('div', { class: 'rf-img-error', hidden: true });
+  const fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'rf-img-file' });
+  const addLabel = h('label', { class: 'rf-img-add' }, '＋ 画像を追加', fileInput);
+  const zone = { goalId, date, thumbs, errorEl };
+
+  const el = h('div', { class: 'rf-imgzone' },
+    h('div', { class: 'rf-imgzone-head' },
+      h('span', { class: 'rf-imgzone-title', text: '画像' }),
+      addLabel,
+      h('span', { class: 'rf-img-hint', text: '貼り付け（Ctrl+V）・ドラッグ＆ドロップも可' }),
+    ),
+    errorEl,
+    thumbs,
+  );
+
+  // ① ファイル選択。
+  fileInput.addEventListener('change', () => {
+    attachImages(fileInput.files, zone);
+    fileInput.value = ''; // 同じファイルの再選択を可能に。
+  });
+
+  // ② ドラッグ＆ドロップ（ゾーン全体）。
+  el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drag'); });
+  el.addEventListener('dragleave', (e) => { if (e.target === el) el.classList.remove('drag'); });
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    el.classList.remove('drag');
+    if (e.dataTransfer && e.dataTransfer.files) attachImages(e.dataTransfer.files, zone);
+  });
+
+  // ③ 貼り付け（コーナー内フォーカス時の Ctrl/Cmd+V）。エディタからバブルした paste も拾う。
+  corner.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const it of items) { if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); } }
+    if (files.length && files.some(isImageFile)) { e.preventDefault(); attachImages(files, zone); }
+  });
+
+  // その日の既存画像を読み込む（本文ロードと独立に失敗を握る）。
+  api.listGoalJournalImages(goalId, date)
+    .then((metas) => { for (const m of metas || []) thumbs.appendChild(thumbCell(zone, m)); })
+    .catch(() => { /* 読み込み失敗は本文編集を妨げない（局所無表示） */ });
+
+  return el;
+}
+
+/** 選択/貼付/ドロップで得た File 群を縮小 → 追加 → サムネイル反映する。 */
+async function attachImages(files, zone) {
+  const arr = [...(files || [])];
+  const images = arr.filter(isImageFile);
+  if (images.length < arr.length) showZoneError(zone, '画像ファイル以外は追加できません');
+  for (const file of images) {
+    let dataUrl;
+    try {
+      dataUrl = await shrinkImage(file);
+    } catch (e) {
+      showZoneError(zone, `画像を読み込めませんでした: ${e.message}`);
+      continue;
+    }
+    try {
+      const meta = await api.addGoalJournalImage(zone.goalId, zone.date, { dataUrl, caption: '' });
+      zone.thumbs.appendChild(thumbCell(zone, meta));
+      clearZoneError(zone);
+    } catch (e) {
+      showZoneError(zone, e.status === 400 ? (e.data?.error || '画像を追加できません')
+        : e.status === 409 ? '進行中の目標にのみ画像を追加できます'
+        : `追加に失敗: ${e.message}`);
+    }
+  }
+}
+
+/** サムネイル（画像＋キャプション入力＋削除）。キャプション/削除は即時反映・本文と独立。 */
+function thumbCell(zone, meta) {
+  const img = h('img', { class: 'rf-thumb-img', src: `/api/goals/${zone.goalId}/journal/images/${meta.imageId}`, alt: meta.caption || '', loading: 'lazy' });
+  const cap = h('input', { type: 'text', class: 'rf-thumb-cap', value: meta.caption || '', placeholder: 'キャプション（任意）' });
+  const commit = () => {
+    const v = cap.value.trim();
+    if (v === (meta.caption || '')) return;
+    api.updateGoalJournalImageCaption(zone.goalId, meta.imageId, v)
+      .then(() => { meta.caption = v; clearZoneError(zone); })
+      .catch((e) => showZoneError(zone, `キャプション保存に失敗: ${e.message}`));
+  };
+  cap.addEventListener('blur', commit);
+  cap.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return; // IME 変換確定の Enter は無視。
+    if (e.key === 'Enter') { e.preventDefault(); cap.blur(); }
+  });
+  const del = h('button', { class: 'rf-thumb-del', type: 'button', title: '削除', text: '×' });
+  const cell = h('div', { class: 'rf-thumb' }, img, cap, del);
+  del.addEventListener('click', async () => {
+    if (!confirm('この画像を削除しますか？')) return;
+    try { await api.deleteGoalJournalImage(zone.goalId, meta.imageId); cell.remove(); clearZoneError(zone); }
+    catch (e) { showZoneError(zone, `削除に失敗: ${e.message}`); }
+  });
+  return cell;
+}
+
+function showZoneError(zone, msg) {
+  zone.errorEl.textContent = msg;
+  zone.errorEl.hidden = false;
+}
+function clearZoneError(zone) {
+  zone.errorEl.textContent = '';
+  zone.errorEl.hidden = true;
 }
 
 /** 対象日 date に、その日書き込める進行中目標の日記コーナーを（再）構築する。 */
@@ -258,7 +375,7 @@ async function loadJournals(date) {
   for (const g of goals) {
     let content = '';
     try { const r = await api.getGoalJournal(g.id, date); content = r.content || ''; } catch { /* noop */ }
-    ctx.journalsHost.appendChild(journalCorner(g, content));
+    ctx.journalsHost.appendChild(journalCorner(g, content, date));
   }
 }
 

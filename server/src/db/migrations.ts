@@ -576,4 +576,26 @@ BEGIN
 END;
 `,
   },
+  {
+    version: 14,
+    name: 'goal-journal-image',
+    sql: /* sql */ `
+-- 目標日記の画像添付（spec: goal-journal / goal-report / design.md D1）。
+-- 画像は同じ DB に BLOB で持ち、goal 削除で CASCADE 自動消去する（孤児ファイル無し・バックアップは DB 1ファイル）。
+-- goal_journal へは FK せず goal へ直接 FK する＝本文行が無い日でも画像だけを持てる。
+-- caption は任意（空可）。③のペア化キー。sort_order は同一日内の決定的な並び。
+CREATE TABLE goal_journal_image (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  day_key TEXT NOT NULL,
+  caption TEXT NOT NULL DEFAULT '',      -- 任意（空可）。③のペア化キー
+  mime TEXT NOT NULL,                    -- image/jpeg | image/png | image/webp
+  bytes BLOB NOT NULL,                   -- 縮小・再エンコード後の画像
+  width INTEGER, height INTEGER,         -- 表示レイアウト用（任意）
+  sort_order INTEGER NOT NULL DEFAULT 0, -- 同一日内の添付順（決定的な並び）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_gji ON goal_journal_image(goal_id, day_key);
+`,
+  },
 ];

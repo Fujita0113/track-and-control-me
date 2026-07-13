@@ -946,6 +946,49 @@ body.rf-page .content { max-width: 1200px; }
 .gr-ba-tag { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700; color: var(--gr-accent); }
 .gr-ba-day { font-size: 12px; color: #97a1af; }
 
+/* ③ 画像のペア/単独並置（Before=左 / After=右） */
+.gr-ba-imgs { margin-top: 18px; padding-top: 16px; border-top: 1px solid #edf0f5; display: flex; flex-direction: column; gap: 16px; }
+.gr-ba-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: start; }
+@media (max-width: 720px) { .gr-ba-pair { grid-template-columns: 1fr; } }
+.gr-ba-figslot { min-height: 0; } /* 単独表示の反対側の空スロット */
+
+/* 画像1枚（③④共通） */
+.gr-fig { margin: 0; min-width: 0; }
+.gr-fig-img { width: 100%; height: auto; max-height: 340px; object-fit: contain; border-radius: 10px; border: 1px solid #e4e9f1; background: #f3f5f9; display: block; }
+.gr-fig-cap { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.gr-fig-tag { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; color: var(--gr-accent); }
+.gr-fig-text { font-size: 13px; color: #46505f; }
+
+/* ③ 見出し行＋モード切替トグル */
+.gr-block-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.gr-mode-seg { display: inline-flex; border: 1px solid #d8dee9; border-radius: 999px; overflow: hidden; background: #f3f5f9; }
+.gr-mode-btn { border: none; background: transparent; font-family: inherit; font-size: 12px; font-weight: 600; color: #6b7686; padding: 5px 13px; cursor: pointer; }
+.gr-mode-btn.on { background: var(--gr-accent); color: #fff; }
+.gr-img-host { }
+
+/* ③ 全比較モード（キャプション＝行、古い→新しいを横スクロール） */
+.gr-allrows { margin-top: 18px; padding-top: 16px; border-top: 1px solid #edf0f5; display: flex; flex-direction: column; gap: 18px; }
+.gr-allrow-cap { font-size: 13px; font-weight: 700; color: #46505f; margin-bottom: 8px; }
+.gr-allstrip { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; }
+.gr-allstrip .gr-fig { flex: 0 0 auto; width: 200px; }
+.gr-allstrip .gr-fig-img { max-height: 180px; }
+
+/* ③ 最終日写真の追加CTA */
+.gr-cta { margin-top: 16px; border: 1px dashed #c6d0e4; border-radius: 12px; background: linear-gradient(135deg, #f4f7ff, #eef2fb); padding: 14px 16px; transition: background 0.12s, box-shadow 0.12s; }
+.gr-cta.drag { background: #e7eeff; box-shadow: inset 0 0 0 2px #b9caf2; }
+.gr-cta-lead { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.gr-cta-title { font-size: 14px; font-weight: 700; color: #33404f; }
+.gr-cta-sub { font-size: 12.5px; color: #6b7686; }
+.gr-cta-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.gr-cta-cap { flex: 1 1 200px; min-width: 0; font-family: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid #d5ddec; border-radius: 8px; }
+.gr-cta-btn { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; color: #fff; background: var(--gr-accent); border-radius: 8px; padding: 8px 14px; cursor: pointer; white-space: nowrap; }
+.gr-cta-btn:hover { filter: brightness(1.06); }
+.gr-cta-file { display: none; }
+.gr-cta-error { font-size: 12px; color: #c0392b; margin-top: 8px; }
+
+/* 作成フォームの初日写真ステージング（rf-imgzone を流用しつつ枠付きに） */
+.gr-stage { border: 1px solid #e4e9f1; border-radius: 12px; margin-top: 4px; }
+
 /* ④ 日記リーダー */
 .gr-reader-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .gr-day-select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-family: inherit; font-size: 13px; }
@@ -953,6 +996,8 @@ body.rf-page .content { max-width: 1200px; }
 .gr-reader-src.on { color: var(--gr-accent); border: 1px solid #d5ddf0; border-radius: 999px; padding: 1px 9px; }
 .gr-reader-body { min-height: 60px; }
 .gr-empty { color: #a6afc0; font-size: 13.5px; }
+/* ④ 選択日の画像列（読み取り専用） */
+.gr-reader-imgs { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
 
 /* --- 振り返りタブの目標日記コーナー --- */
 .rf-journals { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; }
@@ -963,6 +1008,24 @@ body.rf-page .content { max-width: 1200px; }
 .rf-journal-tag { font-size: 12px; color: #3b5bb5; font-weight: 600; }
 .rf-journal .rf-ed { min-height: 140px; padding: 12px 20px 18px; font-size: 14.5px; line-height: 1.7; }
 .rf-journal .rf-ph { top: 12px; left: 20px; right: 20px; font-size: 14.5px; line-height: 1.7; }
+
+/* 目標日記コーナーの画像ゾーン（追加導線＋サムネイル一覧・spec: goal-journal） */
+.rf-imgzone { border-top: 1px solid #eef1f6; padding: 12px 20px 16px; border-radius: 0; transition: background 0.12s, box-shadow 0.12s; }
+.rf-imgzone.drag { background: #eef3ff; box-shadow: inset 0 0 0 2px #b9caf2; }
+.rf-imgzone-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.rf-imgzone-title { font-size: 12.5px; font-weight: 700; color: #46505f; }
+.rf-img-add { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: #3b5bb5; cursor: pointer; padding: 4px 10px; border: 1px solid #d5ddf0; border-radius: 8px; background: #f6f8fd; }
+.rf-img-add:hover { background: #eef2fb; }
+.rf-img-file { display: none; }
+.rf-img-hint { font-size: 11.5px; color: #97a1af; }
+.rf-img-error { font-size: 12px; color: #c0392b; margin-bottom: 8px; }
+.rf-thumbs { display: flex; flex-wrap: wrap; gap: 12px; }
+.rf-thumb { width: 132px; display: flex; flex-direction: column; gap: 6px; position: relative; }
+.rf-thumb-img { width: 132px; height: 100px; object-fit: cover; border-radius: 10px; border: 1px solid #e4e9f1; background: #f3f5f9; display: block; }
+.rf-thumb-cap { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 12px; padding: 4px 7px; border: 1px solid #e0e5ee; border-radius: 7px; color: #33404f; }
+.rf-thumb-cap:focus { outline: none; border-color: #b9caf2; }
+.rf-thumb-del { position: absolute; top: 5px; right: 5px; width: 22px; height: 22px; line-height: 1; border: none; border-radius: 50%; background: rgba(20,28,40,0.62); color: #fff; font-size: 15px; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; }
+.rf-thumb-del:hover { background: #c0392b; }
 
 /* --- お試し（デモ）モード帯（spec: demo-mode）------------------------------ */
 /* 通常モードと視覚的にはっきり区別するため、紫系の帯＋点線ボーダで縁取る。 */

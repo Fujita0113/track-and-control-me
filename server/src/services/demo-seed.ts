@@ -1,3 +1,4 @@
+import zlib from 'node:zlib';
 import type { DB } from '../db/index.js';
 import { addDaysKey } from './goals.js';
 
@@ -114,6 +115,51 @@ const JOURNAL: string[] = [
   '# 30日を終えて\n始めた頃の不安定さが嘘のよう。**基準を下げてでも続けた**中盤の判断が効いた。数字の達成より、\n心が整った実感が一番の収穫。この習慣は続ける。',
 ];
 
+// --- サンプル画像（単色 PNG・design D8）------------------------------------
+// ③④の画像表示をデモで見せるため、依存なしで生成した単色 PNG を BLOB として焼き込む。
+// 変化を色で表す（初日=灰 / 中間=琥珀 / 最終日=緑）。中身は説明用のダミー。
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function pngCrc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]!) & 0xff]! ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const typeBuf = Buffer.from(type, 'ascii');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(pngCrc32(Buffer.concat([typeBuf, data])), 0);
+  return Buffer.concat([len, typeBuf, data, crc]);
+}
+function solidPng(rgb: [number, number, number], w = 480, h = 360): Buffer {
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2; // 8bit / RGB
+  const row = Buffer.alloc(1 + w * 3);
+  for (let x = 0; x < w; x++) {
+    row[1 + x * 3] = rgb[0];
+    row[1 + x * 3 + 1] = rgb[1];
+    row[1 + x * 3 + 2] = rgb[2];
+  }
+  const raw = Buffer.concat(Array.from({ length: h }, () => row));
+  return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+}
+const IMG_BEFORE = solidPng([138, 148, 166]); // 灰（初日）
+const IMG_MID = solidPng([224, 165, 58]); // 琥珀（中間）
+const IMG_AFTER = solidPng([76, 175, 106]); // 緑（最終日）
+
 /** デモ用サンプルを空の（マイグレーション済み）DB へ seed する。 */
 export function seedDemo(db: DB): void {
   const tx = db.transaction(() => {
@@ -192,6 +238,21 @@ export function seedDemo(db: DB): void {
       // 目標日記（30日ぶん）。
       insJournal.run(DEMO_GOAL_ID, dayKey, JOURNAL[i] ?? '', SEED_TS, SEED_TS);
     }
+
+    // サンプル画像（③④の見え方確認用・design D8）。
+    // 「作業スペース」= 初日/中間/最終日の3枚（③デフォルトは初日↔最終日、全比較は3枚）、
+    // 「植物」= 初日/最終日の2枚、Day30 に単独の「記念」1枚。
+    const midDay = addDaysKey(DEMO_START_DAY, 14); // Day15
+    const insImg = db.prepare(
+      `INSERT INTO goal_journal_image (goal_id, day_key, caption, mime, bytes, width, height, sort_order, created_at)
+       VALUES (?, ?, ?, 'image/png', ?, 480, 360, ?, ?)`,
+    );
+    insImg.run(DEMO_GOAL_ID, DEMO_START_DAY, '作業スペース', IMG_BEFORE, 0, SEED_TS);
+    insImg.run(DEMO_GOAL_ID, DEMO_START_DAY, '植物', IMG_BEFORE, 1, SEED_TS);
+    insImg.run(DEMO_GOAL_ID, midDay, '作業スペース', IMG_MID, 0, SEED_TS);
+    insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '作業スペース', IMG_AFTER, 0, SEED_TS);
+    insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '植物', IMG_AFTER, 1, SEED_TS);
+    insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '記念', IMG_AFTER, 2, SEED_TS);
   });
   tx();
 }

@@ -2,7 +2,15 @@ import type { FastifyInstance } from 'fastify';
 import type { ApiDeps } from './types.js';
 import { getConfig, type DB } from '../db/index.js';
 import { zonedTimeToEpoch, parseDayKey } from '../aggregation/index.js';
-import { listGoals, getGoalReport, getJournal, GoalNotFoundError, GoalReportNotReadyError } from '../services/goals.js';
+import {
+  listGoals,
+  getGoalReport,
+  getJournal,
+  getJournalImageBytes,
+  GoalNotFoundError,
+  GoalReportNotReadyError,
+  JournalImageNotFoundError,
+} from '../services/goals.js';
 import { daySummary } from '../services/summary.js';
 import { getDemoDb, resetDemoDb } from '../services/demo-db.js';
 import {
@@ -74,6 +82,24 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
       if (err instanceof GoalReportNotReadyError) {
         reply.code(409);
         return { error: err.message, notReady: true };
+      }
+      throw err;
+    }
+  });
+
+  // GET /api/demo/goals/:id/journal/images/:imageId — サンプル画像バイナリ（:date より先に定義）。
+  app.get('/api/demo/goals/:id/journal/images/:imageId', async (req, reply) => {
+    const db = getDemoDb();
+    const { id, imageId } = req.params as { id: string; imageId: string };
+    try {
+      const { mime, bytes } = getJournalImageBytes(db, Number(id), Number(imageId));
+      reply.header('Cache-Control', 'private, max-age=31536000, immutable');
+      reply.header('Content-Length', bytes.length);
+      return reply.type(mime).send(bytes);
+    } catch (err) {
+      if (err instanceof GoalNotFoundError || err instanceof JournalImageNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
       }
       throw err;
     }

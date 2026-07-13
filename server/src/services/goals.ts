@@ -54,6 +54,20 @@ export class JournalNotWritableError extends Error {
     this.name = 'JournalNotWritableError';
   }
 }
+/** 画像データの検証エラー（非対応 mime・サイズ上限超過・不正データ・空）。API は 400。 */
+export class JournalImageError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'JournalImageError';
+  }
+}
+/** 画像が見つからない（存在しない、または他目標の画像＝所有不一致）。API は 404。 */
+export class JournalImageNotFoundError extends Error {
+  constructor() {
+    super('画像が見つかりません');
+    this.name = 'JournalImageNotFoundError';
+  }
+}
 
 interface GoalRow {
   id: number;
@@ -415,6 +429,144 @@ export function saveJournal(
   return getJournal(db, goalId, dayKey);
 }
 
+// --- 目標日記の画像添付（spec: goal-journal / D1–D4）----------------------
+
+/** 保存を許す画像 mime（design D2）。 */
+const IMAGE_MIME_ALLOW = new Set(['image/jpeg', 'image/png', 'image/webp']);
+/** デコード後バイト数の上限（design D2・目安5MB）。 */
+const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+export interface JournalImageMeta {
+  imageId: number;
+  caption: string;
+  mime: string;
+  width: number | null;
+  height: number | null;
+  sortOrder: number;
+}
+export interface AddJournalImageInput {
+  dataUrl: string;
+  caption?: string;
+  width?: number | null;
+  height?: number | null;
+}
+
+/** data URL（`data:<mime>;base64,<payload>`）を mime とバイト列へ分解する。 */
+function parseDataUrl(dataUrl: string): { mime: string; bytes: Buffer } {
+  const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(String(dataUrl ?? ''));
+  if (!m) throw new JournalImageError('画像データが不正です');
+  const mime = m[1]!.toLowerCase();
+  const bytes = m[2] ? Buffer.from(m[3]!, 'base64') : Buffer.from(decodeURIComponent(m[3]!));
+  return { mime, bytes };
+}
+
+/** 所有検証つきで画像メタを1件取得（他目標の画像・不在は JournalImageNotFoundError）。 */
+function imageMetaById(db: DB, goalId: number, imageId: number): JournalImageMeta {
+  const r = db
+    .prepare(
+      'SELECT id, caption, mime, width, height, sort_order FROM goal_journal_image WHERE id = ? AND goal_id = ?',
+    )
+    .get(imageId, goalId) as
+    | { id: number; caption: string; mime: string; width: number | null; height: number | null; sort_order: number }
+    | undefined;
+  if (!r) throw new JournalImageNotFoundError();
+  return { imageId: r.id, caption: r.caption, mime: r.mime, width: r.width, height: r.height, sortOrder: r.sort_order };
+}
+
+/** その日の画像メタ一覧（sort_order 昇順・バイトは含めない）。読み取りは status 非依存。 */
+export function listJournalImages(db: DB, goalId: number, dayKey: string): JournalImageMeta[] {
+  getGoalRow(db, goalId); // 存在確認（無ければ 404）。
+  return (
+    db
+      .prepare(
+        'SELECT id, caption, mime, width, height, sort_order FROM goal_journal_image WHERE goal_id = ? AND day_key = ? ORDER BY sort_order, id',
+      )
+      .all(goalId, dayKey) as {
+      id: number;
+      caption: string;
+      mime: string;
+      width: number | null;
+      height: number | null;
+      sort_order: number;
+    }[]
+  ).map((r) => ({
+    imageId: r.id,
+    caption: r.caption,
+    mime: r.mime,
+    width: r.width,
+    height: r.height,
+    sortOrder: r.sort_order,
+  }));
+}
+
+/**
+ * 画像を1枚追加する（状態は問わない・いつでも可・design D4b）。
+ * `day_key ∈ [start,end]` のみ検証（期間外は 400）。base64 デコード → mime 許可リスト・サイズ上限を検証
+ * → sort_order＝当日最大+1 で INSERT。本文行（goal_journal）は作らない＝本文が空の日でも画像だけ保存できる。
+ */
+export function addJournalImage(
+  db: DB,
+  goalId: number,
+  dayKey: string,
+  input: AddJournalImageInput,
+  nowMs = Date.now(),
+): JournalImageMeta {
+  const row = getGoalRow(db, goalId); // 存在確認（無ければ 404）。status は問わない。
+  if (dayKey < row.start_day || dayKey > row.end_day)
+    throw new JournalImageError('目標期間外の日には追加できません');
+  const { mime, bytes } = parseDataUrl(input.dataUrl);
+  if (!IMAGE_MIME_ALLOW.has(mime))
+    throw new JournalImageError('対応していない画像形式です（JPEG / PNG / WebP のみ）');
+  if (bytes.length === 0) throw new JournalImageError('画像データが空です');
+  if (bytes.length > IMAGE_MAX_BYTES) throw new JournalImageError('画像サイズが上限（5MB）を超えています');
+
+  const caption = String(input.caption ?? '').trim();
+  const width = input.width ?? null;
+  const height = input.height ?? null;
+  const nextSort = (
+    db
+      .prepare(
+        'SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM goal_journal_image WHERE goal_id = ? AND day_key = ?',
+      )
+      .get(goalId, dayKey) as { n: number }
+  ).n;
+  const info = db
+    .prepare(
+      `INSERT INTO goal_journal_image (goal_id, day_key, caption, mime, bytes, width, height, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(goalId, dayKey, caption, mime, bytes, width, height, nextSort, nowMs);
+  return { imageId: info.lastInsertRowid as number, caption, mime, width, height, sortOrder: nextSort };
+}
+
+/** 画像バイナリを取得（所有検証つき・読み取りは status 非依存）。 */
+export function getJournalImageBytes(db: DB, goalId: number, imageId: number): { mime: string; bytes: Buffer } {
+  const r = db
+    .prepare('SELECT mime, bytes FROM goal_journal_image WHERE id = ? AND goal_id = ?')
+    .get(imageId, goalId) as { mime: string; bytes: Buffer } | undefined;
+  if (!r) throw new JournalImageNotFoundError();
+  return { mime: r.mime, bytes: r.bytes };
+}
+
+/** キャプション更新（所有検証のみ・状態は問わない・design D4b）。 */
+export function updateJournalImageCaption(
+  db: DB,
+  goalId: number,
+  imageId: number,
+  caption: string,
+): JournalImageMeta {
+  const meta = imageMetaById(db, goalId, imageId); // 所有検証（他目標・不在は 404）。
+  const next = String(caption ?? '').trim();
+  db.prepare('UPDATE goal_journal_image SET caption = ? WHERE id = ? AND goal_id = ?').run(next, imageId, goalId);
+  return { ...meta, caption: next };
+}
+
+/** 画像削除（所有検証のみ・状態は問わない・design D4b）。 */
+export function deleteJournalImage(db: DB, goalId: number, imageId: number): boolean {
+  imageMetaById(db, goalId, imageId); // 所有検証（他目標・不在は 404）。
+  return db.prepare('DELETE FROM goal_journal_image WHERE id = ? AND goal_id = ?').run(imageId, goalId).changes > 0;
+}
+
 // --- レポート集計（spec: goal-report / D5）--------------------------------
 
 export interface ReportDayCell {
@@ -439,11 +591,25 @@ export interface ReportThresholdChange {
   newSeconds: number | null;
   reason: string;
 }
+export interface ReportDayImage {
+  imageId: number;
+  caption: string;
+}
+/** ③の2モード用の平坦な画像メタ（キャプション横断・日跨ぎの並びに使う・design D5）。 */
+export interface ReportImage {
+  imageId: number;
+  caption: string;
+  dayKey: string;
+  dayNumber: number;
+  sortOrder: number;
+}
 export interface ReportDayText {
   dayKey: string;
   dayNumber: number;
   text: string;
   source: 'journal' | 'reflection' | null;
+  /** その日に添付された画像（sort_order 昇順）。③は Day1/Day30、④は各日で使う（D5）。 */
+  images: ReportDayImage[];
 }
 export interface GoalReport {
   goal: {
@@ -459,6 +625,8 @@ export interface GoalReport {
   hasTimeType: boolean;
   thresholdChanges: ReportThresholdChange[];
   days: ReportDayText[];
+  /** 全画像の平坦リスト（(caption, dayNumber, sortOrder) 昇順）。③の2モードが使う（D5）。 */
+  reportImages: ReportImage[];
 }
 
 /** 完走した目標の完了レポートを集計する。完走前は GoalReportNotReadyError（API は 409）。 */
@@ -552,13 +720,37 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
       content: string;
     }[]).map((r) => [r.day_key, r.content]),
   );
+  // 各日の画像メタ（④用・sort_order 昇順）＋ ③用の平坦リスト。バイトは含めない（JSON は軽いまま・D5）。
+  const imagesByDay = new Map<string, ReportDayImage[]>();
+  const reportImages: ReportImage[] = [];
+  for (const r of db
+    .prepare('SELECT id, day_key, caption, sort_order FROM goal_journal_image WHERE goal_id = ? ORDER BY day_key, sort_order, id')
+    .all(id) as { id: number; day_key: string; caption: string; sort_order: number }[]) {
+    if (!imagesByDay.has(r.day_key)) imagesByDay.set(r.day_key, []);
+    imagesByDay.get(r.day_key)!.push({ imageId: r.id, caption: r.caption });
+    reportImages.push({
+      imageId: r.id,
+      caption: r.caption,
+      dayKey: r.day_key,
+      dayNumber: dayDiff(goal.start_day, r.day_key) + 1,
+      sortOrder: r.sort_order,
+    });
+  }
+  // (caption, dayNumber, sortOrder) 昇順に並べ替える（③の2モードが前提とする決定的な並び）。
+  reportImages.sort(
+    (a, b) =>
+      a.caption.trim().localeCompare(b.caption.trim()) ||
+      a.dayNumber - b.dayNumber ||
+      a.sortOrder - b.sortOrder,
+  );
   const days: ReportDayText[] = dayKeys.map((dk, i) => {
+    const images = imagesByDay.get(dk) ?? [];
     const j = journalByDay.get(dk);
-    if (j && j.trim()) return { dayKey: dk, dayNumber: i + 1, text: j, source: 'journal' };
+    if (j && j.trim()) return { dayKey: dk, dayNumber: i + 1, text: j, source: 'journal', images };
     const ref = getReflection(db, dk);
     if (ref && ref.content && ref.content.trim())
-      return { dayKey: dk, dayNumber: i + 1, text: ref.content, source: 'reflection' };
-    return { dayKey: dk, dayNumber: i + 1, text: '', source: null };
+      return { dayKey: dk, dayNumber: i + 1, text: ref.content, source: 'reflection', images };
+    return { dayKey: dk, dayNumber: i + 1, text: '', source: null, images };
   });
 
   return {
@@ -575,5 +767,6 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
     hasTimeType: reportPractices.some((p) => p.isTimeType),
     thresholdChanges,
     days,
+    reportImages,
   };
 }

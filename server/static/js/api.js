@@ -95,6 +95,14 @@ export const api = {
   getGoalJournal: (id, date) => req('GET', `/api/goals/${id}/journal/${date}`),
   putGoalJournal: (id, date, content) => req('PUT', `/api/goals/${id}/journal/${date}`, { content }),
 
+  // 目標日記の画像添付（バイナリ表示は URL 直指定: /api/goals/:id/journal/images/:imageId）
+  listGoalJournalImages: (id, date) => req('GET', `/api/goals/${id}/journal/${date}/images`),
+  addGoalJournalImage: (id, date, { dataUrl, caption }) =>
+    req('POST', `/api/goals/${id}/journal/${date}/images`, { dataUrl, caption }),
+  updateGoalJournalImageCaption: (id, imageId, caption) =>
+    req('PATCH', `/api/goals/${id}/journal/images/${imageId}`, { caption }),
+  deleteGoalJournalImage: (id, imageId) => req('DELETE', `/api/goals/${id}/journal/images/${imageId}`),
+
   // お試し（デモ）モード（読み取り専用・本番ゲート非到達）。now=仮想 day_key。
   demo: {
     reset: () => req('POST', '/api/demo/reset'),
