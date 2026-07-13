@@ -186,6 +186,9 @@ function afterRender() {
     const ta = rootEl.querySelector('.kb-composer');
     if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   }
+  // 詳細パネルのタイトルは DOM 挿入後（scrollHeight 確定後）に初期高さを確定する。
+  const detTitle = rootEl.querySelector('textarea.kb-detail-title');
+  if (detTitle) autosize(detTitle);
   focusEditorLine();
 }
 
@@ -761,19 +764,29 @@ function closeDetail() {
   renderAll();
 }
 
+// textarea の高さを内容に追従させる（auto→scrollHeight 方式）。
+function autosize(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+
 function detailEl(t) {
   const panel = h('div', { class: 'kb-detail' });
 
   panel.appendChild(h('div', { class: 'kb-detail-close-row' },
     h('button', { class: 'kb-detail-close', type: 'button', title: '閉じる', onclick: closeDetail }, iconClose())));
 
-  const titleInp = h('input', { class: 'kb-detail-title', type: 'text', placeholder: 'タイトル' });
+  const titleInp = h('textarea', { class: 'kb-detail-title', rows: '1', placeholder: 'タイトル' });
   titleInp.value = t.title;
   titleInp.addEventListener('input', () => {
+    // タイトルは単一行セマンティクス: 混入した改行はスペースへ畳む。
+    const collapsed = titleInp.value.replace(/\r?\n/g, ' ');
+    if (collapsed !== titleInp.value) titleInp.value = collapsed;
     t.title = titleInp.value;
     scheduleSave(t, 'title');
     const cardTitle = rootEl.querySelector(`.kb-card[data-id="${t.id}"] .kb-card-title`);
     if (cardTitle) cardTitle.textContent = t.title;
+    autosize(titleInp);
   });
   titleInp.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
