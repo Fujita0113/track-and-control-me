@@ -16,11 +16,31 @@ export const DEMO_START_DAY = '2026-06-11'; // Day1
 export const DEMO_END_DAY = '2026-07-10'; // Day30（start + 29）
 export const DEMO_PRE_START_DAY = addDaysKey(DEMO_START_DAY, -1); // 開始前（start − 1）
 export const DEMO_AFTER_END_DAY = addDaysKey(DEMO_END_DAY, 1); // 完走（end + 1）
-export const DEMO_GOAL_ID = 1; // 単一目標・空 DB への最初の挿入なので rowid=1。
+export const DEMO_GOAL_ID = 1; // 主目標・空 DB への最初の挿入なので rowid=1。
 
 const GOAL_DAYS = 30;
 const GOAL_NAME = 'メンタルを安定させる';
 const GOAL_PURPOSE = '毎日を穏やかに保ち、作業と振り返りの習慣で心を整える。';
+
+// --- 2つ目のデモ目標: 手動チェック（非時間型）のみを採用した完走目標 --------------
+// 時間型の実践を含まないため、完走レポートに②「時間の推移」が出ない例を示す
+// （goal-adopt-manual-check）。主目標より前の別期間（2026-05）に置き、一覧では主目標の後ろに並ぶ。
+export const DEMO_GOAL2_ID = 2;
+export const DEMO_GOAL2_START_DAY = '2026-05-01'; // Day1
+export const DEMO_GOAL2_END_DAY = addDaysKey(DEMO_GOAL2_START_DAY, GOAL_DAYS - 1); // 2026-05-30
+const GOAL2_NAME = '朝の散歩を習慣にする';
+const GOAL2_PURPOSE = '時間では測らない「やった／やってない」だけの一点突破チャレンジ。';
+const KEY_WALK = 'manual:朝散歩';
+const KEY_STRETCH = 'manual:ストレッチ';
+// 手動チェックを飛ばした日（1始まり Day 番号）。両方達成の日＝達成日数 24/30。
+const WALK_MISS_DAYS = new Set<number>([5, 12, 20]); // 朝散歩 met 27/30
+const STRETCH_MISS_DAYS = new Set<number>([8, 12, 15, 22]); // ストレッチ met 26/30
+// 2つ目の目標の日記（Before/After＋中盤の谷のみ・他日は空でフォールバック確認）。
+const GOAL2_JOURNAL: Record<number, string> = {
+  1: '# 朝散歩を始める\n時間や量で自分を追い込むのに疲れた。今回は「やったか/やってないか」だけ。朝に外へ出て、軽くストレッチ。それだけを30日。',
+  12: '**両方飛ばした日。** 寝坊して散歩もストレッチも抜けた。数字じゃないぶん、抜けた日は白黒はっきり残る。それでいい。',
+  30: '# 30日を終えて\n時間で測らないチェックだけでも、続けた事実はちゃんと積み上がった。カレンダーが埋まっていくのが素直に嬉しい。',
+};
 
 // 総作業の閾値: Day1..12 は 4h（14400s）、Day13 に 3h（10800s）へ引き下げ（理由つき）。
 const THRESH_HIGH = 14400;
@@ -34,6 +54,12 @@ const SEED_TS = Date.UTC(2026, 5, 10, 0, 0, 0); // 2026-06-10T00:00:00Z
 const KEY_TOTAL = 'total_work';
 const KEY_REFLECTION = 'planning:reflection_done';
 const KEY_TOMORROW = 'planning:tomorrow_tasks_registered';
+// 手動チェック実践（非時間型）。安定キー manual:<ラベル>（goal-adopt-manual-check）。
+const KEY_KIN = 'manual:筋トレ';
+
+// 筋トレ（手動チェック）を飛ばした日（1始まりの Day 番号）。
+// いずれも既存の谷（Day 11,12,13,15,16,20）に含まれる日のみ選ぶ＝達成日数 24/30 を変えない。
+const KIN_MISS_DAYS = new Set<number>([11, 12, 16]);
 
 /**
  * 30日ぶんの筋書き（達成 24/30・中盤に谷→後半持ち直し）。
@@ -83,7 +109,7 @@ const PLAN: DayPlan[] = [
 
 // 30日ぶんの日記（Day1=Before / Day30=After、中盤は谷と交渉、後半は持ち直し）。
 const JOURNAL: string[] = [
-  '# はじめての一日\n最近、気持ちの浮き沈みが激しい。まずは「作業4時間・振り返り・明日の準備」を30日続けてみる。うまくやろうとしすぎないのが今日のテーマ。',
+  '# はじめての一日\n最近、気持ちの浮き沈みが激しい。まずは「作業4時間・振り返り・明日の準備・筋トレ」を30日続けてみる。体を動かすと気分が上向くと聞いたので、筋トレは手動チェックで記録する。うまくやろうとしすぎないのが今日のテーマ。',
   '朝の入りは重かったが、机に向かえば手は動いた。振り返りを書くと、頭の中が少し整理される感覚がある。',
   'ペースはつかめてきた。完璧じゃなくても「やった」に丸をつけられるのは気分がいい。',
   '今日はよく集中できた。作業が乗ると、夜の振り返りも前向きになる。良い循環。',
@@ -93,12 +119,12 @@ const JOURNAL: string[] = [
   '平常運転。派手さはないが、こういう日を積み重ねたい。',
   '少し飽きが来た。それでも手順化しておいたおかげで動けた。',
   '10日到達。ここまで大きく崩れずに来られた。折り返しに向けて気を抜かない。',
-  '**つまずいた。** やることが重なって作業時間が全然伸びない。明日の準備まで手が回らなかった。',
-  '気持ちが沈んで振り返りを書けなかった。無理に埋めず、今日は寝る。ゼロの日も記録に残す。',
+  '**つまずいた。** やることが重なって作業時間が全然伸びない。明日の準備も、筋トレも手が回らなかった。',
+  '気持ちが沈んで振り返りを書けなかった。筋トレも今日はパス。無理に埋めず、今日は寝る。ゼロの日も記録に残す。',
   '課題週間で作業4時間はもう現実的じゃない。**閾値を3時間へ下げた。** 逃げじゃなく、ゼロにしないための調整。',
   '下げた基準なら届いた。小さくても「達成」に戻せたのが大きい。',
   '振り返りは書けたが作業が伸びず。谷はまだ続いている。焦らない。',
-  '作業は戻ってきた。ただ夜に力尽きて振り返りが抜けた。惜しい。',
+  '作業は戻ってきた。ただ夜に力尽きて振り返りも筋トレも抜けた。惜しい。',
   '谷を抜けた感触。基準を下げたことで、続けること自体は途切れていない。',
   '安定してきた。3時間ラインが今の自分にはちょうどいい。',
   'リズムが戻った。振り返りを書くと一日の区切りがつく。',
@@ -112,7 +138,7 @@ const JOURNAL: string[] = [
   '好調維持。作業のあとの振り返りが一番落ち着く時間になった。',
   '安定。明日の準備までがワンセットとして体に入った。',
   'あと一日。谷も含めて全部が今の自分をつくった。',
-  '# 30日を終えて\n始めた頃の不安定さが嘘のよう。**基準を下げてでも続けた**中盤の判断が効いた。数字の達成より、\n心が整った実感が一番の収穫。この習慣は続ける。',
+  '# 30日を終えて\n始めた頃の不安定さが嘘のよう。**基準を下げてでも続けた**中盤の判断が効いた。作業と振り返り、そして筋トレの習慣が体に馴染んだ。数字の達成より、\n心が整った実感が一番の収穫。この習慣は続ける。',
 ];
 
 // --- サンプル画像（単色 PNG・design D8）------------------------------------
@@ -176,6 +202,8 @@ export function seedDemo(db: DB): void {
     insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_TOTAL, target: 'TOTAL_WORK', label: '総作業時間', group: null, signal: null, sort: 0 });
     insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_REFLECTION, target: 'PLANNING', label: '今日の振り返り', group: null, signal: 'reflection_done', sort: 1 });
     insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_TOMORROW, target: 'PLANNING', label: '明日のタスク登録', group: null, signal: 'tomorrow_tasks_registered', sort: 2 });
+    // 手動チェック実践「筋トレ」（非時間型・閾値なし）。完走レポート①に手動チェック行として乗る。
+    insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_KIN, target: 'MANUAL_CHECK', label: '筋トレ', group: null, signal: null, sort: 3 });
 
     // 閾値変更ログ（Day13 に 4h→3h、理由必須）。
     const changeDate = addDaysKey(DEMO_START_DAY, THRESH_CHANGE_DAY - 1);
@@ -212,13 +240,16 @@ export function seedDemo(db: DB): void {
       const threshold = i + 1 >= THRESH_CHANGE_DAY ? THRESH_LOW : THRESH_HIGH;
       const workSec = plan.workMin * 60;
       const metTotal = workSec >= threshold;
-      const allMet = metTotal && plan.refl && plan.tmr;
+      const kinMet = !KIN_MISS_DAYS.has(i + 1); // 筋トレ（手動チェック）。飛ばした日のみ未達成。
+      const allMet = metTotal && plan.refl && plan.tmr && kinMet;
 
       // per_condition_results（レポート①②と today の条件進捗が読む焼き込み列）。
+      // 手動チェックは非時間型なので actualSeconds/thresholdSeconds を持たない。
       const per = [
         { conditionKey: KEY_TOTAL, target: 'TOTAL_WORK', met: metTotal, actualSeconds: workSec, thresholdSeconds: threshold, label: '総作業時間' },
         { conditionKey: KEY_REFLECTION, target: 'PLANNING', met: plan.refl, signalKey: 'reflection_done', label: '今日の振り返り' },
         { conditionKey: KEY_TOMORROW, target: 'PLANNING', met: plan.tmr, signalKey: 'tomorrow_tasks_registered', label: '明日のタスク登録' },
+        { conditionKey: KEY_KIN, target: 'MANUAL_CHECK', met: kinMet, label: '筋トレ' },
       ];
       insEval.run({
         day: dayKey,
@@ -253,6 +284,40 @@ export function seedDemo(db: DB): void {
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '作業スペース', IMG_AFTER, 0, SEED_TS);
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '植物', IMG_AFTER, 1, SEED_TS);
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '記念', IMG_AFTER, 2, SEED_TS);
+
+    // --- 2つ目のデモ目標: 手動チェックのみ（非時間型）を採用した完走目標 -----------
+    // 時間型実践が無いため、完走レポートは①達成カレンダーのみ・②時間の推移は出ない。
+    db.prepare(
+      'INSERT INTO goal (id, name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(DEMO_GOAL2_ID, GOAL2_NAME, GOAL2_PURPOSE, DEMO_GOAL2_START_DAY, DEMO_GOAL2_END_DAY, SEED_TS);
+    // 採用実践は手動チェック2つ（朝散歩 / ストレッチ）。閾値なし・非時間型。
+    insPractice.run({ goal: DEMO_GOAL2_ID, key: KEY_WALK, target: 'MANUAL_CHECK', label: '朝散歩', group: null, signal: null, sort: 0 });
+    insPractice.run({ goal: DEMO_GOAL2_ID, key: KEY_STRETCH, target: 'MANUAL_CHECK', label: 'ストレッチ', group: null, signal: null, sort: 1 });
+
+    for (let i = 0; i < GOAL_DAYS; i++) {
+      const dayKey = addDaysKey(DEMO_GOAL2_START_DAY, i);
+      const walkMet = !WALK_MISS_DAYS.has(i + 1);
+      const stretchMet = !STRETCH_MISS_DAYS.has(i + 1);
+      const allMet = walkMet && stretchMet;
+      // per_condition_results は手動チェックのみ（actualSeconds/thresholdSeconds なし＝非時間型）。
+      const per = [
+        { conditionKey: KEY_WALK, target: 'MANUAL_CHECK', met: walkMet, label: '朝散歩' },
+        { conditionKey: KEY_STRETCH, target: 'MANUAL_CHECK', met: stretchMet, label: 'ストレッチ' },
+      ];
+      insEval.run({
+        day: dayKey,
+        status: allMet ? 'UNLOCKED' : 'LOCKED',
+        met: allMet ? 1 : 0,
+        per: JSON.stringify(per),
+        first: allMet ? SEED_TS : null,
+        now: SEED_TS,
+      });
+      const j = GOAL2_JOURNAL[i + 1];
+      if (j) insJournal.run(DEMO_GOAL2_ID, dayKey, j, SEED_TS, SEED_TS);
+    }
+    // ③ Before/After 画像（1枚ずつ・同一キャプションでペア化）。
+    insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY, '朝の道', IMG_BEFORE, 0, SEED_TS);
+    insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_END_DAY, '朝の道', IMG_AFTER, 0, SEED_TS);
   });
   tx();
 }

@@ -61,6 +61,17 @@ export class ThresholdReasonRequiredError extends Error {
   }
 }
 
+/**
+ * ルール条件のバリデーション違反（API は 400・spec: manual-check-stable-key D2）。
+ * MANUAL_CHECK のラベル必須・ルールセット内一意など、保存前の入力検証で投げる。
+ */
+export class RuleConditionError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'RuleConditionError';
+  }
+}
+
 export interface RuleSetRow {
   id: number;
   effective_date: string;
@@ -134,7 +145,7 @@ function canWriteTodayRule(db: DB, today: string): boolean {
   return prior === undefined; // 継承元も無い＝真の初期状態のみ許可
 }
 
-function deriveConditionKey(c: ConditionInput, index: number): string {
+function deriveConditionKey(c: ConditionInput): string {
   if (c.conditionKey) return c.conditionKey;
   switch (c.target) {
     case 'TOTAL_WORK':
@@ -142,13 +153,33 @@ function deriveConditionKey(c: ConditionInput, index: number): string {
     case 'GROUP':
       return `group:${c.stableGroupId ?? 'unknown'}`;
     case 'MANUAL_CHECK':
-      return `manual:${index}`;
+      // ラベル（チェックのテキスト）を安定キーに用いる（TIMELINE の timeline:<ラベル> と対称）。
+      // 並び順に依存しないため manual:<index> の弱同一性を解消する（spec: manual-check-stable-key）。
+      return `manual:${(c.label ?? '').trim()}`;
     case 'PLANNING':
       return `planning:${c.signalKey ?? 'default'}`;
     case 'TIMELINE':
       // ラベル（カテゴリ名）を安定キーに用いる（GROUP が stable_group_id で一致するのと対称）。
-      // 並び順に依存しないため manual:<index> の弱同一性を解消する。
+      // 並び順に依存しないため index の弱同一性を解消する。
       return `timeline:${c.label ?? 'uncategorized'}`;
+  }
+}
+
+/**
+ * MANUAL_CHECK 条件のラベル検証（spec: manual-check-stable-key D2）。
+ * ラベルは trim 後非空必須、かつ同一ルールセット内で manual:<ラベル> は一意でなければならない
+ * （安定キーの衝突・空キーを防ぐ）。違反は RuleConditionError（API は 400）。
+ */
+function validateManualCheckConditions(conditions: ConditionInput[]): void {
+  const seen = new Set<string>();
+  for (const c of conditions) {
+    if (c.target !== 'MANUAL_CHECK') continue;
+    const label = (c.label ?? '').trim();
+    if (!label) throw new RuleConditionError('手動チェックのラベル（テキスト）は必須です');
+    const key = `manual:${label}`;
+    if (seen.has(key))
+      throw new RuleConditionError(`手動チェックのラベル「${label}」が同一ルール内で重複しています`);
+    seen.add(key);
   }
 }
 
@@ -269,9 +300,9 @@ function recordThresholdChanges(
   if (adopted.size === 0) return;
 
   const afterThresholds = new Map<string, number | null>();
-  input.conditions.forEach((c, i) => {
+  input.conditions.forEach((c) => {
     if (c.target === 'TOTAL_WORK' || c.target === 'GROUP' || c.target === 'TIMELINE')
-      afterThresholds.set(deriveConditionKey(c, i), c.thresholdSeconds ?? null);
+      afterThresholds.set(deriveConditionKey(c), c.thresholdSeconds ?? null);
   });
 
   const changes: { key: string; before: number | null; after: number | null }[] = [];
@@ -355,7 +386,7 @@ function upsertTodayRuleSet(
   if (!baseline) throw new FrozenRuleError(today);
 
   // 入力条件へ condition_key を割り当て（未指定は target から導出）。
-  const inputKeyed = input.conditions.map((c, i) => ({ c, key: deriveConditionKey(c, i) }));
+  const inputKeyed = input.conditions.map((c) => ({ c, key: deriveConditionKey(c) }));
   const inputByKey = new Map(inputKeyed.map((x) => [x.key, x]));
 
   // combinator は当日変更不可（AND→OR 等の骨抜き防止）。baseline に条件があれば一致を要求。
@@ -477,6 +508,8 @@ export function upsertFutureRuleSet(
   const today = todayKey(db, nowMs);
   // 過去は常に凍結。
   if (effectiveDate < today) throw new FrozenRuleError(effectiveDate);
+  // MANUAL_CHECK のラベル必須・ルールセット内一意を検証（当日 add-only 経路も含めて先に弾く）。
+  validateManualCheckConditions(input.conditions);
   // 当日で baseline がある（ブートストラップでない）場合は当日 add-only 経路へ。
   if (effectiveDate === today && !canWriteTodayRule(db, today)) {
     return upsertTodayRuleSet(db, today, input, nowMs, opts);
@@ -525,7 +558,7 @@ export function upsertFutureRuleSet(
         threshold: c.thresholdSeconds ?? null,
         label: c.label ?? null,
         signal: c.signalKey ?? null,
-        key: deriveConditionKey(c, i),
+        key: deriveConditionKey(c),
         sort: i,
       });
       // TIMELINE 条件のカテゴリラベルは手動カテゴリレジストリへ upsert する（記録経路と同じ扱い）。

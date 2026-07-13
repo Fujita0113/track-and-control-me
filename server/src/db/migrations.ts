@@ -4,10 +4,18 @@
  * すべてのタイムスタンプは INTEGER epoch ms(UTC)。day_key は TEXT 'YYYY-MM-DD'。
  */
 
+import type Database from 'better-sqlite3';
+
 export interface Migration {
   version: number;
   name: string;
-  sql: string;
+  /** 純 SQL の移行（DDL・単純 DML）。手続き的移行が要るときは `run` を使う。 */
+  sql?: string;
+  /**
+   * 手続き的な移行（読み取り→加工→書き戻し）。`sql` と併用可（sql を先に流す）。
+   * migrate() が既に開いたトランザクション内で呼ばれる（呼び出し側で tx を張らないこと）。
+   */
+  run?: (db: Database.Database) => void;
 }
 
 export const MIGRATIONS: Migration[] = [
@@ -597,5 +605,106 @@ CREATE TABLE goal_journal_image (
 );
 CREATE INDEX idx_gji ON goal_journal_image(goal_id, day_key);
 `,
+  },
+  {
+    version: 15,
+    name: 'manual-check-stable-key',
+    // MANUAL_CHECK の condition_key を並び順依存の manual:<index> から
+    // ラベル由来の安定キー manual:<ラベル> へ移行する（spec: manual-check-stable-key / design D4・D5）。
+    // - rule_condition は label 列を持つため、ラベルから直接新キーを作る。
+    // - daily_check は index で保存されているので、その日に実効なルールセットを解決し、
+    //   (sort_order, id) 順の 0 始まり順位＝旧 index からラベルを引いて振り替える。
+    // - 空ラベル／同一ルールセット内の重複ラベル／対応ラベル無し（孤児）は skip＋ログし旧キー据え置き。
+    // - 履歴 JSON（unlock_evaluation.per_condition_results）は移行しない（従来 MANUAL_CHECK は採用不可のため参照無し）。
+    run: (db) => {
+      // 凍結トリガは frozen な rule_condition の UPDATE を ABORT するため、移行中だけ外して張り直す。
+      db.exec('DROP TRIGGER IF EXISTS trg_rule_cond_no_update_when_frozen');
+      try {
+        interface Mapped {
+          label: string;
+          key: string;
+          condId: number;
+        }
+        // rule_set_id -> Map(旧index -> Mapped | null=衝突で skip)
+        const perSet = new Map<number, Map<number, Mapped | null>>();
+        const ruleSets = db.prepare('SELECT id FROM daily_rule_set').all() as { id: number }[];
+        for (const rs of ruleSets) {
+          const conds = db
+            .prepare('SELECT id, target, label FROM rule_condition WHERE rule_set_id = ? ORDER BY sort_order, id')
+            .all(rs.id) as { id: number; target: string; label: string | null }[];
+          const idxMap = new Map<number, Mapped | null>();
+          const labelCount = new Map<string, number>();
+          // (sort_order, id) 順の 0 始まり順位＝旧 index（design D5）。
+          conds.forEach((c, index) => {
+            if (c.target !== 'MANUAL_CHECK') return;
+            const label = (c.label ?? '').trim();
+            idxMap.set(index, label ? { label, key: `manual:${label}`, condId: c.id } : null);
+            if (label) labelCount.set(label, (labelCount.get(label) ?? 0) + 1);
+          });
+          // ルールセット内で重複するラベルは衝突として全て skip（旧キー据え置き）。
+          for (const [index, v] of idxMap) {
+            if (v && (labelCount.get(v.label) ?? 0) > 1) {
+              console.warn(
+                `[migration 15] duplicate MANUAL_CHECK label "${v.label}" in rule_set ${rs.id}; skipping`,
+              );
+              idxMap.set(index, null);
+            }
+          }
+          perSet.set(rs.id, idxMap);
+        }
+
+        // (3.2) rule_condition.condition_key を新キーへ更新（衝突・空ラベルは据え置き）。
+        const updCond = db.prepare('UPDATE rule_condition SET condition_key = ? WHERE id = ?');
+        for (const [, idxMap] of perSet) {
+          for (const [, v] of idxMap) {
+            if (v) updCond.run(v.key, v.condId);
+          }
+        }
+
+        // (3.3) daily_check: 旧 manual:<index> を、その日に実効なルールセットの index→ラベルで振り替える。
+        const dcRows = db
+          .prepare("SELECT id, day_key, condition_key FROM daily_check WHERE condition_key LIKE 'manual:%'")
+          .all() as { id: number; day_key: string; condition_key: string }[];
+        const effStmt = db.prepare(
+          'SELECT id FROM daily_rule_set WHERE effective_date <= ? ORDER BY effective_date DESC LIMIT 1',
+        );
+        const clashStmt = db.prepare(
+          'SELECT 1 FROM daily_check WHERE day_key = ? AND condition_key = ? AND id <> ?',
+        );
+        const updCheck = db.prepare('UPDATE daily_check SET condition_key = ? WHERE id = ?');
+        for (const r of dcRows) {
+          const rest = r.condition_key.slice('manual:'.length);
+          const index = Number(rest);
+          // 既に manual:<ラベル> 形式（非整数サフィックス）は対象外。
+          if (!Number.isInteger(index) || String(index) !== rest) continue;
+          const eff = effStmt.get(r.day_key) as { id: number } | undefined;
+          const mapped = eff ? perSet.get(eff.id)?.get(index) : undefined;
+          if (!mapped) {
+            console.warn(
+              `[migration 15] no MANUAL_CHECK label for ${r.condition_key} on ${r.day_key}; leaving as-is`,
+            );
+            continue; // 孤児キー・衝突は据え置き（削除しない）。
+          }
+          // 振替先キーが同日に既存なら UNIQUE(day_key, condition_key) 衝突を避けて据え置き。
+          if (clashStmt.get(r.day_key, mapped.key, r.id)) {
+            console.warn(
+              `[migration 15] target key ${mapped.key} already exists on ${r.day_key}; leaving ${r.condition_key} as-is`,
+            );
+            continue;
+          }
+          updCheck.run(mapped.key, r.id);
+        }
+      } finally {
+        // 外したトリガを v13 と同一定義で張り直す。
+        db.exec(`
+CREATE TRIGGER trg_rule_cond_no_update_when_frozen
+BEFORE UPDATE ON rule_condition
+FOR EACH ROW
+WHEN (SELECT status FROM daily_rule_set WHERE id = OLD.rule_set_id) NOT IN ('DRAFT_FUTURE', 'DRAFT_TODAY')
+BEGIN
+  SELECT RAISE(ABORT, 'frozen rule set: condition update rejected');
+END;`);
+      }
+    },
   },
 ];

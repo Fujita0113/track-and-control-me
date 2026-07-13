@@ -23,7 +23,8 @@ export function migrate(db: DB): void {
   const pending = MIGRATIONS.filter((m) => m.version > current).sort((a, b) => a.version - b.version);
   for (const m of pending) {
     const run = db.transaction(() => {
-      db.exec(m.sql);
+      if (m.sql) db.exec(m.sql);
+      if (m.run) m.run(db);
       db.pragma(`user_version = ${m.version}`);
     });
     run();

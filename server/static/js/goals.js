@@ -253,8 +253,11 @@ async function openCreateForm(onDone) {
       return;
     }
     for (const c of candidates) {
+      // value=condition_key（total_work / group:… / timeline:… / manual:…）が作成 POST に入る。
       const box = h('input', { type: 'checkbox', value: c.conditionKey });
       const label = niceLabel(c.target, c.conditionKey, c.label);
+      // 時間型（TOTAL_WORK/GROUP）のみ「≥ 時間」サブラベルを付ける。
+      // MANUAL_CHECK は非時間型（チェックのテキストのみ）、TIMELINE は閾値がラベルに含まれる。
       const sub = (c.target === 'TOTAL_WORK' || c.target === 'GROUP') && c.thresholdSeconds
         ? `　≥ ${fmtHM(c.thresholdSeconds)}` : '';
       candHost.appendChild(h('label', { class: 'cond' },

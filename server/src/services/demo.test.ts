@@ -9,10 +9,12 @@ import { getDemoDb, resetDemoDb } from './demo-db.js';
 import {
   seedDemo,
   DEMO_GOAL_ID,
+  DEMO_GOAL2_ID,
   DEMO_START_DAY,
   DEMO_END_DAY,
   DEMO_PRE_START_DAY,
   DEMO_AFTER_END_DAY,
+  DEMO_GOAL2_START_DAY,
 } from './demo-seed.js';
 
 const TZ = 'Asia/Tokyo';
@@ -68,9 +70,19 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     // ヘッダ: 達成 24/30。
     expect(rep.goal.dayCount).toBe(30);
     expect(rep.goal.achievedDays).toBe(24);
-    // ① 実践3つ・各30マス。
-    expect(rep.practices.length).toBe(3);
+    // ① 実践4つ（総作業 / 振り返り / 明日タスク / 筋トレ手動チェック）・各30マス。
+    expect(rep.practices.length).toBe(4);
     for (const p of rep.practices) expect(p.cells.length).toBe(30);
+    // 手動チェック実践（筋トレ）が非時間型として乗る（goal-adopt-manual-check）。
+    const kin = rep.practices.find((p) => p.conditionKey === 'manual:筋トレ')!;
+    expect(kin).toBeDefined();
+    expect(kin.target).toBe('MANUAL_CHECK');
+    expect(kin.isTimeType).toBe(false);
+    expect(kin.label).toBe('筋トレ');
+    // 谷の一部（Day11,12,16）で未達成、それ以外は達成。達成日数 24/30 は維持。
+    expect(kin.cells[10]!.met).toBe(false); // Day11
+    expect(kin.cells[0]!.met).toBe(true); // Day1
+    expect(kin.cells[29]!.met).toBe(true); // Day30
     // ② 時間型（総作業）あり＋Day13 の閾値変更（4h→3h・理由つき）。
     expect(rep.hasTimeType).toBe(true);
     expect(rep.thresholdChanges.length).toBe(1);
@@ -100,6 +112,38 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(getJournal(db, DEMO_GOAL_ID, DEMO_START_DAY).content).toContain('はじめて');
     expect(getJournal(db, DEMO_GOAL_ID, DEMO_END_DAY).content).toContain('30日を終えて');
   });
+
+  it('手動チェックのみの目標（DEMO_GOAL2）は①のみで②時間の推移が出ない', () => {
+    // 一覧では主目標（後の期間）が先、手動チェックのみ目標が後に並ぶ。
+    const goals = listGoals(db, vnow(DEMO_AFTER_END_DAY));
+    expect(goals.length).toBe(2);
+    const g2 = goals.find((g) => g.id === DEMO_GOAL2_ID)!;
+    expect(g2.name).toBe('朝の散歩を習慣にする');
+
+    const rep = getGoalReport(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
+    // ① 実践は手動チェック2つ・各30マス。全て非時間型。
+    expect(rep.practices.length).toBe(2);
+    for (const p of rep.practices) {
+      expect(p.target).toBe('MANUAL_CHECK');
+      expect(p.isTimeType).toBe(false);
+      expect(p.cells.length).toBe(30);
+    }
+    // ② 時間の推移は出ない（時間型実践ゼロ）＋閾値変更も無い。
+    expect(rep.hasTimeType).toBe(false);
+    expect(rep.thresholdChanges.length).toBe(0);
+    // 達成日数（両方 met の日）＝ 24/30。個別 met は 朝散歩27・ストレッチ26。
+    expect(rep.goal.achievedDays).toBe(24);
+    const walk = rep.practices.find((p) => p.conditionKey === 'manual:朝散歩')!;
+    const stretch = rep.practices.find((p) => p.conditionKey === 'manual:ストレッチ')!;
+    expect(walk.cells.filter((c) => c.met).length).toBe(27);
+    expect(stretch.cells.filter((c) => c.met).length).toBe(26);
+    expect(walk.cells[4]!.met).toBe(false); // Day5 は朝散歩を飛ばした
+    // 手動チェックは時間実測を持たない。
+    expect(walk.cells[0]!.actualSeconds).toBeNull();
+    expect(walk.cells[0]!.thresholdSeconds).toBeNull();
+    // ③④ Before/After の日記が引ける。
+    expect(getJournal(db, DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY).content).toContain('朝散歩を始める');
+  });
 });
 
 describe('本番非干渉ガードレール（5.1）', () => {
@@ -108,9 +152,9 @@ describe('本番非干渉ガードレール（5.1）', () => {
     const before = (prod.prepare('SELECT COUNT(*) AS c FROM goal').get() as { c: number }).c;
     expect(before).toBe(0);
 
-    // デモ DB を構築・リセット・読み取り。
+    // デモ DB を構築・リセット・読み取り（主目標＋手動チェックのみ目標の2件）。
     const demo = getDemoDb();
-    expect(listGoals(demo, vnow(DEMO_AFTER_END_DAY)).length).toBe(1);
+    expect(listGoals(demo, vnow(DEMO_AFTER_END_DAY)).length).toBe(2);
     resetDemoDb();
     getGoalReport(getDemoDb(), DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
 

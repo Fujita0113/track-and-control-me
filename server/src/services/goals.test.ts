@@ -54,7 +54,7 @@ function seedTomorrowRule(): void {
         { target: 'TOTAL_WORK', thresholdSeconds: 14400 },
         { target: 'GROUP', stableGroupId: 'g-atcoder', thresholdSeconds: 1800 },
         { target: 'PLANNING', signalKey: 'reflection_done' },
-        { target: 'MANUAL_CHECK', label: '振り返り', conditionKey: 'manual:3' },
+        { target: 'MANUAL_CHECK', label: '振り返り' },
       ],
     },
     NOW_TODAY,
@@ -69,12 +69,16 @@ function seedEval(dayKey: string, per: unknown[]): void {
 }
 
 describe('目標の作成・採用（明日開始）', () => {
-  it('採用候補は翌日実効ルールから出て MANUAL_CHECK を除外する', () => {
+  it('採用候補は翌日実効ルールから出て MANUAL_CHECK も含む', () => {
     seedTomorrowRule();
     const cands = adoptCandidates(db, NOW_TODAY, 'tomorrow');
     const keys = cands.map((c) => c.conditionKey).sort();
-    expect(keys).toEqual(['group:g-atcoder', 'planning:reflection_done', 'total_work']);
-    expect(cands.some((c) => c.conditionKey.startsWith('manual:'))).toBe(false);
+    expect(keys).toEqual(['group:g-atcoder', 'manual:振り返り', 'planning:reflection_done', 'total_work']);
+    // 手動チェックはラベル由来の安定キー・非時間型（閾値なし・接頭辞なしのラベル表示）。
+    const manual = cands.find((c) => c.conditionKey === 'manual:振り返り')!;
+    expect(manual.target).toBe('MANUAL_CHECK');
+    expect(manual.label).toBe('振り返り');
+    expect(manual.thresholdSeconds).toBeNull();
   });
 
   it('明日開始で作成すると翌日開始・30日固定（end=+29）で開始前になる', () => {
@@ -91,7 +95,7 @@ describe('目標の作成・採用（明日開始）', () => {
     expect(() =>
       createGoal(db, { name: 'x', practices: ['group:does-not-exist'], start: 'tomorrow' }, NOW_TODAY),
     ).toThrow(GoalPracticeError);
-    // MANUAL_CHECK 由来のキーも候補外。
+    // 実在しない手動チェックキー（旧 index 形式）は候補外なので採用できない。
     expect(() => createGoal(db, { name: 'x', practices: ['manual:3'], start: 'tomorrow' }, NOW_TODAY)).toThrow(
       GoalPracticeError,
     );
@@ -105,14 +109,14 @@ describe('目標の作成・採用（明日開始）', () => {
     expect(goals.length).toBe(2);
   });
 
-  it('TIMELINE 条件は採用候補に含まれ（manual:* は依然除外）、採用できる', () => {
+  it('TIMELINE / MANUAL_CHECK 条件は採用候補に含まれ、採用できる', () => {
     upsertFutureRuleSet(
       db,
       START,
       {
         conditions: [
           { target: 'TIMELINE', label: '運動', thresholdSeconds: 1800 },
-          { target: 'MANUAL_CHECK', label: '振り返り', conditionKey: 'manual:1' },
+          { target: 'MANUAL_CHECK', label: '筋トレ' },
         ],
       },
       NOW_TODAY,
@@ -122,11 +126,20 @@ describe('目標の作成・採用（明日開始）', () => {
     expect(tl).toBeTruthy();
     expect(tl!.target).toBe('TIMELINE');
     expect(tl!.label).toBe('運動 30分以上'); // 「<カテゴリ> ◯分以上」・生キーは出さない
-    expect(cands.some((c) => c.conditionKey.startsWith('manual:'))).toBe(false);
-    // 採用可能（timeline:<ラベル> の安定キーで保存される）。
-    const g = createGoal(db, { name: '運動習慣', practices: ['timeline:運動'], start: 'tomorrow' }, NOW_TODAY);
-    expect(g.practices[0]!.conditionKey).toBe('timeline:運動');
-    expect(g.practices[0]!.target).toBe('TIMELINE');
+    const mc = cands.find((c) => c.conditionKey === 'manual:筋トレ');
+    expect(mc).toBeTruthy();
+    expect(mc!.target).toBe('MANUAL_CHECK');
+    expect(mc!.label).toBe('筋トレ'); // 接頭辞なしのラベル表示
+    // どちらも採用可能（安定キーで保存される）。
+    const g = createGoal(
+      db,
+      { name: '運動習慣', practices: ['timeline:運動', 'manual:筋トレ'], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    const byKey = new Map(g.practices.map((p) => [p.conditionKey, p]));
+    expect(byKey.get('timeline:運動')!.target).toBe('TIMELINE');
+    expect(byKey.get('manual:筋トレ')!.target).toBe('MANUAL_CHECK');
+    expect(byKey.get('manual:筋トレ')!.label).toBe('筋トレ'); // ラベルスナップショット
   });
 });
 
@@ -501,5 +514,32 @@ describe('完了レポート（明日開始）', () => {
     expect(p.cells[0]!.actualSeconds).toBe(2100);
     expect(p.cells[0]!.thresholdSeconds).toBe(1800);
     expect(rep.hasTimeType).toBe(true);
+  });
+
+  it('MANUAL_CHECK 実践は①カレンダーに乗り、②時間推移からは除外される（非時間型）', () => {
+    upsertFutureRuleSet(
+      db,
+      START,
+      { conditions: [{ target: 'MANUAL_CHECK', label: '筋トレ' }] },
+      NOW_TODAY,
+    );
+    const g = createGoal(db, { name: '筋トレ習慣', practices: ['manual:筋トレ'], start: 'tomorrow' }, NOW_TODAY);
+    // 採用時に target='MANUAL_CHECK'・ラベルスナップショット「筋トレ」で保存される。
+    const gp = db
+      .prepare('SELECT condition_key, target, label_snapshot FROM goal_practice WHERE goal_id = ?')
+      .get(g.id) as { condition_key: string; target: string; label_snapshot: string };
+    expect(gp.condition_key).toBe('manual:筋トレ');
+    expect(gp.target).toBe('MANUAL_CHECK');
+    expect(gp.label_snapshot).toBe('筋トレ');
+
+    seedEval('2026-07-11', [
+      { conditionKey: 'manual:筋トレ', target: 'MANUAL_CHECK', met: true, actualSeconds: null, thresholdSeconds: null },
+    ]);
+    const rep = getGoalReport(db, g.id, NOW_COMPLETED);
+    const p = rep.practices.find((x) => x.conditionKey === 'manual:筋トレ')!;
+    expect(p.isTimeType).toBe(false); // ② 時間推移からは除外
+    expect(p.label).toBe('筋トレ'); // ラベルスナップショット
+    expect(p.cells[0]!.met).toBe(true); // ① Day1 達成（カレンダーに乗る）
+    expect(rep.hasTimeType).toBe(false);
   });
 });

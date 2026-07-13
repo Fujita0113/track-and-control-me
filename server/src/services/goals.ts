@@ -21,7 +21,8 @@ const GOAL_DAYS = 30; // 30日固定（end_day = start_day + 29）。
 export type GoalStatus = 'upcoming' | 'active' | 'completed';
 /** 目標の開始日選択（既定=今日）。今日開始は当日を Day1 として即「進行中」（spec: goal-challenge / D3）。 */
 export type GoalStart = 'today' | 'tomorrow';
-export type GoalPracticeTarget = 'TOTAL_WORK' | 'GROUP' | 'PLANNING' | 'TIMELINE';
+export type GoalPracticeTarget = 'TOTAL_WORK' | 'GROUP' | 'PLANNING' | 'TIMELINE' | 'MANUAL_CHECK';
+// 時間型（②時間推移の対象・isTimeType=true）。MANUAL_CHECK / PLANNING は非時間型。
 const TIME_TARGETS = new Set<GoalPracticeTarget>(['TOTAL_WORK', 'GROUP', 'TIMELINE']);
 
 export class GoalNotFoundError extends Error {
@@ -142,7 +143,9 @@ export function goalStartDay(db: DB, nowMs: number, start: GoalStart): string {
 
 /**
  * 目標作成 UI 用: 開始日（今日開始なら当日・明日開始なら翌日）の実効ルールから採用候補を出す。
- * MANUAL_CHECK は除外（D1）。今日開始では当日実効ルール（当日追加を含む）が候補元になる。
+ * 安定キーを持つ全ターゲット（TOTAL_WORK / GROUP / PLANNING / TIMELINE / MANUAL_CHECK）が候補になる。
+ * MANUAL_CHECK は manual:<ラベル> の安定キー（manual-check-stable-key）導入で採用可能になった。
+ * 今日開始では当日実効ルール（当日追加を含む）が候補元になる。
  */
 export function adoptCandidates(db: DB, nowMs = Date.now(), start: GoalStart = 'today'): AdoptCandidate[] {
   const startDay = goalStartDay(db, nowMs, start);
@@ -156,7 +159,6 @@ export function adoptCandidates(db: DB, nowMs = Date.now(), start: GoalStart = '
   );
   const out: AdoptCandidate[] = [];
   for (const c of eff.conditions) {
-    if (c.target === 'MANUAL_CHECK') continue; // 同一性が並び順依存のため採用不可。
     out.push({
       conditionKey: c.condition_key,
       target: c.target as GoalPracticeTarget,
@@ -183,6 +185,8 @@ function practiceLabel(
     const min = c.threshold_seconds != null ? Math.round(c.threshold_seconds / 60) : 0;
     return `${c.label ?? 'カテゴリ'} ${min}分以上`;
   }
+  // MANUAL_CHECK は非時間型。チェックのテキスト（ラベル）を接頭辞なしでそのまま表示する。
+  if (target === 'MANUAL_CHECK') return c.label ?? '手動チェック';
   return c.label ?? target;
 }
 

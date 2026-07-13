@@ -11,6 +11,7 @@ import {
   BaselineViolationError,
   GoalLockError,
   ThresholdReasonRequiredError,
+  RuleConditionError,
   type ConditionInput,
 } from '../rules/rules.js';
 import { evaluateDay } from '../rules/evaluate.js';
@@ -114,6 +115,11 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
       if (err instanceof ThresholdReasonRequiredError) {
         reply.code(400);
         return { error: err.message, reasonRequired: true };
+      }
+      // 手動チェックのラベル必須・重複などの入力検証違反は 400。
+      if (err instanceof RuleConditionError) {
+        reply.code(400);
+        return { error: err.message, invalidCondition: true };
       }
       // 当日の baseline 違反（既存凍結条件の緩和）は 400。FrozenRuleError の派生なので先に判定する。
       if (err instanceof BaselineViolationError) {
