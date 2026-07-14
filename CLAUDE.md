@@ -12,3 +12,9 @@
 - 確認は `PORT=<空きポート> DB_PATH=:memory: npm run server` で起動し、
   `POST /api/demo/reset` → `GET /api/demo/goals/:id/report?now=<完走後の day_key>` で本物の集計経路を通す。
   達成日数など既存の筋書き（達成 24/30・中盤の谷）を壊さないよう、サンプル追加は既存の谷日に寄せる。
+
+## opsx:archive では必ず delta spec を sync する（必須・確認不要）
+
+`/opsx:archive`（OpenSpec 変更のアーカイブ）を行うときは、delta spec が存在すれば
+**常にメインスペック（`openspec/specs/<capability>/spec.md`）へ sync してからアーカイブする**こと。
+sync するかどうかをユーザーに質問してはならない（デフォルト＝必ず sync）。

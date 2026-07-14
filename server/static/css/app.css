@@ -293,6 +293,26 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
 .toast-ok { background: var(--ok); }
 .toast-err { background: var(--err); }
 
+/* --- ショートカット提示ツールチップ / kbd チップ（shortcut-hover-hints） --- */
+.sc-tip {
+  position: fixed; top: 0; left: 0; z-index: 120;
+  display: none; align-items: center; gap: 8px;
+  padding: 6px 9px; border-radius: 8px;
+  background: #212b36; color: #f4f6fa;
+  font-size: 12px; line-height: 1; white-space: nowrap;
+  box-shadow: var(--shadow-lg); pointer-events: none;
+}
+.sc-tip.show { display: inline-flex; }
+.sc-tip-label { color: #e3e8ef; }
+.kbd-keys { display: inline-flex; align-items: center; gap: 3px; }
+.kbd-plus { color: var(--muted-2); font-size: 11px; }
+.kbd {
+  display: inline-block; min-width: 16px; text-align: center;
+  padding: 2px 5px; border-radius: 5px;
+  background: #3a4652; border: 1px solid #4c5a68; border-bottom-width: 2px;
+  color: #fff; font-family: var(--font); font-size: 11px; font-weight: 600; line-height: 1.2;
+}
+
 .fatal { padding: 24px; color: var(--err); text-align: center; }
 
 /* ============================================================

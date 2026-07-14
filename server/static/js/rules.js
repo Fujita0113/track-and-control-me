@@ -1,7 +1,7 @@
 // ルール編集: ルールセット一覧. 未来日は編集可, 当日/過去は READ-ONLY(凍結).
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, fmtHM, addDays, toast, openModal, closeModal, emptyState } from './util.js';
+import { h, clear, fmtHM, addDays, toast, openModal, closeModal, emptyState, attachTooltip, ctrlEnterToSave } from './util.js';
 import { targetLabel, planningSignalLabel, CONDITION_KINDS, conditionKindValue, conditionKindTarget } from './targets.js';
 
 // 当日追加（DRAFT_TODAY）の条件は sort_order にこの下駄を履いて格納される（server: SAME_DAY_BASE）。
@@ -231,6 +231,7 @@ export function openRuleEditor(date, conditions, groups, onDone, locked = { keys
   body.appendChild(addBtn);
 
   const save = h('button', { class: 'btn primary', text: '保存 (PUT)', type: 'button' });
+  attachTooltip(save, { label: '保存', keys: ['Ctrl', 'Enter'] });
   save.addEventListener('click', async () => {
     const rows = [...rowsHost.querySelectorAll('.cond-editor')];
     const conds = [];
@@ -274,6 +275,7 @@ export function openRuleEditor(date, conditions, groups, onDone, locked = { keys
     save,
   ));
   enterToSave(body, save);
+  ctrlEnterToSave(body, save);
   openModal(body, `ルール編集 — ${date}`);
 }
 
@@ -341,6 +343,7 @@ export function openTodayAddEditor(date, baseline, additions, groups, onDone) {
   body.appendChild(addBtn);
 
   const save = h('button', { class: 'btn primary', text: '保存（当日に追加）', type: 'button' });
+  attachTooltip(save, { label: '保存', keys: ['Ctrl', 'Enter'] });
   save.addEventListener('click', async () => {
     const addRows = [...rowsHost.querySelectorAll('.cond-editor')];
     const adds = [];
@@ -366,6 +369,7 @@ export function openTodayAddEditor(date, baseline, additions, groups, onDone) {
     save,
   ));
   enterToSave(body, save);
+  ctrlEnterToSave(body, save);
   openModal(body, `当日に条件を追加 — ${date}`);
 }
 

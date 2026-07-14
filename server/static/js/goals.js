@@ -3,7 +3,7 @@
 //  スタイルは gr-* クラス + CSSOM（CSP: インライン style 属性なし）。② は同梱 Chart.js。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, toast, openModal, closeModal, emptyState, fmtHM } from './util.js';
+import { h, clear, toast, openModal, closeModal, emptyState, fmtHM, attachTooltip, ctrlEnterToSave } from './util.js';
 import { planningSignalLabel } from './targets.js';
 import { condEditorRow } from './rules.js';
 import { renderMarkdown } from './markdown.js';
@@ -297,6 +297,7 @@ async function openCreateForm(onDone) {
   body.appendChild(stager.el);
 
   const save = h('button', { class: 'btn primary', text: '作成', type: 'button' });
+  attachTooltip(save, { label: '作成', keys: ['Ctrl', 'Enter'] });
   save.addEventListener('click', async () => {
     const name = nameInp.value.trim();
     if (!name) { toast('目標名を入力してください', 'err'); return; }
@@ -325,6 +326,8 @@ async function openCreateForm(onDone) {
     h('button', { class: 'btn', text: 'キャンセル', type: 'button', onclick: closeModal }),
     save,
   ));
+  // Ctrl/Cmd+Enter で作成（IME 変換確定・disabled 中は無視）。
+  ctrlEnterToSave(body, save);
   openModal(body, '新しい目標');
 }
 

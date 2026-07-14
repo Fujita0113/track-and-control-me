@@ -1,7 +1,7 @@
 // 設定: ws_port / shared_token 表示(コピー) と 各種設定の編集(PATCH /api/config).
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, copyText, toast } from './util.js';
+import { h, clear, copyText, toast, attachTooltip, ctrlEnterToSave } from './util.js';
 import { startDemo, stopDemo, resetSample } from './demo.js';
 
 export async function show(root) {
@@ -77,6 +77,7 @@ async function render(body) {
   inputs.set('undefined_day_policy', { inp: undefinedSel, type: 'text' });
 
   const save = h('button', { class: 'btn primary', text: '保存 (PATCH)', type: 'button' });
+  attachTooltip(save, { label: '保存', keys: ['Ctrl', 'Enter'] });
   save.addEventListener('click', async () => {
     const patch = {};
     for (const [key, { inp, type }] of inputs) {
@@ -122,6 +123,8 @@ async function render(body) {
     h('div', { class: 'stack', style: { marginTop: '12px' } }, togHost),
     h('div', { class: 'row', style: { marginTop: '14px' } }, save),
   );
+  // Ctrl/Cmd+Enter でフォーム内どこからでも保存（素の Enter 送信はそのまま維持）。
+  ctrlEnterToSave(editCard, save);
   body.appendChild(editCard);
 
   // 読み取り専用の参考値

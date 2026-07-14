@@ -5,7 +5,7 @@
 //  - スタイルは全て rf-* クラス + CSSOM(CSP: インライン style 属性なし)。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, toast, emptyState, addDays, colorHex, fmtDur, fmtClock } from './util.js';
+import { h, clear, toast, emptyState, addDays, colorHex, fmtDur, fmtClock, attachTooltip } from './util.js';
 import { createMarkdownEditor } from './md-editor.js';
 import { setTomorrowMode } from './kanban.js';
 import { renderMarkdown } from './markdown.js';
@@ -137,6 +137,8 @@ export async function show(root) {
   // --- エディタカード + クローム ---
   const savedEl = h('span', { class: 'rf-saved', text: '保存しました' });
   const saveBtn = h('button', { class: 'rf-save', type: 'button', text: '保存する' });
+  // 既存の Ctrl/Cmd+Enter 保存（エディタの onSubmit 経由）はそのまま。ボタンにヒントのみ付与。
+  attachTooltip(saveBtn, { label: '保存', keys: ['Ctrl', 'Enter'] });
   // 就寝前リチュアル: 振り返り保存 → 明日の計画モード ON → カンバンへ遷移。
   const planBtn = h('button', { class: 'rf-save', type: 'button', text: '振り返りを終えて明日の計画へ →' });
   const hint = h('span', { class: 'rf-hint' });

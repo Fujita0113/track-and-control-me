@@ -1,6 +1,6 @@
 // エントリポイント: タブルーティング + 各画面の起動.
 import { loadState, state } from './state.js';
-import { h, clear, closeModal } from './util.js';
+import { h, clear, closeModal, attachTooltip, isTypingTarget } from './util.js';
 import * as today from './today.js';
 import * as timeline from './timeline.js';
 import * as kanban from './kanban.js';
@@ -51,15 +51,38 @@ async function rerenderCurrent() {
 }
 
 function bootNav() {
-  document.querySelectorAll('.tab').forEach((btn) => {
+  const tabs = [...document.querySelectorAll('.tab')];
+  tabs.forEach((btn, i) => {
     btn.addEventListener('click', () => activate(btn.dataset.target));
+    // 数字キー 1〜6 のヒントを各タブに提示（shortcut-hover-hints 2.3）。
+    attachTooltip(btn, { label: btn.textContent, keys: [String(i + 1)] });
   });
+  bootGlobalKeys(tabs);
   // ディープリンク: #timeline で始まる hash は timeline タブへ(通知からの遷移。timeline-revamp D8)。
   // 既に timeline 表示中でも from/to 付きで来たら再表示するため、いったん解除してから activate。
   window.addEventListener('hashchange', () => {
     if ((location.hash || '').startsWith('#timeline')) {
       if (current === 'timeline') current = null;
       void activate('timeline');
+    }
+  });
+}
+
+/** グローバルショートカット（shortcut-hover-hints）: Esc でモーダルを閉じ、数字 1〜6 でタブ切替。 */
+function bootGlobalKeys(tabs) {
+  document.addEventListener('keydown', (e) => {
+    // Esc: モーダルが開いていれば閉じる。開いていなければ無反応。
+    if (e.key === 'Escape') {
+      const modal = document.getElementById('modal-root');
+      if (modal && modal.classList.contains('open')) { e.preventDefault(); closeModal(); }
+      return;
+    }
+    // 数字 1〜6: 修飾なし・入力中でないときのみ、左から対応するタブへ切替。
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (isTypingTarget(e)) return;
+    if (e.key >= '1' && e.key <= String(Math.min(9, tabs.length))) {
+      const idx = Number(e.key) - 1;
+      if (idx < tabs.length) { e.preventDefault(); activate(tabs[idx].dataset.target); }
     }
   });
 }

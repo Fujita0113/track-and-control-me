@@ -137,11 +137,13 @@ export function openModal(contentNode, title) {
   const root = document.getElementById('modal-root');
   clear(root);
   const panel = h('div', { class: 'modal-panel' });
+  const closeBtn = h('button', { class: 'icon-btn', text: '✕', onclick: closeModal });
+  attachTooltip(closeBtn, { label: '閉じる', keys: ['Esc'] });
   const header = h(
     'div',
     { class: 'modal-header' },
     h('h3', { text: title || '' }),
-    h('button', { class: 'icon-btn', text: '✕', title: '閉じる', onclick: closeModal }),
+    closeBtn,
   );
   panel.appendChild(header);
   panel.appendChild(contentNode);
@@ -173,4 +175,138 @@ export async function copyText(text) {
 /** 空状態プレースホルダ。 */
 export function emptyState(msg) {
   return h('div', { class: 'empty', text: msg });
+}
+
+// --- ショートカット提示（カスタムツールチップ / kbd チップ） --------------
+// shortcut-hover-hints: 主要操作（保存 Ctrl/Cmd+Enter・閉じる Esc・タブ切替 数字キー）の
+// ショートカットをボタンのホバー／フォーカスでその場に提示する。ブラウザ標準 title は使わない。
+
+/** mac 判定（取得失敗時は false=Ctrl 表記へフォールバック）。 */
+function isMac() {
+  try {
+    const p = (navigator.platform || '') + ' ' + (navigator.userAgent || '');
+    return /Mac|iPhone|iPad|iPod/i.test(p);
+  } catch { return false; }
+}
+
+/** 修飾キー表記: mac→'Cmd' / 他→'Ctrl'。 */
+export function modKey() { return isMac() ? 'Cmd' : 'Ctrl'; }
+
+/** 論理キー名（'Ctrl' 等）→ 表示ラベル。'Ctrl' は plat 依存で出し分ける。 */
+function keyLabel(k) {
+  if (k === 'Ctrl' || k === 'Mod') return modKey();
+  return k;
+}
+
+/** 論理キー名 → aria-keyshortcuts 用トークン（W3C 表記）。 */
+function keyAria(k) {
+  if (k === 'Ctrl' || k === 'Mod') return isMac() ? 'Meta' : 'Control';
+  if (k === 'Esc') return 'Escape';
+  if (k === 'Enter') return 'Enter';
+  return k;
+}
+
+/** キー配列を <kbd> チップ列（間に '+'）へ描画する。 */
+export function renderKeys(keys) {
+  const wrap = h('span', { class: 'kbd-keys' });
+  keys.forEach((k, i) => {
+    if (i > 0) wrap.appendChild(h('span', { class: 'kbd-plus', text: '+' }));
+    wrap.appendChild(h('kbd', { class: 'kbd', text: keyLabel(k) }));
+  });
+  return wrap;
+}
+
+// body 直下に 1 つだけ持つツールチップ DOM を使い回す。
+let tipEl = null;
+let tipTarget = null; // 現在ヒントを出している対象（leave/blur の取り違え防止）
+function ensureTip() {
+  if (tipEl) return tipEl;
+  tipEl = h('div', { class: 'sc-tip', role: 'tooltip' });
+  document.body.appendChild(tipEl);
+  // Esc でヒントを消す（グローバル。モーダル閉じ等とは独立）。
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip(); });
+  return tipEl;
+}
+
+function hideTip() {
+  if (tipEl) tipEl.classList.remove('show');
+  tipTarget = null;
+}
+
+/** 対象 el の矩形基準でツールチップを配置（下優先、画面端で上反転＋左右クランプ）。 */
+function positionTip(el) {
+  const tip = tipEl;
+  const r = el.getBoundingClientRect();
+  // まず可視化（計測のため）だが transform は付けずに測る。
+  tip.classList.add('show');
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  const gap = 8;
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  // 縦: 下に入らなければ上へ。
+  let top = r.bottom + gap;
+  if (top + th > vh - 4) top = r.top - gap - th;
+  if (top < 4) top = 4;
+  // 横: 対象中央に合わせ、画面端でクランプ。
+  let left = r.left + r.width / 2 - tw / 2;
+  left = Math.max(4, Math.min(left, vw - tw - 4));
+  tip.style.top = `${Math.round(top)}px`;
+  tip.style.left = `${Math.round(left)}px`;
+}
+
+function showTipFor(el, label, keys) {
+  const tip = ensureTip();
+  clear(tip);
+  if (label) tip.appendChild(h('span', { class: 'sc-tip-label', text: label }));
+  tip.appendChild(renderKeys(keys));
+  tipTarget = el;
+  positionTip(el);
+}
+
+/**
+ * ショートカット付きボタンに、ホバー／キーボードフォーカスでカスタムツールチップを出す。
+ * @param {Element} el 対象要素
+ * @param {{label?: string, keys: string[]}} opts label（例:「保存」）と論理キー配列（例: ['Ctrl','Enter']）
+ * body 直下の使い回し DOM を表示。mouseenter/focus で表示、mouseleave/blur/Esc で非表示。
+ * アクセシビリティのため aria-keyshortcuts を付与する。
+ */
+export function attachTooltip(el, { label = '', keys = [] } = {}) {
+  if (!el) return;
+  el.setAttribute('aria-keyshortcuts', keys.map(keyAria).join('+'));
+  const show = () => showTipFor(el, label, keys);
+  const hide = () => { if (tipTarget === el) hideTip(); };
+  el.addEventListener('mouseenter', show);
+  el.addEventListener('focus', show);
+  el.addEventListener('mouseleave', hide);
+  el.addEventListener('blur', hide);
+}
+
+// --- キーボード共通ヘルパー ----------------------------------------------
+
+/** テキスト入力中か（input/textarea/contenteditable にフォーカス、または IME 変換中）。 */
+export function isTypingTarget(e) {
+  if (e && (e.isComposing || e.keyCode === 229)) return true;
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable) return true;
+  return false;
+}
+
+/**
+ * フォーム root 内で Ctrl/Cmd+Enter を押すと保存ボタンを click する。
+ * 既存の素の Enter 送信（enter-submit-ime-guard）とは別系統。
+ * IME 変換確定（isComposing / keyCode===229）はスキップし、saveBtn が disabled 中は二重送信しない。
+ */
+export function ctrlEnterToSave(root, saveBtn) {
+  if (!root || !saveBtn) return;
+  root.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    if (saveBtn.disabled) return;
+    saveBtn.click();
+  });
 }
