@@ -670,6 +670,33 @@ function fireDonutGlow() {
   setTimeout(() => glow.remove(), 1000);
 }
 
+// --- 復帰（アーカイブ解除） -------------------------------------------------
+// アクティビティログから誤アーカイブを取り消す。DONE→TODO へ戻し done_at をクリア、
+// TODO 列末尾へ挿入して楽観更新する。サーバ側 updateTask が done_at=NULL を刻む（design D2）。
+async function restoreTask(t) {
+  if (normStatus(t.status) !== 'DONE') return;
+  const prevStatus = t.status;
+  const prevDoneAt = t.done_at;
+  if (S.detailId === t.id) { S.detailId = null; S.editLine = -1; S.dueCalOpen = false; }
+  // 楽観更新: 当該タスクを TODO 列末尾へ移し、派生表示（件数/達成率/ドーナツ/ログ/カード）を即整合。
+  t.status = 'TODO';
+  t.done_at = null;
+  const dest = S.tasks.filter((x) => normStatus(x.status) === 'TODO' && x.id !== t.id);
+  dest.push(t);
+  reindexColumn('TODO', dest);
+  commitColumnOrder({ TODO: dest });
+  renderAll();
+  try {
+    await api.updateTask(t.id, { status: 'TODO' });
+  } catch (err) {
+    // 失敗時はサーバ状態へ収束させ、ローカルとの乖離を防ぐ（design D3）。
+    t.status = prevStatus;
+    t.done_at = prevDoneAt;
+    toast(`復帰の保存に失敗: ${err.message}`, 'err');
+    await reload();
+  }
+}
+
 // --- インラインコンポーザ ----------------------------------------------------
 function composerEl() {
   const ta = h('textarea', { class: 'kb-composer', rows: '2', placeholder: 'タスク名を入力' });
@@ -916,7 +943,12 @@ function logEl() {
       h('span', { class: 'kb-log-check' }, iconCheckSmall('11', '#2E9E63', '2.8')),
       h('div', { class: 'kb-log-main' },
         h('div', { class: 'kb-log-text', text: `「${t.title}」を完了しました` }),
-        h('div', { class: 'kb-log-time', text: `${p(d.getHours())}:${p(d.getMinutes())}` }))));
+        h('div', { class: 'kb-log-time', text: `${p(d.getHours())}:${p(d.getMinutes())}` })),
+      // 誤アーカイブの取り消し導線。押すと未着手列へ復帰しログから外れる（design D4）。
+      h('button', {
+        class: 'kb-log-undo', type: 'button', title: 'ボードへ戻す',
+        onClick: () => restoreTask(t),
+      }, '戻す')));
   }
   panel.appendChild(list);
   return panel;

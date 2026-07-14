@@ -596,6 +596,8 @@ input.kb-cat-input:focus { border-color: #BBDCC8; box-shadow: 0 0 0 2px rgba(46,
 .kb-log-text { font-size: 13px; color: #4A4843; line-height: 1.45; word-break: break-word; }
 .kb-log-time { font-size: 11px; color: #B5B4AE; margin-top: 3px; }
 .kb-log-empty { padding: 16px 0; text-align: center; color: #BDBCB5; font-size: 12.5px; }
+.kb-log-undo { margin-left: auto; align-self: center; flex-shrink: 0; padding: 3px 9px; border: 1px solid #E2E1DB; border-radius: 999px; background: #FBFAF7; color: #8A8880; font-size: 11.5px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+.kb-log-undo:hover { background: #F1F0EB; color: #4A4843; border-color: #D6D5CE; }
 
 /* 詳細パネル(サイドバー差し替え) */
 .kb-detail { background: #fff; border: 1px solid #EAE9E4; border-radius: 14px; box-shadow: 0 1px 2px rgba(40, 38, 32, 0.03); display: flex; flex-direction: column; overflow: hidden; animation: ccSlideIn 0.22s ease; }
