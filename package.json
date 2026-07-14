@@ -15,12 +15,14 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build:contract": "npm run build -w @track/contract",
     "build:ext": "npm run build -w @track/extension",
     "server": "npm run start -w @track/server"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@types/node": "^22",
     "esbuild": "^0.28",
     "tsx": "^4.23",

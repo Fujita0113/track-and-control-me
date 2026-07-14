@@ -12,6 +12,7 @@ import {
   JournalImageNotFoundError,
 } from '../services/goals.js';
 import { daySummary } from '../services/summary.js';
+import { getDayAllocation } from '../services/day-allocation.js';
 import { getDemoDb, resetDemoDb } from '../services/demo-db.js';
 import {
   DEMO_START_DAY,
@@ -110,6 +111,14 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
     const db = getDemoDb();
     const { id, date } = req.params as { id: string; date: string };
     return getJournal(db, Number(id), date);
+  });
+
+  // GET /api/demo/timeline/:date/allocation — 仮想日付の一日の配分（デモ DB・読み取り専用）。
+  // 本番ルート（/api/timeline/:date/allocation）と同じ集計だが、参照先はデモ DB＋仮想 now。
+  app.get('/api/demo/timeline/:date/allocation', async (req) => {
+    const db = getDemoDb();
+    const { date } = req.params as { date: string };
+    return getDayAllocation(db, date, virtualNowMs(db, date));
   });
 
   // GET /api/demo/today?now=<dayKey> — 仮想日付のサマリ＋ダミーパスワード（reveal は呼ばない）。

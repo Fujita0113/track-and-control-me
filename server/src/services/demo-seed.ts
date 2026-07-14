@@ -50,6 +50,15 @@ const THRESH_CHANGE_DAY = 13; // Day13 から低い閾値が効く。
 // seed 用の固定タイムスタンプ（Date.now() 非依存。canDelete 等の判定には使われない経路）。
 const SEED_TS = Date.UTC(2026, 5, 10, 0, 0, 0); // 2026-06-10T00:00:00Z
 
+// --- 配分バー（reflection-day-overview）用のタイムライン記録 seed（reflection-alloc-group-identity）--
+// issue #47 の再現: 同名同色（振り返り・紫）を「開き直しで別 stable_group_id」になった複数セッションとして
+// 焼き込む。配分バーが名前＋色 identity で束ねれば1本の大きなスライスへ合算される（分裂・埋没しない）。
+// 既存の谷日 Day15（2026-06-25）に置く。session は達成集計(daily_totals_snapshot)を読まないため
+// 達成日数 24/30 の筋書きには影響しない（配分表示は別経路）。
+export const DEMO_ALLOC_DAY = addDaysKey(DEMO_START_DAY, 14); // Day15 = 2026-06-25
+// 2026-06-25 の JST 時刻 → epoch ms（Date.now 非依存。JST = UTC+9、対象時刻は全て 09:00 以降）。
+const allocMs = (h: number, mi: number): number => Date.UTC(2026, 5, 25, h - 9, mi, 0);
+
 // 実践の condition_key（既存の採用モデルと同じ命名）。
 const KEY_TOTAL = 'total_work';
 const KEY_REFLECTION = 'planning:reflection_done';
@@ -318,6 +327,40 @@ export function seedDemo(db: DB): void {
     // ③ Before/After 画像（1枚ずつ・同一キャプションでペア化）。
     insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY, '朝の道', IMG_BEFORE, 0, SEED_TS);
     insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_END_DAY, '朝の道', IMG_AFTER, 0, SEED_TS);
+
+    // --- 配分バー用タイムライン記録（Day15・reflection-alloc-group-identity）-----------
+    // 振り返り(紫)を「開き直しで別 stable_group_id」になった 30 分 × 6 回＝3h として焼き込む。
+    // 名前＋色 identity で束ねれば1本の大きなスライスへ合算される（issue #47 の再現・確認）。
+    const insAllocSession = db.prepare(
+      `INSERT INTO session
+         (stable_group_id, tab_group_name_snapshot, group_color_snapshot, category_key_snapshot,
+          started_at, ended_at, day_key, coactive_group_keys, n, credited_ms, close_reason, created_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, '[]', 1, ?, 'NORMAL', ?)`,
+    );
+    // [stable_group_id, 名前, 色, [開始h,開始m], [終了h,終了m]]。
+    const allocSessions: [string, string, string, [number, number], [number, number]][] = [
+      ['demo-refl-1', '振り返り', 'purple', [9, 0], [9, 30]], // 別 group_id・同名同色
+      ['demo-refl-2', '振り返り', 'purple', [9, 30], [10, 0]],
+      ['demo-alloc-study', '勉強', 'blue', [10, 0], [11, 0]],
+      ['demo-refl-3', '振り返り', 'purple', [11, 0], [11, 30]],
+      ['demo-refl-4', '振り返り', 'purple', [11, 30], [12, 0]],
+      ['demo-alloc-study', '勉強', 'blue', [12, 45], [13, 45]],
+      ['demo-refl-5', '振り返り', 'purple', [13, 45], [14, 15]],
+      ['demo-refl-6', '振り返り', 'purple', [14, 15], [14, 45]],
+      ['demo-alloc-make', '制作', 'green', [14, 45], [15, 30]],
+    ];
+    for (const [gid, name, color, [sh, sm], [eh, em]] of allocSessions) {
+      const s = allocMs(sh, sm);
+      const e = allocMs(eh, em);
+      insAllocSession.run(gid, name, color, s, e, DEMO_ALLOC_DAY, e - s, SEED_TS);
+    }
+    // 休憩（自己申告 MANUAL・grey）12:00–12:45。配分バーに MANUAL スライスを1本見せる。
+    db.prepare(
+      `INSERT INTO activity_log_entry
+         (day_key, start_at, end_at, entry_type, title, color, category_key, coactive_group_keys,
+          n, co_record_group_id, edited, created_at, updated_at)
+       VALUES (?, ?, ?, 'MANUAL', '休憩', 'grey', '休憩', '[]', 1, NULL, 0, ?, ?)`,
+    ).run(DEMO_ALLOC_DAY, allocMs(12, 0), allocMs(12, 45), SEED_TS, SEED_TS);
   });
   tx();
 }

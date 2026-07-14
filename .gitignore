@@ -16,6 +16,13 @@ extension/dist/
 server/dist/
 coverage/
 
+# Playwright（E2E）
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+/e2e/.auth/
+
 # OS / editor
 Thumbs.db
 .DS_Store

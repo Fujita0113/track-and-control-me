@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
 import { listGoals, getGoalReport, getJournal, GoalReportNotReadyError } from './goals.js';
+import { getDayAllocation } from './day-allocation.js';
+import { daySummary } from './summary.js';
 import { getDemoDb, resetDemoDb } from './demo-db.js';
 import {
   seedDemo,
@@ -15,6 +17,7 @@ import {
   DEMO_PRE_START_DAY,
   DEMO_AFTER_END_DAY,
   DEMO_GOAL2_START_DAY,
+  DEMO_ALLOC_DAY,
 } from './demo-seed.js';
 
 const TZ = 'Asia/Tokyo';
@@ -143,6 +146,34 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(walk.cells[0]!.thresholdSeconds).toBeNull();
     // ③④ Before/After の日記が引ける。
     expect(getJournal(db, DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY).content).toContain('朝散歩を始める');
+  });
+});
+
+describe('配分バー seed（reflection-alloc-group-identity）', () => {
+  it('振り返り(紫)が1本の大きな WORK スライスへ合算され、今日タブ内訳と一致する（issue #47）', () => {
+    const now = zonedTimeToEpoch(2026, 6, 25, 23, 0, 0, TZ); // Day15 の記録より後
+    const a = getDayAllocation(db, DEMO_ALLOC_DAY, now);
+    const work = a.slices.filter((s) => s.kind === 'WORK');
+    // 振り返り(紫)は 30 分 × 6（別 stable_group_id）が1本の 3h スライスへ合算される。
+    const reflect = work.find((s) => s.label === '振り返り')!;
+    expect(reflect).toBeDefined();
+    expect(reflect.seconds).toBe(3 * 3600);
+    expect(reflect.color).toBe('purple');
+    // 分裂しないので WORK は「振り返り / 勉強 / 制作」の3スライスのみ。
+    expect(work).toHaveLength(3);
+    // 振り返りが最大スライス（埋没せず先頭）。
+    expect(a.slices[0]!.label).toBe('振り返り');
+    // WORK スライス合計＝daySummary（today-group-breakdown）の同グループ合計（ドリフト防止）。
+    const summary = daySummary(db, DEMO_ALLOC_DAY);
+    for (const w of work) {
+      const g = summary.groups.find((gr) => gr.name === w.label)!;
+      expect(g, `daySummary に ${w.label} が無い`).toBeDefined();
+      expect(w.seconds).toBe(Math.round(g.seconds));
+    }
+    // 休憩(MANUAL・grey)が1本。
+    const manual = a.slices.filter((s) => s.kind === 'MANUAL');
+    expect(manual).toHaveLength(1);
+    expect(manual[0]!.seconds).toBe(45 * 60);
   });
 });
 

@@ -110,5 +110,6 @@ export const api = {
     report: (id, now) => req('GET', `/api/demo/goals/${id}/report?${q({ now })}`),
     journal: (id, date) => req('GET', `/api/demo/goals/${id}/journal/${date}`),
     today: (now) => req('GET', `/api/demo/today?${q({ now })}`),
+    allocation: (date) => req('GET', `/api/demo/timeline/${date}/allocation`),
   },
 };

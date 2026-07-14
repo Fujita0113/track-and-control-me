@@ -9,7 +9,22 @@ import { dayKeyFor, nextDayKey } from '../aggregation/index.js';
  * 内訳の合成キー区切り（US, 0x1f）。表示名・色に現れ得ない制御文字を採用し、
  * `(name,color)` の identity 衝突を避ける（design.md D2）。
  */
-const SNAP_KEY_SEP = '\x1f';
+export const SNAP_KEY_SEP = '\x1f';
+
+/**
+ * 記録時点スナップショットの identity キー（design D1）。
+ * 未グループ（`stable_group_id = UNGROUPED_KEY`）は名前/色に依らず単一キー `UNGROUPED_KEY` へ集約。
+ * それ以外は `name + SNAP_KEY_SEP + (color ?? '')`。
+ * `snapshotGroups`（SQL 側）と `getDayAllocation`（配分バー）はこの規則を共有し二重定義しない。
+ */
+export function snapshotIdentityKey(stableGroupId: string, name: string, color: string | null): string {
+  return stableGroupId === UNGROUPED_KEY ? UNGROUPED_KEY : name + SNAP_KEY_SEP + (color ?? '');
+}
+
+/** スナップショット identity の表示名（未グループは固定ラベル）。 */
+export function snapshotDisplayName(sid: string, name: string): string {
+  return sid === UNGROUPED_KEY ? 'その他（未グループ）' : name;
+}
 
 interface SnapshotGroupRow {
   sid: string;
@@ -24,6 +39,8 @@ interface SnapshotGroupRow {
  * 未グループ（`stable_group_id = UNGROUPED_KEY`）は名前/色に依らず単一行 `UNGROUPED_KEY` へ集約する。
  */
 function snapshotGroups(db: DB, dayKey: string): SnapshotGroupRow[] {
+  // sid の識別規則は `snapshotIdentityKey`（TS 側）と同一でなければならない（design D1・二重定義禁止）:
+  //   UNGROUPED_KEY → UNGROUPED_KEY / それ以外 → name + SNAP_KEY_SEP + (color ?? '')。
   return db
     .prepare(
       `SELECT
@@ -38,11 +55,6 @@ function snapshotGroups(db: DB, dayKey: string): SnapshotGroupRow[] {
        ORDER BY ms DESC`,
     )
     .all({ ung: UNGROUPED_KEY, sep: SNAP_KEY_SEP, day: dayKey }) as SnapshotGroupRow[];
-}
-
-/** スナップショット内訳行の表示名（未グループは固定ラベル）。 */
-function snapshotDisplayName(row: SnapshotGroupRow): string {
-  return row.sid === UNGROUPED_KEY ? 'その他（未グループ）' : row.name;
 }
 
 /**
@@ -84,7 +96,7 @@ export function daySummary(db: DB, dayKey: string): DaySummary {
   // 内訳は権威集計(daily_totals)ではなく、記録時点スナップショット(session)由来で分類する（design.md D1）。
   const groups: GroupTotal[] = snapshotGroups(db, dayKey).map((r) => ({
     stableGroupId: r.sid,
-    name: snapshotDisplayName(r),
+    name: snapshotDisplayName(r.sid, r.name),
     color: r.sid === UNGROUPED_KEY ? null : r.color,
     ms: r.ms,
     seconds: r.ms / 1000,
@@ -121,7 +133,7 @@ export function rangeSummary(db: DB, from: string, to: string): RangeDay[] {
     // 内訳（棒グラフ系列）はスナップショット identity 由来（design.md D1）。系列 key＝合成キー。
     const groups = snapshotGroups(db, cur).map((r) => ({
       stableGroupId: r.sid,
-      name: snapshotDisplayName(r),
+      name: snapshotDisplayName(r.sid, r.name),
       color: r.sid === UNGROUPED_KEY ? null : r.color,
       seconds: r.ms / 1000,
     }));

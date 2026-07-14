@@ -76,6 +76,14 @@ async function showDemo(root) {
   const bodyHost = h('div', { class: 'gr-reader-body' });
   wrap.appendChild(h('div', { class: 'card' }, titleRow, bodyHost));
 
+  // 一日の配分バー（デモ DB・読み取り専用）。対象日の記録があれば非空で表示する
+  // （reflection-alloc-group-identity: 同名同色グループが1本へ合算されるのを確認できる）。
+  const allocWrap = h('div', { class: 'rf-alloc' });
+  wrap.appendChild(allocWrap);
+  api.demo.allocation(targetDay)
+    .then((alloc) => allocWrap.appendChild(buildAllocCard(alloc)))
+    .catch(() => { /* noop: 配分の失敗は日記閲覧を妨げない */ });
+
   let content = '';
   try { const r = await api.demo.journal(g.id, targetDay); content = r.content || ''; } catch { /* noop */ }
   if (content.trim()) bodyHost.appendChild(renderMarkdown(content));
@@ -410,24 +418,19 @@ async function renderDayOverview(date) {
  * 未記録以外は時間の長い順（降順）に上から並べ、未記録は常に最下部（中立色）に固定する。
  * 母数ゼロの日は棒を描かず空状態メッセージ。
  */
-async function renderAlloc(date) {
-  if (!ctx) return;
-  const host = ctx.allocHost;
-  clear(host);
-
-  let alloc = null;
-  try { alloc = await api.getAllocation(date); } catch { /* noop */ }
-  if (!ctx || ctx.date !== date) return; // 描画中に対象日が変わっていたら破棄。
-
+/**
+ * 配分データ（getAllocation/デモ配分の戻り値）から配分カード要素を組み立てる（純関数）。
+ * 本番の常設バー（renderAlloc）とデモの閲覧プレビュー（showDemo）で共用する。
+ */
+function buildAllocCard(alloc) {
   const head = h('div', { class: 'rf-alloc-head' },
     h('span', { class: 'rf-alloc-title', text: '一日の配分' }),
     h('span', { class: 'rf-alloc-sub', text: '覚醒時間中（記録の端〜端）' }),
   );
 
   if (!alloc || !alloc.totalSeconds || !alloc.slices) {
-    host.appendChild(h('div', { class: 'rf-alloc-card' }, head,
-      h('p', { class: 'rf-alloc-empty', text: 'この日はまだ記録がありません。作業や休憩が記録されると、一日の配分が表示されます。' })));
-    return;
+    return h('div', { class: 'rf-alloc-card' }, head,
+      h('p', { class: 'rf-alloc-empty', text: 'この日はまだ記録がありません。作業や休憩が記録されると、一日の配分が表示されます。' }));
   }
 
   // 作業／自己申告スライスを時間降順に、未記録は常に最下部へ。
@@ -449,7 +452,19 @@ async function renderAlloc(date) {
       h('span', { class: 'rf-bar-val', text: fmtDur(r.seconds) }),
     ));
   }
-  host.appendChild(h('div', { class: 'rf-alloc-card' }, head, bars));
+  return h('div', { class: 'rf-alloc-card' }, head, bars);
+}
+
+async function renderAlloc(date) {
+  if (!ctx) return;
+  const host = ctx.allocHost;
+  clear(host);
+
+  let alloc = null;
+  try { alloc = await api.getAllocation(date); } catch { /* noop */ }
+  if (!ctx || ctx.date !== date) return; // 描画中に対象日が変わっていたら破棄。
+
+  host.appendChild(buildAllocCard(alloc));
 }
 
 /**

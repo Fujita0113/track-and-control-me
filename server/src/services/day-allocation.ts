@@ -1,6 +1,7 @@
+import { UNGROUPED_KEY } from '@track/contract';
 import type { DB } from '../db/index.js';
 import { getTimeline } from './timeline.js';
-import { todayKey } from './summary.js';
+import { todayKey, snapshotIdentityKey, snapshotDisplayName } from './summary.js';
 
 /**
  * 一日の配分（day allocation）集計（spec: reflection-day-overview / design D2・D3）。
@@ -9,7 +10,8 @@ import { todayKey } from './summary.js';
  * 内訳として返す。総作業時間を分母とする today-group-breakdown とは別物で、
  * 休憩（自己申告）・未記録を含む。
  *
- * - WORK スライス: `session` を `stable_group_id` 別に `credited_ms` 合算（記録時点の色・名）。
+ * - WORK スライス: `session` を記録時点スナップショットの「名前＋色」identity 別に `credited_ms` 合算
+ *   （`today-group-breakdown` と同一の束ね方。`stable_group_id` の入れ替わりで同一グループが分裂しない）。
  * - MANUAL スライス: `activity_log_entry`(MANUAL) を `category_key` 別に `span/n`（持ち分秒）合算。
  * - 分母（母数）= 最初の記録の開始〜最後の記録の終了。対象日が当日なら現在時刻を上限に含める。
  *   日境界先頭・末尾の空白は母数に含めない。
@@ -40,15 +42,20 @@ export function getDayAllocation(db: DB, dayKey: string, nowMs = Date.now()): Da
   const tl = getTimeline(db, dayKey, nowMs);
   const isToday = todayKey(db, nowMs) === dayKey;
 
-  // WORK スライス: グループ別に credited_ms を合算。色・名は最後（最新）の記録時点スナップショットを採用。
+  // WORK スライス: 名前＋色 identity 別に credited_ms を合算（today-group-breakdown と共有・design D1）。
+  // ラベル・色は identity 内の最新（startAt 最大）記録時点スナップショットを採用。
+  // 未グループ identity は表示名「その他（未グループ）」・色 null に揃える。
   const workMap = new Map<string, { label: string; color: string | null; ms: number; last: number }>();
   for (const b of tl.auto) {
-    const prev = workMap.get(b.stableGroupId);
+    const identity = snapshotIdentityKey(b.stableGroupId, b.title, b.color);
+    const label = snapshotDisplayName(identity, b.title);
+    const color = identity === UNGROUPED_KEY ? null : b.color;
+    const prev = workMap.get(identity);
     if (prev) {
       prev.ms += b.creditedMs;
-      if (b.startAt >= prev.last) { prev.label = b.title; prev.color = b.color; prev.last = b.startAt; }
+      if (b.startAt >= prev.last) { prev.label = label; prev.color = color; prev.last = b.startAt; }
     } else {
-      workMap.set(b.stableGroupId, { label: b.title, color: b.color, ms: b.creditedMs, last: b.startAt });
+      workMap.set(identity, { label, color, ms: b.creditedMs, last: b.startAt });
     }
   }
 
