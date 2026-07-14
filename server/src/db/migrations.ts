@@ -707,4 +707,21 @@ END;`);
       }
     },
   },
+  {
+    version: 16,
+    name: 'task-category',
+    sql: /* sql */ `
+-- かんばんタスクのカテゴリ（spec: kanban-task-category / design.md D1・D2）。
+-- タブグループ由来のカテゴリを「UUID照合＋名前色スナップショット」の両持ちで焼き込む
+-- （session の stable_group_id + tab_group_name_snapshot + group_color_snapshot と同型）。
+-- 加算的移行（すべて NULL 許容）で既存タスクはカテゴリ無し＝従来挙動。集計・評価・rollover・
+-- 解錠・目標追跡には非接続（表示・保存のみ）。
+--   category_group_id … 照合キー＝タブグループの stable_group_id（UUID）。自由入力/その他は NULL。
+--   category_name      … 表示スナップショット（グループ名 or 手入力 or「その他」）。
+--   category_color     … 表示スナップショット。制約なし TEXT（enum/CHECK で縛らない・D2）。
+ALTER TABLE task ADD COLUMN category_group_id TEXT;
+ALTER TABLE task ADD COLUMN category_name TEXT;
+ALTER TABLE task ADD COLUMN category_color TEXT;
+`,
+  },
 ];

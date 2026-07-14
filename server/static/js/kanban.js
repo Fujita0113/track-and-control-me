@@ -7,7 +7,7 @@
 //  - CSP(style-src 'self')適合: スタイルは全てクラス + CSSOM。サウンドは設定ポップオーバー(既定 OFF)
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, addDays, localDateKey, toast } from './util.js';
+import { h, clear, addDays, localDateKey, toast, colorHex } from './util.js';
 
 const COLS = [
   { key: 'HOLD', label: '保留', kind: 'plain' },
@@ -23,7 +23,9 @@ const PRI = {
 const WD_JP = ['日', '月', '火', '水', '木', '金', '土'];
 const SOUND_KEY = 'tcm_kanban_sound';
 const TOMORROW_KEY = 'tcm_kanban_tomorrow'; // {date, on} その日限りの「明日の計画モード」
+const CATEGORIZE_KEY = 'tcm_kanban_categorize'; // {date, on} その日限りの「カテゴリ付けモード」
 const HOLD_AHEAD_DAYS = 7; // 保留カードの既定 due（作業日 +7）
+const MAX_GROUP_CHIPS = 12; // カテゴリ候補チップの上限（timeline の MAX_CHIPS 相当。あふれは自由入力で拾う）
 const NS = 'http://www.w3.org/2000/svg';
 
 // --- 明日トグル（明日の計画モード） ------------------------------------------
@@ -38,6 +40,20 @@ export function tomorrowMode() {
 }
 export function setTomorrowMode(on) {
   localStorage.setItem(TOMORROW_KEY, JSON.stringify({ date: state.today, on: !!on }));
+}
+
+// --- カテゴリ付けモード -------------------------------------------------------
+// 明日モードと同型: localStorage に日付キーで保持し、翌日は OFF にリセット（design D4）。
+// ON のとき、タスク作成直後に「次のタスク入力」の位置へカテゴリピッカーを差し込む。
+export function categorizeMode() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CATEGORIZE_KEY) || 'null');
+    if (raw && raw.date === state.today) return !!raw.on;
+  } catch { /* noop */ }
+  return false;
+}
+export function setCategorizeMode(on) {
+  localStorage.setItem(CATEGORIZE_KEY, JSON.stringify({ date: state.today, on: !!on }));
 }
 
 /**
@@ -76,6 +92,8 @@ export async function show(root) {
     pendingCaret: null,
     composingCol: null,
     composerText: '',
+    categorizePick: null, // { id, col } カテゴリ付けモードで作成直後の選択対象
+    groups: [], // /api/groups キャッシュ（カテゴリ候補・最近使った順）
     dueCalOpen: false,
     dueCalYM: null,
     settingsOpen: false,
@@ -186,6 +204,10 @@ function afterRender() {
     const ta = rootEl.querySelector('.kb-composer');
     if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   }
+  if (S.categorizePick) {
+    const inp = rootEl.querySelector('.kb-cat-input');
+    if (inp) inp.focus();
+  }
   // 詳細パネルのタイトルは DOM 挿入後（scrollHeight 確定後）に初期高さを確定する。
   const detTitle = rootEl.querySelector('textarea.kb-detail-title');
   if (detTitle) autosize(detTitle);
@@ -281,6 +303,16 @@ function headerEl() {
   const planChip = h('div', { class: `kb-chip${tmOn ? ' kb-chip-plan' : ''}` },
     h('span', { class: 'kb-chip-lbl', text: '明日の計画' }),
     switchEl(tmOn, () => { setTomorrowMode(!tmOn); renderAll(); }));
+
+  // カテゴリ付けモード トグル（明日モードの隣）。OFF にしたら進行中の選択も畳む。
+  const catOn = categorizeMode();
+  const catChip = h('div', { class: `kb-chip${catOn ? ' kb-chip-plan' : ''}` },
+    h('span', { class: 'kb-chip-lbl', text: 'カテゴリ付け' }),
+    switchEl(catOn, () => {
+      setCategorizeMode(!catOn);
+      if (catOn) S.categorizePick = null; // OFF 化で選択途中なら破棄
+      renderAll();
+    }));
   const right = h('div', { class: 'kb-head-right' }, dateChip, doneChip);
   if (tmOn) {
     const n = tomorrowTaskCount();
@@ -290,6 +322,7 @@ function headerEl() {
       h('span', { class: 'kb-chip-val', text: `${n} / ${need}` })));
   }
   right.appendChild(planChip);
+  right.appendChild(catChip);
   right.appendChild(setWrap);
   return h('div', { class: 'kb-head' }, left, right);
 }
@@ -381,8 +414,12 @@ function colEl(col) {
       h('span', { class: 'kb-done-hint-sub', text: '完了後は自動でアーカイブ' })));
   }
   if (col.key !== 'DONE') {
-    if (S.composingCol === col.key) list.appendChild(composerEl());
-    else {
+    if (S.categorizePick && S.categorizePick.col === col.key) {
+      // カテゴリ付けモード: 作成直後、「次の入力」の位置にカテゴリピッカーを差し込む。
+      list.appendChild(categoryPickerEl(S.categorizePick));
+    } else if (S.composingCol === col.key) {
+      list.appendChild(composerEl());
+    } else {
       list.appendChild(h('button', {
         class: 'kb-add', type: 'button',
         onclick: () => { S.composingCol = col.key; S.composerText = ''; renderAll(); },
@@ -436,6 +473,8 @@ function cardEl(t) {
       title: t.due_locked ? '手動指定した期日（自動更新なし）' : '自動決定の期日',
     }, fmtDue(t.due), t.due_locked ? ' 🔒' : null)));
   card.appendChild(h('div', { class: 'kb-card-title', text: t.title }));
+  const badge = categoryBadgeEl(t);
+  if (badge) card.appendChild(badge);
   if (S.detailId === t.id) card.appendChild(h('div', { class: 'kb-card-sel' }));
   if (S.completingId === t.id) card.appendChild(completingOverlayEl());
   return card;
@@ -446,6 +485,22 @@ function completingOverlayEl() {
     h('div', { class: 'kb-complete-sweep' }),
     h('div', { class: 'kb-complete-ring' }),
     h('div', { class: 'kb-complete-badge' }, iconCheckAnimated('22', '2.6')));
+}
+
+/**
+ * カード上のカテゴリバッジ（design 表示要件・task 3.7）。
+ * 色ありはカテゴリ色のドット、色なし（自由入力/その他）は中立色、未分類は非表示。
+ * 未知色は colorHex のフォールバックで中立に落ちる。
+ */
+function categoryBadgeEl(t) {
+  if (!t.category_name) return null;
+  const badge = h('div', { class: `kb-cat-badge${t.category_color ? '' : ' neutral'}` });
+  badge.appendChild(h('span', {
+    class: `kb-cat-dot${t.category_color ? '' : ' neutral'}`,
+    style: t.category_color ? { backgroundColor: colorHex(t.category_color) } : {},
+  }));
+  badge.appendChild(h('span', { class: 'kb-cat-name', text: t.category_name }));
+  return badge;
 }
 
 // --- D&D / 完了 -------------------------------------------------------------
@@ -654,6 +709,11 @@ async function commitComposer(keepOpen, openDet) {
       S.detailId = t.id;
       S.editLine = 0;
       S.pendingCaret = 0;
+    } else if (keepOpen && categorizeMode()) {
+      // カテゴリ付けモード（Enter 作成時）: 次入力の位置に作成タスクのカテゴリ選択を出す（design D5）。
+      try { S.groups = await api.getGroups(); } catch { S.groups = S.groups || []; }
+      S.composingCol = null;
+      S.categorizePick = { id: t.id, col };
     } else if (!keepOpen && S.composingCol === col) {
       // blur コミット中に別列のコンポーザが開かれた場合はそちらを維持する。
       S.composingCol = null;
@@ -662,6 +722,123 @@ async function commitComposer(keepOpen, openDet) {
     toast(`追加に失敗: ${err.message}`, 'err');
     if (S.composingCol === col) S.composingCol = null;
   }
+  renderAll();
+}
+
+// --- カテゴリ付けピッカー ------------------------------------------------------
+// 候補＝/api/groups（最近使った順・上限 MAX_GROUP_CHIPS）＋自由入力＋「その他」。
+// 選択でタスクを PATCH（UUID＋name＋color 焼き込み）、Esc/空Enter で未分類のまま次入力へ。
+
+/**
+ * 候補グループを name+color で束ねて重複を排除する（issue #27）。
+ * 拡張の再インストール等で同名同色グループが別 UUID として tab_group に複数残ると
+ * `listGroups` はそれらをそのまま返し、候補チップが重複表示される（#47 と同根の分裂）。
+ * `snapshotIdentityKey` と同じ name+color を identity にし、最近使った順で最初の 1 件（代表 UUID）を残す。
+ */
+export function dedupeGroups(groups) {
+  const seen = new Set();
+  const out = [];
+  for (const g of groups || []) {
+    const key = `${g.name} ${g.color ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(g);
+  }
+  return out;
+}
+
+function categoryPickerEl(pick) {
+  const wrap = h('div', { class: 'kb-cat-pick' });
+  wrap.appendChild(h('div', {
+    class: 'kb-cat-pick-lbl', text: 'カテゴリを選択（↑↓←→で移動・Enterで確定・Escで未分類）',
+  }));
+
+  // 候補配列: 同名同色を束ねたグループ（上限まで）＋「その他」。自由入力は候補外（入力欄で確定）。
+  const groups = dedupeGroups(S.groups).slice(0, MAX_GROUP_CHIPS);
+  const options = [
+    ...groups.map((g) => ({
+      label: g.name,
+      color: g.color,
+      cat: { category_group_id: g.stable_group_id, category_name: g.name, category_color: g.color },
+    })),
+    // 「その他」: グループ紐付け無し・色なし。
+    { label: 'その他', color: null, other: true, cat: { category_name: 'その他' } },
+  ];
+  // 作成直後は先頭候補（最近使ったグループ、無ければ「その他」）を初期選択にする（issue #27）。
+  let selIdx = 0;
+
+  const chipHost = h('div', { class: 'kb-cat-chips' });
+  const renderChips = () => {
+    clear(chipHost);
+    options.forEach((o, i) => {
+      const chip = h('button', {
+        class: `kb-cat-chip${o.other ? ' other' : ''}${i === selIdx ? ' active' : ''}`,
+        type: 'button',
+        onclick: () => applyCategory(pick, o.cat),
+      }, h('span', {
+        class: `kb-cat-dot${o.other ? ' neutral' : ''}`,
+        style: o.other ? {} : { backgroundColor: colorHex(o.color) },
+      }), h('span', { text: o.label }));
+      chipHost.appendChild(chip);
+    });
+  };
+  renderChips();
+  wrap.appendChild(chipHost);
+
+  const inp = h('input', { class: 'kb-cat-input', type: 'text', placeholder: '自由入力して Enter…' });
+  inp.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return; // IME 変換確定は確定・前進しない（spec）。
+    const typing = inp.value.trim().length > 0;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (typing) applyCategory(pick, { category_name: inp.value.trim() }); // 自由入力優先: 色なし・group_id なし。
+      else applyCategory(pick, options[selIdx].cat); // 空入力ならハイライト中の候補を確定。
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      skipCategorize(pick); // 未分類のまま次へ。
+    } else if (!typing && (e.key === 'ArrowRight' || e.key === 'ArrowDown')) {
+      // 入力欄が空のときだけ矢印で候補を移動（入力中はカーソル移動を優先）。
+      e.preventDefault();
+      selIdx = (selIdx + 1) % options.length;
+      renderChips();
+    } else if (!typing && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      selIdx = (selIdx - 1 + options.length) % options.length;
+      renderChips();
+    }
+  });
+  wrap.appendChild(inp);
+  return wrap;
+}
+
+/** 選択カテゴリを焼き込んで次入力へ。失敗しても UI は前進する（連続入力のテンポを壊さない）。 */
+async function applyCategory(pick, cat) {
+  const t = findTask(pick.id);
+  if (t) {
+    t.category_group_id = cat.category_group_id ?? null;
+    t.category_name = cat.category_name ?? null;
+    t.category_color = cat.category_color ?? null;
+    try {
+      await api.updateTask(t.id, {
+        category_group_id: t.category_group_id,
+        category_name: t.category_name,
+        category_color: t.category_color,
+      });
+    } catch (err) { toast(`カテゴリの保存に失敗: ${err.message}`, 'err'); }
+  }
+  advanceAfterCategorize(pick.col);
+}
+
+/** スキップ（未分類のまま次入力へ）。 */
+function skipCategorize(pick) {
+  advanceAfterCategorize(pick.col);
+}
+
+/** ピッカーを畳んで同じ列のコンポーザを再オープンする（連続作成へ復帰）。 */
+function advanceAfterCategorize(col) {
+  S.categorizePick = null;
+  S.composingCol = col;
+  S.composerText = '';
   renderAll();
 }
 

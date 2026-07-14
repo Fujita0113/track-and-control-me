@@ -6,6 +6,61 @@ import { listTasks, createTask, updateTask, deleteTask, reorderTasks } from '../
 import { refreshPlanningStatus } from '../services/planning.js';
 import { todayKey } from '../services/summary.js';
 
+/**
+ * カテゴリ入力の正規化・バリデーション（kanban-task-category, design D1〜D3）。
+ * 3列すべて未指定なら「カテゴリに触れない」（undefined を返す）。
+ * 3列すべて null（明示）なら「カテゴリ除去」。
+ * category_group_id があれば name/color を伴うタブグループ由来、無ければ自由入力（name のみ・色なし）。
+ * color は照合に使わない表示専用スナップショットのため enum で縛らない（DB も緩いまま・D2）。
+ * @returns { ok, value } value=undefined は触れない / value={3列} は書き込む。error は 400 用メッセージ。
+ */
+type CategoryPatch = {
+  category_group_id: string | null;
+  category_name: string | null;
+  category_color: string | null;
+};
+function normalizeCategory(
+  b: Record<string, unknown>,
+): { ok: true; value?: CategoryPatch } | { ok: false; error: string } {
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(b, k);
+  if (!has('category_group_id') && !has('category_name') && !has('category_color')) {
+    return { ok: true }; // 触れない（従来挙動）。
+  }
+  const rawId = b.category_group_id;
+  const rawName = b.category_name;
+  const rawColor = b.category_color;
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const gid = str(rawId);
+  const name = str(rawName);
+  const color = str(rawColor);
+
+  // すべて空（明示 null / 空文字）＝カテゴリ除去。
+  if (!gid && !name && !color) {
+    return { ok: true, value: { category_group_id: null, category_name: null, category_color: null } };
+  }
+  // 型チェック（文字列 or null/undefined のみ許容）。
+  for (const [k, v] of [
+    ['category_group_id', rawId],
+    ['category_name', rawName],
+    ['category_color', rawColor],
+  ] as const) {
+    if (v != null && typeof v !== 'string') return { ok: false, error: `${k} は文字列` };
+  }
+  // グループ由来（UUID あり）は表示名を必須にする（バッジ表示が壊れないため）。
+  if (gid && !name) return { ok: false, error: 'category_group_id には category_name が必要' };
+  // 名前が無ければカテゴリとして成立しない（色だけの付与は不可）。
+  if (!name) return { ok: false, error: 'category_name が必要' };
+  return {
+    ok: true,
+    value: {
+      category_group_id: gid || null,
+      category_name: name,
+      // 自由入力（グループ非紐付け）は色なしに正規化。グループ由来は色スナップショットを保持。
+      category_color: gid ? color || null : null,
+    },
+  };
+}
+
 // 並べ替え可能な列のみ受け入れる（DONE は完了アーカイブ経路のため対象外）。
 const reorderBody = z.object({
   order: z
@@ -66,7 +121,12 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
       reply.code(400);
       return { error: 'title は必須' };
     }
-    const task = createTask(db, b);
+    const cat = normalizeCategory((req.body ?? {}) as Record<string, unknown>);
+    if (!cat.ok) {
+      reply.code(400);
+      return { error: cat.error };
+    }
+    const task = createTask(db, { ...b, ...(cat.value ?? {}) });
     // 予定日/期限のどちらでも PLANNING（翌日タスク数）に影響しうるため再評価。
     if (b.planned_for || b.due) refreshPlanningStatus(db, todayKey(db));
     deps.runPipeline();
@@ -101,9 +161,19 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
     return listTasks(db);
   });
 
-  app.patch('/api/tasks/:id', async (req) => {
+  app.patch('/api/tasks/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const patch = req.body as Record<string, unknown>;
+    const patch = { ...(req.body as Record<string, unknown>) };
+    // カテゴリ3列は正規化して差し替える（グループ由来⟹name必須・自由入力⟹色なし・除去はNULL化）。
+    const cat = normalizeCategory(patch);
+    if (!cat.ok) {
+      reply.code(400);
+      return { error: cat.error };
+    }
+    delete patch.category_group_id;
+    delete patch.category_name;
+    delete patch.category_color;
+    if (cat.value) Object.assign(patch, cat.value);
     const task = updateTask(db, Number(id), patch);
     refreshPlanningStatus(db, todayKey(db));
     deps.runPipeline();

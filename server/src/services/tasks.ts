@@ -19,6 +19,14 @@ export interface TaskRow {
   due_locked: number;
   notes: string | null;
   sort_order: number;
+  /**
+   * カテゴリ（kanban-task-category, design D1〜D3）。UUID照合＋名前色スナップショットの両持ち。
+   * category_group_id … 照合キー＝タブグループの stable_group_id（自由入力/その他は null）。
+   * category_name/color … 付与当時の表示スナップショット（グループ改名・改色でも書き換えない）。
+   */
+  category_group_id: string | null;
+  category_name: string | null;
+  category_color: string | null;
   created_at: number;
   done_at: number | null;
   updated_at: number;
@@ -42,6 +50,10 @@ export interface TaskInput {
   due_locked?: number;
   notes?: string | null;
   sort_order?: number;
+  /** カテゴリ（両持ち）。付与時のみ指定。未指定はカテゴリ無しのまま。 */
+  category_group_id?: string | null;
+  category_name?: string | null;
+  category_color?: string | null;
 }
 
 function normPriority(v: unknown): TaskPriority {
@@ -62,8 +74,9 @@ export function createTask(db: DB, input: TaskInput): TaskRow {
   }
   const info = db
     .prepare(
-      `INSERT INTO task (title, description, status, planned_for, priority, due, due_locked, notes, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO task (title, description, status, planned_for, priority, due, due_locked, notes, sort_order,
+                         category_group_id, category_name, category_color, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.title,
@@ -75,6 +88,9 @@ export function createTask(db: DB, input: TaskInput): TaskRow {
       input.due_locked ? 1 : 0,
       input.notes ?? null,
       sortOrder,
+      input.category_group_id ?? null,
+      input.category_name ?? null,
+      input.category_color ?? null,
       now,
       now,
     );
@@ -91,6 +107,10 @@ const PATCHABLE = [
   'due_locked',
   'notes',
   'sort_order',
+  // カテゴリ3列。付与・変更・除去（NULL化）を許可（両持ちで焼き込み。design D1〜D3）。
+  'category_group_id',
+  'category_name',
+  'category_color',
 ] as const;
 
 export function updateTask(
