@@ -7,6 +7,7 @@ import { zonedTimeToEpoch } from '../aggregation/index.js';
 import { listGoals, getGoalReport, getJournal, GoalReportNotReadyError } from './goals.js';
 import { getDayAllocation } from './day-allocation.js';
 import { daySummary } from './summary.js';
+import { getTimeline } from './timeline.js';
 import { getDemoDb, resetDemoDb } from './demo-db.js';
 import {
   seedDemo,
@@ -159,8 +160,10 @@ describe('配分バー seed（reflection-alloc-group-identity）', () => {
     expect(reflect).toBeDefined();
     expect(reflect.seconds).toBe(3 * 3600);
     expect(reflect.color).toBe('purple');
-    // 分裂しないので WORK は「振り返り / 勉強 / 制作」の3スライスのみ。
-    expect(work).toHaveLength(3);
+    // WORK は「振り返り / 勉強 / 制作」に加え、改名使い回し（issue #52）の「執筆 / 調査」の5スライス。
+    // 同一 identity の分裂は起きないが、改名した別 identity は別スライスとして現れる。
+    expect(work).toHaveLength(5);
+    expect(new Set(work.map((s) => s.label))).toEqual(new Set(['振り返り', '勉強', '制作', '執筆', '調査']));
     // 振り返りが最大スライス（埋没せず先頭）。
     expect(a.slices[0]!.label).toBe('振り返り');
     // WORK スライス合計＝daySummary（today-group-breakdown）の同グループ合計（ドリフト防止）。
@@ -174,6 +177,27 @@ describe('配分バー seed（reflection-alloc-group-identity）', () => {
     const manual = a.slices.filter((s) => s.kind === 'MANUAL');
     expect(manual).toHaveLength(1);
     expect(manual[0]!.seconds).toBe(45 * 60);
+  });
+});
+
+describe('タイムライン identity 単位化 seed（timeline-group-identity / issue #52）', () => {
+  it('改名して使い回した同一 sid が名前ごとに別 AUTO ブロックへ分離する', () => {
+    const now = zonedTimeToEpoch(2026, 6, 25, 23, 0, 0, TZ); // Day15 の記録より後
+    const tl = getTimeline(db, DEMO_ALLOC_DAY, now);
+    const write = tl.auto.find((b) => b.title === '執筆');
+    const research = tl.auto.find((b) => b.title === '調査');
+    // 同一 stable_group_id('demo-reuse-52') だが、名前ごとに別ブロックへ分離する。
+    expect(write).toBeDefined();
+    expect(research).toBeDefined();
+    expect(write!.color).toBe('green');
+    expect(research!.color).toBe('blue');
+    // 先頭名(執筆)で 16:00–17:00 全区間を覆う単一ブロックにはならない。
+    expect(tl.auto.some((b) => b.title === '執筆' && b.endAt - b.startAt > 30 * 60 * 1000)).toBe(false);
+    // 別 sid・同一 identity の連続「振り返り」(demo-refl-1/2) は1本へ結合される（#47 と一貫）。
+    // 9:00–9:30 と 9:30–10:00 は別 stable_group_id だが連続・同一 identity のため 9:00–10:00 の1ブロック。
+    const reflStart = zonedTimeToEpoch(2026, 6, 25, 9, 0, 0, TZ);
+    const reflEnd = zonedTimeToEpoch(2026, 6, 25, 10, 0, 0, TZ);
+    expect(tl.auto.some((b) => b.title === '振り返り' && b.startAt === reflStart && b.endAt === reflEnd)).toBe(true);
   });
 });
 

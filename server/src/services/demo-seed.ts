@@ -348,6 +348,11 @@ export function seedDemo(db: DB): void {
       ['demo-refl-5', '振り返り', 'purple', [13, 45], [14, 15]],
       ['demo-refl-6', '振り返り', 'purple', [14, 15], [14, 45]],
       ['demo-alloc-make', '制作', 'green', [14, 45], [15, 30]],
+      // 同一 stable_group_id を改名して使い回す（timeline-group-identity / issue #52）。
+      // 「執筆」(green)→「調査」(blue) は同一 sid だが、タイムラインでは名前ごとに
+      // 別ブロックへ分離する（先頭名で全区間を覆う巨大ブロックにならないことの再現）。
+      ['demo-reuse-52', '執筆', 'green', [16, 0], [16, 30]],
+      ['demo-reuse-52', '調査', 'blue', [16, 30], [17, 0]],
     ];
     for (const [gid, name, color, [sh, sm], [eh, em]] of allocSessions) {
       const s = allocMs(sh, sm);

@@ -1,22 +1,35 @@
+import { UNGROUPED_KEY } from '@track/contract';
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { boundaryStartOfDay, nextDayKey } from '../aggregation/index.js';
 import { recordCategoryUse } from './manual-categories.js';
+import { snapshotIdentityKey, snapshotDisplayName } from './summary.js';
 
 /**
  * 行動記録タイムライン（spec: activity-timeline / tasks 6.3–6.5, 6.7）。
  * 閉じた Session から AUTO ブロックを生成（近接同一グループを coalesce）、
  * MANUAL エントリと合わせ、未カバー区間（ギャップ）を計算する。
+ *
+ * ブロックの束ね単位は `stable_group_id` ではなく記録時点のスナップショット identity
+ * ＝（`tab_group_name_snapshot`, `group_color_snapshot`）（spec: timeline-run-view / issue #52）。
+ * これにより「同一タブグループを改名して使い回した」区間が名前ごとに別ブロックへ分離し、
+ * `today-group-breakdown`（グループ別内訳）・振り返りリボンと同一 identity で一致する。
  */
 
 export interface AutoBlock {
   kind: 'AUTO';
+  /** 記録時点スナップショット identity（名前＋色）。ブロックの束ね・ラン結合・列レイアウトのキー。 */
+  identityKey: string;
+  /** 代表 stable_group_id（先頭断片）。権威データ参照・後方互換用（束ねキーではない）。 */
   stableGroupId: string;
   title: string;
   color: string | null;
   startAt: number;
   endAt: number;
+  /** 同時オープンだった他 identity のキー（自 identity 除外・重複除去）。 */
   coactiveGroupKeys: string[];
+  /** coactiveGroupKeys と同順の表示名（サーバで解決済み）。 */
+  coactiveNames: string[];
   n: number;
   categoryKey: string | null;
   creditedMs: number;
@@ -67,34 +80,94 @@ interface SessionRow {
   credited_ms: number;
 }
 
-/** 同一グループの近接セッションを結合しきい値で1ブロックへ coalesce。 */
-function coalesceSessions(sessions: SessionRow[], thresholdMs: number): AutoBlock[] {
-  const byGroup = new Map<string, SessionRow[]>();
-  for (const s of sessions) {
-    const arr = byGroup.get(s.stable_group_id) ?? [];
-    arr.push(s);
-    byGroup.set(s.stable_group_id, arr);
+const idOf = (s: SessionRow): string =>
+  snapshotIdentityKey(s.stable_group_id, s.tab_group_name_snapshot, s.group_color_snapshot);
+
+/**
+ * セッションの `coactive_group_keys`（同時オープンだった他グループの sid 集合）を
+ * 表示用の identity（キー＋名前）へ解決する（design D4）。各 coactive sid は、
+ * 当該区間に重なる並行セッション行のスナップショット名で解決し、解決不能時は sid 文字列へ
+ * フォールバックする。自 identity と重複は除外する。
+ */
+function resolveCoactive(
+  s: SessionRow,
+  bySid: Map<string, SessionRow[]>,
+): { key: string; name: string }[] {
+  const selfIdentity = idOf(s);
+  const out: { key: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const k of JSON.parse(s.coactive_group_keys) as string[]) {
+    let idKey: string;
+    let name: string;
+    if (k === UNGROUPED_KEY) {
+      idKey = UNGROUPED_KEY;
+      name = snapshotDisplayName(UNGROUPED_KEY, '');
+    } else {
+      const rows = bySid.get(k) ?? [];
+      const r =
+        rows.find((row) => row.started_at < s.ended_at && row.ended_at > s.started_at) ?? rows[0];
+      if (r) {
+        idKey = idOf(r);
+        name = snapshotDisplayName(idKey, r.tab_group_name_snapshot);
+      } else {
+        idKey = k;
+        name = k;
+      }
+    }
+    if (idKey === selfIdentity || seen.has(idKey)) continue;
+    seen.add(idKey);
+    out.push({ key: idKey, name });
   }
-  const blocks: AutoBlock[] = [];
-  for (const [, arr] of byGroup) {
+  return out;
+}
+
+/**
+ * 記録時点スナップショット identity（名前＋色）単位で近接セッションを1ブロックへ coalesce。
+ * identity が異なるセッションは決して同一ブロックへ入れない（issue #52）。
+ */
+function coalesceSessions(sessions: SessionRow[], thresholdMs: number): AutoBlock[] {
+  // 同時オープングループの表示名解決用の sid → セッション索引。
+  const bySid = new Map<string, SessionRow[]>();
+  for (const s of sessions) {
+    const arr = bySid.get(s.stable_group_id) ?? [];
+    arr.push(s);
+    bySid.set(s.stable_group_id, arr);
+  }
+  // 束ねは identity 単位。
+  const byIdentity = new Map<string, SessionRow[]>();
+  for (const s of sessions) {
+    const arr = byIdentity.get(idOf(s)) ?? [];
+    arr.push(s);
+    byIdentity.set(idOf(s), arr);
+  }
+  const blocks: (AutoBlock & { _coSeen?: Set<string> })[] = [];
+  for (const [identityKey, arr] of byIdentity) {
     arr.sort((a, b) => a.started_at - b.started_at);
-    let cur: AutoBlock | null = null;
+    let cur: (AutoBlock & { _coSeen: Set<string> }) | null = null;
     for (const s of arr) {
-      const coactive = JSON.parse(s.coactive_group_keys) as string[];
+      const rc = resolveCoactive(s, bySid);
       if (cur && s.started_at - cur.endAt <= thresholdMs) {
         cur.endAt = Math.max(cur.endAt, s.ended_at);
         cur.creditedMs += s.credited_ms;
-        cur.coactiveGroupKeys = [...new Set([...cur.coactiveGroupKeys, ...coactive])];
+        for (const { key, name } of rc) {
+          if (cur._coSeen.has(key)) continue;
+          cur._coSeen.add(key);
+          cur.coactiveGroupKeys.push(key);
+          cur.coactiveNames.push(name);
+        }
       } else {
         if (cur) blocks.push(cur);
         cur = {
           kind: 'AUTO',
+          identityKey,
           stableGroupId: s.stable_group_id,
-          title: s.tab_group_name_snapshot,
-          color: s.group_color_snapshot,
+          title: snapshotDisplayName(identityKey, s.tab_group_name_snapshot),
+          color: identityKey === UNGROUPED_KEY ? null : s.group_color_snapshot,
           startAt: s.started_at,
           endAt: s.ended_at,
-          coactiveGroupKeys: coactive,
+          coactiveGroupKeys: rc.map((c) => c.key),
+          coactiveNames: rc.map((c) => c.name),
+          _coSeen: new Set(rc.map((c) => c.key)),
           n: s.n,
           categoryKey: s.category_key_snapshot,
           creditedMs: s.credited_ms,
@@ -103,6 +176,7 @@ function coalesceSessions(sessions: SessionRow[], thresholdMs: number): AutoBloc
     }
     if (cur) blocks.push(cur);
   }
+  for (const b of blocks) delete b._coSeen;
   blocks.sort((a, b) => a.startAt - b.startAt);
   return blocks;
 }

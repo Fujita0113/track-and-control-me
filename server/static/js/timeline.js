@@ -148,12 +148,9 @@ async function render(body, date) {
 
   const thresholdMs = awayMinSeconds() * 1000;
 
-  // stableGroupId → グループ名（同時オープングループの表示名解決に使う）。
-  const groupNames = new Map();
-  for (const b of tl.auto) groupNames.set(b.stableGroupId, b.title);
-
-  // ラン結合(表示レイヤーのみ)。同一グループの AUTO 断片を条件付きで1ランへ。
-  const runs = buildRuns(tl.auto, tl.manual, thresholdMs).map((r) => finalizeRun(r, groupNames));
+  // ラン結合(表示レイヤーのみ)。同一 identity(名前+色) の AUTO 断片を条件付きで1ランへ。
+  // 同時オープングループの表示名(coactiveNames)はサーバが identity 解決済み。
+  const runs = buildRuns(tl.auto, tl.manual, thresholdMs).map((r) => finalizeRun(r));
 
   const manual = tl.manual.map((m) => ({
     kind: 'MANUAL',
@@ -256,24 +253,24 @@ async function render(body, date) {
 
 // --- ラン結合(design D1) --------------------------------------------------
 /**
- * 同一 stableGroupId の隣接 AUTO 断片を、次の両条件で1ランへ結合する:
+ * 同一 identity(名前+色) の隣接 AUTO 断片を、次の両条件で1ランへ結合する:
  *  1. b.startAt - a.endAt < thresholdMs
- *  2. 区間 (a.endAt, b.startAt) に他の描画ブロック(他グループ AUTO / MANUAL)が重ならない
- * 結合は描画専用。segments / innerGaps / creditedMs 合計 / coactiveKeys 和集合 を持つ。
+ *  2. 区間 (a.endAt, b.startAt) に他の描画ブロック(別 identity の AUTO / MANUAL)が重ならない
+ * 結合は描画専用。segments / innerGaps / creditedMs 合計 / coactiveNames 和集合 を持つ。
  */
 function buildRuns(autoBlocks, manualEntries, thresholdMs) {
   const byGroup = new Map();
   for (const b of autoBlocks) {
-    const arr = byGroup.get(b.stableGroupId) || [];
+    const arr = byGroup.get(b.identityKey) || [];
     arr.push(b);
-    byGroup.set(b.stableGroupId, arr);
+    byGroup.set(b.identityKey, arr);
   }
   const runs = [];
-  for (const [gid, frags] of byGroup) {
+  for (const [idKey, frags] of byGroup) {
     frags.sort((a, b) => a.startAt - b.startAt);
-    // 条件2の判定対象: このグループ以外の AUTO 断片 + 全 MANUAL エントリ。
+    // 条件2の判定対象: この identity 以外の AUTO 断片 + 全 MANUAL エントリ。
     const others = [
-      ...autoBlocks.filter((b) => b.stableGroupId !== gid),
+      ...autoBlocks.filter((b) => b.identityKey !== idKey),
       ...manualEntries,
     ];
     let run = null;
@@ -283,12 +280,13 @@ function buildRuns(autoBlocks, manualEntries, thresholdMs) {
         run.endAt = Math.max(run.endAt, f.endAt);
         run.creditedMs += f.creditedMs || 0;
         run.segments.push({ startAt: f.startAt, endAt: f.endAt });
-        for (const k of f.coactiveGroupKeys || []) run.coactiveKeys.add(k);
+        for (const nm of f.coactiveNames || []) run.coactiveNameSet.add(nm);
       } else {
         if (run) runs.push(run);
         run = {
           kind: 'RUN',
-          stableGroupId: gid,
+          identityKey: idKey,
+          stableGroupId: f.stableGroupId,
           title: f.title,
           color: f.color,
           startAt: f.startAt,
@@ -296,7 +294,7 @@ function buildRuns(autoBlocks, manualEntries, thresholdMs) {
           segments: [{ startAt: f.startAt, endAt: f.endAt }],
           innerGaps: [],
           creditedMs: f.creditedMs || 0,
-          coactiveKeys: new Set(f.coactiveGroupKeys || []),
+          coactiveNameSet: new Set(f.coactiveNames || []),
         };
       }
     }
@@ -318,12 +316,10 @@ function overlapsAny(s, e, intervals) {
   return false;
 }
 
-/** Set を配列化し、同時オープングループ名(自グループ除外)を解決する。 */
-function finalizeRun(run, groupNames) {
-  const coactiveNames = [...run.coactiveKeys]
-    .filter((k) => k && k !== run.stableGroupId)
-    .map((k) => (k === 'ungrouped' ? 'その他（未グループ）' : groupNames.get(k) || k));
-  return { ...run, coactiveKeys: [...run.coactiveKeys], coactiveNames };
+/** 同時オープングループの表示名(サーバ解決済み)を配列化し、自 identity 名を除外する。 */
+function finalizeRun(run) {
+  const coactiveNames = [...run.coactiveNameSet].filter((nm) => nm && nm !== run.title);
+  return { ...run, coactiveNames };
 }
 
 // --- 座標変換 ------------------------------------------------------------
@@ -361,7 +357,7 @@ function layout(blocks, startMs) {
   }
   if (cur.length) clusters.push(cur);
 
-  const prevCol = new Map(); // stableGroupId/manual → 直前クラスタで使ったカラム index。
+  const prevCol = new Map(); // identityKey/manual → 直前クラスタで使ったカラム index。
   const out = [];
   for (const cl of clusters) {
     const colCount = clusterColCount(cl); // 真の最大同時数(最小カラム数)。
@@ -404,7 +400,7 @@ function clusterColCount(cl) {
 }
 
 function keyOf(block) {
-  return block.kind === 'RUN' ? `g:${block.stableGroupId}` : `m:${block.id}`;
+  return block.kind === 'RUN' ? `g:${block.identityKey}` : `m:${block.id}`;
 }
 function minOf2(ms, startMs) {
   return (ms - startMs) / 60000;
