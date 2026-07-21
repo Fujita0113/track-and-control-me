@@ -24,11 +24,52 @@ import {
   type NewInlineCondition,
   type GoalStart,
 } from '../services/goals.js';
+import {
+  createPlan,
+  createCheck,
+  listPlans,
+  getChronicle,
+  withdrawPlan,
+  cancelCheck,
+  updateCheckCaption,
+  submitPhoto,
+  answerQuestion,
+  listDueChecks,
+  PlanCheckError,
+  PlanNotFoundError,
+  CheckNotFoundError,
+  CheckImmutableError,
+} from '../services/goal-plan-check.js';
+import { todayKey } from '../services/summary.js';
+import { evaluateDay } from '../rules/evaluate.js';
 import { GoalLockError, ThresholdReasonRequiredError, BaselineViolationError, FrozenRuleError } from '../rules/rules.js';
 
 /** 開始日クエリ/ボディを today|tomorrow に正規化（既定=today）。 */
 function normalizeStart(raw: unknown): GoalStart {
   return raw === 'tomorrow' ? 'tomorrow' : 'today';
+}
+
+/**
+ * Plan / Check 系のエラーを HTTP へ写す。
+ *   404 … 目標・Plan・Check が無い
+ *   400 … 入力検証（本文/理由/答えが空・範囲2日未満・期間外 等）・画像検証
+ *   409 … 作成後に変更できない項目（写真Check のキャプション）
+ * 写せない例外は握りつぶさず再送出する（500 として表に出す）。
+ */
+function replyPlanCheckError(err: unknown, reply: { code: (n: number) => void }): { error: string } {
+  if (err instanceof GoalNotFoundError || err instanceof PlanNotFoundError || err instanceof CheckNotFoundError) {
+    reply.code(404);
+    return { error: (err as Error).message };
+  }
+  if (err instanceof CheckImmutableError) {
+    reply.code(409);
+    return { error: err.message };
+  }
+  if (err instanceof PlanCheckError || err instanceof JournalImageError) {
+    reply.code(400);
+    return { error: err.message };
+  }
+  throw err;
 }
 
 /** 30日チャレンジ API（spec: goal-challenge / goal-journal / goal-report）。 */
@@ -236,6 +277,122 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
         return { error: err.message };
       }
       throw err;
+    }
+  });
+
+  // --- Plan / Check（spec: goal-plan-check / goal-check-gate / goal-chronicle）-------
+  // 既存の `/api/checks/:date`（MANUAL_CHECK）と衝突しないよう `/api/goal-checks/*` に分ける。
+
+  // Plan 一覧（振り返りタブの目標コーナー）。
+  app.get('/api/goals/:id/plans', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return listPlans(db, id);
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // Plan 作成（進行中の目標のみ・本文非空・種別なし）。
+  app.post('/api/goals/:id/plans', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return createPlan(db, id, req.body ?? {});
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // ⑤沿革（Plan＋Check＋回答の入れ子。日記は含まない）。
+  app.get('/api/goals/:id/chronicle', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return getChronicle(db, id);
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // Plan へ Check を追加（種類×いつ の2軸。相対・絶対どちらの「いつ」も受ける）。
+  app.post('/api/goals/plans/:planId/checks', async (req, reply) => {
+    const planId = Number((req.params as { planId: string }).planId);
+    try {
+      return createCheck(db, planId, req.body ?? {});
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // Plan の取り下げ（理由必須。配下の未達 Check も外れる）。ゲートが緩む向きなので再評価する。
+  app.post('/api/goals/plans/:planId/withdraw', async (req, reply) => {
+    const planId = Number((req.params as { planId: string }).planId);
+    try {
+      const out = withdrawPlan(db, planId, req.body ?? {});
+      evaluateDay(db, todayKey(db));
+      deps.runPipeline();
+      return out;
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // その日に回答すべき Check（今日タブの不足条件・初回トースト）。静的 `due` を :checkId より先に置く。
+  app.get('/api/goal-checks/due/:date', async (req) => {
+    const { date } = req.params as { date: string };
+    return { dayKey: date, checks: listDueChecks(db, date) };
+  });
+
+  // 写真Check への提出（キャプションは先指定のため受け取らない）。提出でゲートが開きうる。
+  app.post('/api/goal-checks/:checkId/photo', async (req, reply) => {
+    const checkId = Number((req.params as { checkId: string }).checkId);
+    const b = (req.body ?? {}) as { date?: string };
+    const date = b.date ?? todayKey(db);
+    try {
+      const out = submitPhoto(db, checkId, date, req.body ?? {});
+      evaluateDay(db, date);
+      deps.runPipeline();
+      return out;
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // 質問Check への回答（空回答は 400）。回答でゲートが開きうる。
+  app.post('/api/goal-checks/:checkId/answer', async (req, reply) => {
+    const checkId = Number((req.params as { checkId: string }).checkId);
+    const b = (req.body ?? {}) as { date?: string };
+    const date = b.date ?? todayKey(db);
+    try {
+      const out = answerQuestion(db, checkId, date, req.body ?? {});
+      evaluateDay(db, date);
+      deps.runPipeline();
+      return out;
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // Check の取り下げ（理由必須・達成済みは拒否）。外れるとゲートが開きうる。
+  app.post('/api/goal-checks/:checkId/cancel', async (req, reply) => {
+    const checkId = Number((req.params as { checkId: string }).checkId);
+    try {
+      const out = cancelCheck(db, checkId, req.body ?? {});
+      evaluateDay(db, todayKey(db));
+      deps.runPipeline();
+      return out;
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
+    }
+  });
+
+  // 写真Check のキャプションは作成後に変更できない（常に 409）。③のグループ化キーを決定的に保つため。
+  app.patch('/api/goal-checks/:checkId/caption', async (req, reply) => {
+    const checkId = Number((req.params as { checkId: string }).checkId);
+    const b = (req.body ?? {}) as { caption?: string };
+    try {
+      return updateCheckCaption(db, checkId, b.caption ?? '');
+    } catch (err) {
+      return replyPlanCheckError(err, reply);
     }
   });
 }

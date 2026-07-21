@@ -103,3 +103,100 @@ describe('migration v11: 30日チャレンジ', () => {
     db.close();
   });
 });
+
+describe('migration v17: Plan / Check', () => {
+  /** Plan を1件持つ目標を作る（テスト用の最小セットアップ）。 */
+  function seedPlan(db: ReturnType<typeof openDb>): { goalId: number; planId: number } {
+    const goalId = db
+      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('髪質を改善する', '', '2026-07-15', '2026-08-13', 0).lastInsertRowid as number;
+    const planId = db
+      .prepare(
+        'INSERT INTO goal_plan (goal_id, day_key, body, status, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(goalId, '2026-07-15', 'シャンプーを変えれば髪質が良くなるのでは', 'active', 0)
+      .lastInsertRowid as number;
+    return { goalId, planId };
+  }
+
+  it('applies v17 and creates the plan/check tables', () => {
+    const db = openDb(':memory:');
+    expect(db.pragma('user_version', { simple: true })).toBeGreaterThanOrEqual(17);
+    const tables = new Set(
+      (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(
+        (r) => r.name,
+      ),
+    );
+    for (const t of ['goal_plan', 'goal_check', 'goal_check_result']) {
+      expect(tables.has(t)).toBe(true);
+    }
+    db.close();
+  });
+
+  it('goal_plan → goal_check → goal_check_result が goal 削除で CASCADE 消去される', () => {
+    const db = openDb(':memory:');
+    const { goalId, planId } = seedPlan(db);
+    const checkId = db
+      .prepare(
+        `INSERT INTO goal_check (plan_id, kind, caption, schedule, start_day_key, status, created_at)
+         VALUES (?, 'photo', '前髪・正面', 'single', '2026-07-18', 'active', 0)`,
+      )
+      .run(planId).lastInsertRowid as number;
+    db.prepare(
+      "INSERT INTO goal_check_result (check_id, day_key, answer_text, created_at) VALUES (?, '2026-07-18', 'ok', 0)",
+    ).run(checkId);
+
+    db.prepare('DELETE FROM goal WHERE id = ?').run(goalId);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_plan').get() as { c: number }).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_check').get() as { c: number }).c).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_check_result').get() as { c: number }).c).toBe(0);
+    db.close();
+  });
+
+  it('goal_check_result は (check_id, day_key) が一意＝1日1回答', () => {
+    const db = openDb(':memory:');
+    const { planId } = seedPlan(db);
+    const checkId = db
+      .prepare(
+        `INSERT INTO goal_check (plan_id, kind, question_text, schedule, start_day_key, span_days, status, created_at)
+         VALUES (?, 'question', '使用感はどうだった？', 'range', '2026-07-18', 7, 'active', 0)`,
+      )
+      .run(planId).lastInsertRowid as number;
+    const ins = db.prepare(
+      "INSERT INTO goal_check_result (check_id, day_key, answer_text, created_at) VALUES (?, '2026-07-18', '泡立ちは良い', 0)",
+    );
+    ins.run(checkId);
+    expect(() => ins.run(checkId)).toThrow(/UNIQUE/i);
+    // 別の日は同じ Check でも入る（範囲Check は各日が独立）。
+    db.prepare(
+      "INSERT INTO goal_check_result (check_id, day_key, answer_text, created_at) VALUES (?, '2026-07-19', '乾燥が減った', 0)",
+    ).run(checkId);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM goal_check_result').get() as { c: number }).c).toBe(2);
+    db.close();
+  });
+
+  it('画像を消しても回答の事実は残る（image_id は SET NULL）', () => {
+    const db = openDb(':memory:');
+    const { goalId, planId } = seedPlan(db);
+    const imageId = db
+      .prepare(
+        `INSERT INTO goal_journal_image (goal_id, day_key, caption, mime, bytes, sort_order, created_at)
+         VALUES (?, '2026-07-18', '前髪・正面', 'image/jpeg', ?, 0, 0)`,
+      )
+      .run(goalId, Buffer.from([1, 2, 3])).lastInsertRowid as number;
+    const checkId = db
+      .prepare(
+        `INSERT INTO goal_check (plan_id, kind, caption, schedule, start_day_key, status, created_at)
+         VALUES (?, 'photo', '前髪・正面', 'single', '2026-07-18', 'active', 0)`,
+      )
+      .run(planId).lastInsertRowid as number;
+    db.prepare(
+      "INSERT INTO goal_check_result (check_id, day_key, image_id, created_at) VALUES (?, '2026-07-18', ?, 0)",
+    ).run(checkId, imageId);
+
+    db.prepare('DELETE FROM goal_journal_image WHERE id = ?').run(imageId);
+    const r = db.prepare('SELECT image_id FROM goal_check_result').get() as { image_id: number | null };
+    expect(r.image_id).toBeNull();
+    db.close();
+  });
+});

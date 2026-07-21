@@ -103,6 +103,22 @@ export const api = {
     req('PATCH', `/api/goals/${id}/journal/images/${imageId}`, { caption }),
   deleteGoalJournalImage: (id, imageId) => req('DELETE', `/api/goals/${id}/journal/images/${imageId}`),
 
+  // Plan（賭け）/ Check（答え合わせ）。Check は 種類（photo|question）× いつ（single|range）の独立2軸。
+  getGoalPlans: (id) => req('GET', `/api/goals/${id}/plans`),
+  createGoalPlan: (id, body) => req('POST', `/api/goals/${id}/plans`, { body }),
+  getGoalChronicle: (id) => req('GET', `/api/goals/${id}/chronicle`),
+  // check = { kind, caption|questionText, schedule, startDayKey|startInDays, spanDays?, placeNote?, timeNote? }
+  createGoalCheck: (planId, check) => req('POST', `/api/goals/plans/${planId}/checks`, check),
+  withdrawGoalPlan: (planId, reason) => req('POST', `/api/goals/plans/${planId}/withdraw`, { reason }),
+  // その日に回答すべき Check（今日タブの不足条件・初回トースト）
+  getDueChecks: (date) => req('GET', `/api/goal-checks/due/${date}`),
+  // 写真提出（キャプションは先指定のため送らない）
+  submitCheckPhoto: (checkId, { dataUrl, date, width, height }) =>
+    req('POST', `/api/goal-checks/${checkId}/photo`, { dataUrl, date, width, height }),
+  answerCheck: (checkId, answerText, date) =>
+    req('POST', `/api/goal-checks/${checkId}/answer`, { answerText, date }),
+  cancelCheck: (checkId, reason) => req('POST', `/api/goal-checks/${checkId}/cancel`, { reason }),
+
   // お試し（デモ）モード（読み取り専用・本番ゲート非到達）。now=仮想 day_key。
   demo: {
     reset: () => req('POST', '/api/demo/reset'),

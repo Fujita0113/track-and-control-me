@@ -724,4 +724,67 @@ ALTER TABLE task ADD COLUMN category_name TEXT;
 ALTER TABLE task ADD COLUMN category_color TEXT;
 `,
   },
+  {
+    version: 17,
+    name: 'goal-plan-check',
+    sql: /* sql */ `
+-- Plan（賭け）と Check（答え合わせ）（spec: goal-plan-check / goal-check-gate / goal-chronicle /
+-- design.md D1・D2・D9）。日次ルールセット（rule_condition）からは独立させる＝継承・凍結
+-- ロジックと衝突させない。評価時に合成条件 'check:<id>' として注入する（D4）。
+--
+-- 達成状態は永続化しない（D2）。goal_check.status に持つのは終端の 'cancelled' のみで、
+-- 「有効か／met か」は (check, dayKey) から遅延導出する＝日次 cron に依存せずオンデマンド起動でも正しい。
+
+-- Plan: 短文の賭け。種別カラムは持たない（本文を読めば分かる・spec: 種別選択を設けてはならない）。
+CREATE TABLE goal_plan (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  day_key TEXT NOT NULL,                    -- 記録が属する固定 day_key
+  body TEXT NOT NULL,                       -- 非空（サービス層で検証）
+  status TEXT NOT NULL DEFAULT 'active',    -- active|withdrawn（withdrawn は終端・D9）
+  withdraw_reason TEXT,                     -- withdrawn のとき非空（沿革に残す）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_goal_plan_goal ON goal_plan(goal_id, day_key, id);
+
+-- Check: 種類（kind）と いつ（schedule）の独立した2軸（spec）。全4通りが作れる。
+--   kind=photo    … caption 非空（先指定・後から変更不可）。提出画像の保存キャプションになる（D5）。
+--   kind=question … question_text 非空。
+--   schedule=single … start_day_key のみ。達成するまで繰り越す（D3）。
+--   schedule=range  … [start_day_key, +span_days)。その日限り・繰り越さない（D3）。
+-- place_note / time_note は説明メタデータのみで判定に一切使わない（D8）。
+CREATE TABLE goal_check (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL REFERENCES goal_plan(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,                       -- photo|question
+  caption TEXT NOT NULL DEFAULT '',         -- kind=photo のとき非空
+  question_text TEXT NOT NULL DEFAULT '',   -- kind=question のとき非空
+  schedule TEXT NOT NULL,                   -- single|range
+  start_day_key TEXT NOT NULL,              -- 相対・絶対どちらの入力も固定 day_key へ解決済み
+  span_days INTEGER,                        -- schedule=range のとき >= 2。single は NULL
+  place_note TEXT,                          -- 判定に使わない（D8）
+  time_note TEXT,                           -- 判定に使わない（D8）
+  status TEXT NOT NULL DEFAULT 'active',    -- active|cancelled（cancelled のみ永続・D2/D9）
+  cancel_reason TEXT,                       -- cancelled のとき非空（沿革に残す）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_goal_check_plan ON goal_check(plan_id, id);
+CREATE INDEX idx_goal_check_start ON goal_check(start_day_key);
+
+-- Check への回答。(check_id, day_key) 一意＝1日1回答。
+--   写真Check … image_id（goal_journal_image へ先指定キャプションで保存した1枚・D5）
+--   質問Check … answer_text（非空）
+-- 画像行が消えても回答の事実は残す（ON DELETE SET NULL）。
+CREATE TABLE goal_check_result (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  check_id INTEGER NOT NULL REFERENCES goal_check(id) ON DELETE CASCADE,
+  day_key TEXT NOT NULL,
+  image_id INTEGER REFERENCES goal_journal_image(id) ON DELETE SET NULL,
+  answer_text TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE (check_id, day_key)
+);
+CREATE INDEX idx_goal_check_result_check ON goal_check_result(check_id, day_key);
+`,
+  },
 ];

@@ -10,6 +10,7 @@ import { createMarkdownEditor } from './md-editor.js';
 import { setTomorrowMode } from './kanban.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
+import { buildPlanCheckBlock } from './plan-check.js';
 import { shrinkImage, isImageFile } from './images.js';
 
 /** b − a の日数差（UTC 計算）。 */
@@ -255,8 +256,14 @@ function journalCorner(goal, content, date) {
       h('span', { class: 'rf-journal-title', text: goal.name }),
       h('span', { class: 'rf-journal-tag', text: `Day ${goal.dayNumber}/${goal.dayCount}` }),
     ),
-    h('div', { class: 'rf-ed-wrap' }, ph, editor.el),
   );
+  // Plan / Check（賭けと答え合わせ）を日記の**上**に置く。Plan/Check はこのブロック内で即時保存し、
+  // 日記本文の dirty/flush には相乗りしない（spec: 日記は Plan/Check とは独立に保存する）。
+  // 対象日が今日のときだけ出す（過去日を遡って賭けを立てることはできない）。
+  // デモは閲覧専用なので作成導線を出さない（spec: demo-mode）。
+  if (date === state.today && !isDemo()) corner.appendChild(buildPlanCheckBlock(goal, date));
+  // 日記エディタは今までどおりその下に。
+  corner.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, editor.el));
   // 画像ゾーン（追加導線＋サムネイル一覧）。画像操作は本文の dirty/flush と独立（reflection_done 非汚染）。
   corner.appendChild(buildImageZone(goal.id, date, corner));
   return corner;

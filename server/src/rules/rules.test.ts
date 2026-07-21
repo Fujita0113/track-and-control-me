@@ -15,6 +15,14 @@ import {
 } from './rules.js';
 import { evaluateDay } from './evaluate.js';
 import { setCheck } from './checks.js';
+import {
+  createPlan,
+  createCheck,
+  cancelCheck,
+  withdrawPlan,
+  submitPhoto,
+  answerQuestion,
+} from '../services/goal-plan-check.js';
 
 const TZ = 'Asia/Tokyo';
 const jst = (y: number, mo: number, d: number, h: number, mi: number) =>
@@ -833,5 +841,175 @@ describe('MANUAL_CHECK の安定キー manual:<ラベル>（manual-check-stable-
         NOW_TODAY,
       ),
     ).toThrow(RuleConditionError);
+  });
+});
+
+describe('Check の解錠ゲートへの合流（spec: goal-check-gate / design D4）', () => {
+  const PNG_DATA_URL =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  /** 今日（2026-07-10）を Day1 とする進行中の目標に、Plan を1つ置く。 */
+  function seedPlan(): number {
+    const goalId = db
+      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('髪質を改善する', '', DAY_TODAY, '2026-08-08', NOW_TODAY).lastInsertRowid as number;
+    return createPlan(db, goalId, { body: 'シャンプーを変えれば髪質が良くなるのでは' }, NOW_TODAY).id;
+  }
+
+  /** 他の全条件（時間・グループ・手動チェック）を満たした状態にする。 */
+  function satisfyOthers(): void {
+    seedTotals(db, DAY_TODAY, 'g-dev', 4000 * 1000);
+    seedTotals(db, DAY_TODAY, 'g-atcoder', 400 * 1000);
+    setCheck(db, DAY_TODAY, 'reflection', true, NOW_TODAY);
+  }
+
+  beforeEach(() => {
+    seedTodayRule(db);
+    satisfyOthers();
+  });
+
+  it('他条件を全部満たしても、未達の Check があれば LOCKED（パスワードは出ない）', () => {
+    const planId = seedPlan();
+    createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 }, NOW_TODAY);
+
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    const check = r.perCondition.find((p) => p.target === 'CHECK')!;
+    expect(check.met).toBe(false);
+    expect(check.conditionKey).toMatch(/^check:\d+$/);
+    expect(r.conditionsMet).toBe(false);
+    expect(r.status).toBe('LOCKED');
+  });
+
+  it('label にキャプション／質問文が載り、由来の Plan も辿れる（今日タブの不足条件行）', () => {
+    const planId = seedPlan();
+    createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 }, NOW_TODAY);
+    createCheck(
+      db,
+      planId,
+      { kind: 'question', questionText: '使用感はどうだった？', schedule: 'single', startInDays: 0 },
+      NOW_TODAY,
+    );
+
+    const checks = evaluateDay(db, DAY_TODAY, NOW_TODAY).perCondition.filter((p) => p.target === 'CHECK');
+    expect(checks.map((c) => c.label)).toEqual(['前髪・正面', '使用感はどうだった？']);
+    expect(checks[0]).toMatchObject({
+      checkKind: 'photo',
+      planBody: 'シャンプーを変えれば髪質が良くなるのでは',
+      goalName: '髪質を改善する',
+    });
+  });
+
+  it('範囲Check は「期間の何日目か」を合流条件に載せる（今日タブが「7/18〜7/24 の1日目」を描ける）', () => {
+    const planId = seedPlan();
+    createCheck(
+      db,
+      planId,
+      { kind: 'question', questionText: '使用感は？', schedule: 'range', startInDays: 0, spanDays: 7 },
+      NOW_TODAY,
+    );
+    const c = evaluateDay(db, DAY_TODAY, NOW_TODAY).perCondition.find((p) => p.target === 'CHECK')!;
+    expect(c).toMatchObject({
+      checkSchedule: 'range',
+      rangeDayNumber: 1,
+      spanDays: 7,
+      startDayKey: DAY_TODAY,
+    });
+  });
+
+  it('回答すると合流条件が met になり UNLOCKED', () => {
+    const planId = seedPlan();
+    const c = createCheck(
+      db,
+      planId,
+      { kind: 'question', questionText: '使用感はどうだった？', schedule: 'single', startInDays: 0 },
+      NOW_TODAY,
+    );
+    expect(evaluateDay(db, DAY_TODAY, NOW_TODAY).status).toBe('LOCKED');
+
+    answerQuestion(db, c.id, DAY_TODAY, { answerText: '泡立ちは良い' }, NOW_TODAY);
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    expect(r.perCondition.find((p) => p.target === 'CHECK')!.met).toBe(true);
+    expect(r.conditionsMet).toBe(true);
+    expect(r.status).toBe('UNLOCKED');
+  });
+
+  it('写真を出すとゲートが開く', () => {
+    const planId = seedPlan();
+    const c = createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 }, NOW_TODAY);
+    submitPhoto(db, c.id, DAY_TODAY, { dataUrl: PNG_DATA_URL }, NOW_TODAY);
+    expect(evaluateDay(db, DAY_TODAY, NOW_TODAY).status).toBe('UNLOCKED');
+  });
+
+  it('開始日前は合流しない（仕掛けた直後はゲートに影響しない）', () => {
+    const planId = seedPlan();
+    createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 3 }, NOW_TODAY);
+
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    expect(r.perCondition.some((p) => p.target === 'CHECK')).toBe(false);
+    expect(r.status).toBe('UNLOCKED'); // 他条件は満たしているので開く。
+  });
+
+  it('取り下げると合流しなくなり、他条件を満たしていればパスワードが出る', () => {
+    const planId = seedPlan();
+    const c = createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 }, NOW_TODAY);
+    expect(evaluateDay(db, DAY_TODAY, NOW_TODAY).status).toBe('LOCKED');
+
+    cancelCheck(db, c.id, { reason: 'シャンプーが肌に合わず返品した' });
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    expect(r.perCondition.some((p) => p.target === 'CHECK')).toBe(false);
+    expect(r.status).toBe('UNLOCKED');
+  });
+
+  it('Plan ごと取り下げると配下の Check がゲートから外れる', () => {
+    const planId = seedPlan();
+    createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 }, NOW_TODAY);
+    withdrawPlan(db, planId, { reason: '効果が無かった' });
+    expect(evaluateDay(db, DAY_TODAY, NOW_TODAY).status).toBe('UNLOCKED');
+  });
+
+  it('範囲Check は各日が独立してゲートを閉じる（前日の達成は今日を助けない）', () => {
+    const planId = seedPlan();
+    const c = createCheck(
+      db,
+      planId,
+      { kind: 'question', questionText: '使用感は？', schedule: 'range', startInDays: 0, spanDays: 3 },
+      NOW_TODAY,
+    );
+    // Day1（今日）に回答 → 開く。
+    answerQuestion(db, c.id, DAY_TODAY, { answerText: '1日目' }, NOW_TODAY);
+    expect(evaluateDay(db, DAY_TODAY, NOW_TODAY).status).toBe('UNLOCKED');
+
+    // Day2（翌日）は翌日の分を要求する＝前日の達成では開かない。
+    const NOW_TOMORROW = jst(2026, 7, 11, 12, 0);
+    seedTotals(db, DAY_TOMORROW, 'g-dev', 4000 * 1000);
+    seedTotals(db, DAY_TOMORROW, 'g-atcoder', 400 * 1000);
+    setCheck(db, DAY_TOMORROW, 'reflection', true, NOW_TOMORROW);
+    const r = evaluateDay(db, DAY_TOMORROW, NOW_TOMORROW);
+    expect(r.perCondition.find((p) => p.target === 'CHECK')!.met).toBe(false);
+    expect(r.status).toBe('LOCKED');
+  });
+
+  it('is_final の過去確定日は再評価しない（後から満たしても過去は未達のまま・D2 の非対称）', () => {
+    const planId = seedPlan();
+    const c = createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 }, NOW_TODAY);
+    evaluateDay(db, DAY_TODAY, NOW_TODAY); // LOCKED のスナップショットを書く。
+    db.prepare('UPDATE unlock_evaluation SET is_final = 1 WHERE day_key = ?').run(DAY_TODAY);
+
+    // 後から提出しても、確定済みの日は LOCKED のまま（欠測を美化しない思想と一致）。
+    submitPhoto(db, c.id, DAY_TODAY, { dataUrl: PNG_DATA_URL }, NOW_TODAY);
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    expect(r.status).toBe('LOCKED');
+    expect(r.perCondition.find((p) => p.target === 'CHECK')!.met).toBe(false);
+  });
+
+  it('未達 Check は latch 済みの UNLOCKED を relock しない', () => {
+    // 先に他条件だけで UNLOCK（latch）。
+    evaluateDay(db, DAY_TODAY, NOW_TODAY);
+    const planId = seedPlan();
+    createCheck(db, planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 }, NOW_TODAY);
+
+    const r = evaluateDay(db, DAY_TODAY, NOW_TODAY + 60_000);
+    expect(r.conditionsMet).toBe(false); // 現時点の充足は落ちる。
+    expect(r.status).toBe('UNLOCKED'); // が、latch は維持される。
   });
 });

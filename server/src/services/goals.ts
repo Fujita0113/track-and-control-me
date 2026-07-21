@@ -1,5 +1,9 @@
 import type { DB } from '../db/index.js';
+import type { Chronicle } from '@track/contract';
 import { nextDayKey } from '../aggregation/index.js';
+import { addDaysKey, dayDiff } from './day-key.js';
+import { GoalNotFoundError } from './goal-errors.js';
+import { getChronicle } from './goal-chronicle.js';
 import {
   getEffectiveRuleSet,
   upsertFutureRuleSet,
@@ -26,12 +30,6 @@ export type GoalPracticeTarget = 'TOTAL_WORK' | 'GROUP' | 'PLANNING' | 'TIMELINE
 // 時間型（②時間推移の対象・isTimeType=true）。MANUAL_CHECK / PLANNING は非時間型。
 const TIME_TARGETS = new Set<GoalPracticeTarget>(['TOTAL_WORK', 'GROUP', 'TIMELINE']);
 
-export class GoalNotFoundError extends Error {
-  constructor(id: number) {
-    super(`目標が見つかりません: ${id}`);
-    this.name = 'GoalNotFoundError';
-  }
-}
 export class GoalPracticeError extends Error {
   constructor(msg: string) {
     super(msg);
@@ -44,9 +42,13 @@ export class GoalDeleteWindowError extends Error {
     this.name = 'GoalDeleteWindowError';
   }
 }
+/**
+ * レポートを開けない＝**開始前**の目標（まだ1日も走っていない）。
+ * 進行中は「走行中プレビュー」として開ける（spec: goal-report / 完走後のみの制約は撤廃）。
+ */
 export class GoalReportNotReadyError extends Error {
   constructor() {
-    super('レポートは完走（30日経過）後にのみ開けます');
+    super('レポートは開始日以降に開けます');
     this.name = 'GoalReportNotReadyError';
   }
 }
@@ -89,23 +91,10 @@ interface PracticeRow {
   sort_order: number;
 }
 
-// --- day_key 算術（UTC 計算で tz ずれ回避。util.js の addDays と同一規則）-----------
-/** 'YYYY-MM-DD' に n 日加算。 */
-export function addDaysKey(dayKey: string, n: number): string {
-  const [y, m, d] = dayKey.split('-').map(Number);
-  const dt = new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1));
-  dt.setUTCDate(dt.getUTCDate() + n);
-  const p = (x: number): string => String(x).padStart(2, '0');
-  return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
-}
-/** b - a の日数差（整数）。 */
-function dayDiff(a: string, b: string): number {
-  const toUtc = (k: string): number => {
-    const [y, m, d] = k.split('-').map(Number);
-    return Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1);
-  };
-  return Math.round((toUtc(b) - toUtc(a)) / 86_400_000);
-}
+// day_key 算術は day-key.ts（依存なしの純関数）、GoalNotFoundError は goal-errors.ts（沿革と共有）に置く。
+// 既存の import 先を変えないよう、どちらもここから再エクスポートする。
+export { addDaysKey } from './day-key.js';
+export { GoalNotFoundError } from './goal-errors.js';
 
 function deriveStatus(today: string, startDay: string, endDay: string): GoalStatus {
   if (today < startDay) return 'upcoming';
@@ -622,6 +611,12 @@ export interface ReportDayCell {
   met: boolean;
   actualSeconds: number | null;
   thresholdSeconds: number | null;
+  /**
+   * まだ到来していない日（`day_key > today`）＝**未到来**。走行中プレビューで残り日数が
+   * 未達成マスで埋まるのを防ぐ（spec: goal-report ①・design D6）。
+   * 「欠測（評価行が無い過去日）＝未達成」とは区別する: 未到来は met=false かつ future=true。
+   */
+  future: boolean;
 }
 export interface ReportPractice {
   conditionKey: string;
@@ -666,7 +661,24 @@ export interface GoalReport {
     startDay: string;
     endDay: string;
     dayCount: number;
+    /** 達成日数＝全実践 met の日数。進行中は**その時点まで**（未到来は数えない）。 */
     achievedDays: number;
+    /** 進行中（走行中プレビュー）か完走後か。UI の文言・CTA 出し分けに使う。 */
+    status: GoalStatus;
+    /** 進行中は 1..30（Day 12/30 のヘッダ用）、完走後は 30。 */
+    dayNumber: number;
+    /** 事実が確定している日数（＝未到来でない日の数）。進行中は dayNumber と一致。 */
+    elapsedDays: number;
+    /**
+     * ③の After 側に使う Day 番号。完走後は最終日（30）、進行中は**現時点で最も新しい
+     * 記録のある日**（記録が1つも無ければ現在の Day）（spec: goal-report ③）。
+     */
+    afterDayNumber: number;
+    /**
+     * ③の最終日写真 CTA を出してよいか＝**完走後のみ**（進行中は最終日がまだ来ていない）。
+     * デモモードの閲覧専用制御は UI 側で別途行う。
+     */
+    showFinalPhotoCta: boolean;
   };
   practices: ReportPractice[];
   hasTimeType: boolean;
@@ -674,14 +686,27 @@ export interface GoalReport {
   days: ReportDayText[];
   /** 全画像の平坦リスト（(caption, dayNumber, sortOrder) 昇順）。③の2モードが使う（D5）。 */
   reportImages: ReportImage[];
+  /** ⑤沿革（Plan と Check の答え合わせ）。日記は含まない（spec: goal-chronicle）。 */
+  chronicle: Chronicle;
 }
 
-/** 完走した目標の完了レポートを集計する。完走前は GoalReportNotReadyError（API は 409）。 */
+/**
+ * 目標のレポートを集計する。**進行中でも開ける**（走行中プレビュー・spec: goal-report / D6）。
+ * 開始前（まだ1日も走っていない）のみ GoalReportNotReadyError（API は 409）。
+ *
+ * 進行中に開いたときは:
+ *   - ①カレンダーの未到来日（`day_key > today`）は `future=true`＝空白（未達成の黒星で埋めない）
+ *   - ヘッダの達成日数は**その時点まで**（未到来は数えない）
+ *   - ③の After は現時点で最も新しい記録のある日／最終日写真 CTA は出さない
+ */
 export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalReport {
   const goal = getGoalRow(db, id);
   const today = todayKey(db, nowMs);
-  if (deriveStatus(today, goal.start_day, goal.end_day) !== 'completed')
-    throw new GoalReportNotReadyError();
+  const status = deriveStatus(today, goal.start_day, goal.end_day);
+  if (status === 'upcoming') throw new GoalReportNotReadyError();
+  const completed = status === 'completed';
+  // 事実が確定している日数（＝未到来でない日）。完走後は30日すべて。
+  const elapsedDays = completed ? GOAL_DAYS : Math.min(GOAL_DAYS, dayDiff(goal.start_day, today) + 1);
 
   const practices = practicesFor(db, id);
 
@@ -706,16 +731,20 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
     evalByDay.set(row.day_key, map);
   }
 
-  // ① 実践ごとの30日カレンダー（欠測・キー不在は未達成）。
+  // ① 実践ごとの30日カレンダー（欠測・キー不在は未達成／未到来は空白）。
   const reportPractices: ReportPractice[] = practices.map((p) => {
     const cells: ReportDayCell[] = dayKeys.map((dk, i) => {
       const entry = evalByDay.get(dk)?.get(p.condition_key);
+      // 未到来（day_key > today）は「まだ来ていない」＝空白。欠測（評価行が無い過去日）＝未達成とは
+      // 区別する（欠測は美化しないが、未到来を未達成で埋めるのは事実に反する）。
+      const future = dk > today;
       return {
         dayKey: dk,
         dayNumber: i + 1,
-        met: entry?.met === true,
-        actualSeconds: entry?.actualSeconds ?? null,
-        thresholdSeconds: entry?.thresholdSeconds ?? null,
+        met: !future && entry?.met === true,
+        actualSeconds: future ? null : (entry?.actualSeconds ?? null),
+        thresholdSeconds: future ? null : (entry?.thresholdSeconds ?? null),
+        future,
       };
     });
     return {
@@ -727,9 +756,9 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
     };
   });
 
-  // ヘッダ達成日数 = 全実践 met の日数。
+  // ヘッダ達成日数 = 全実践 met の日数。未到来の日は数えない（進行中は「その時点まで」を示す）。
   let achievedDays = 0;
-  for (let i = 0; i < GOAL_DAYS; i++) {
+  for (let i = 0; i < elapsedDays; i++) {
     if (reportPractices.length > 0 && reportPractices.every((p) => p.cells[i]!.met)) achievedDays++;
   }
 
@@ -800,6 +829,21 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
     return { dayKey: dk, dayNumber: i + 1, text: '', source: null, images };
   });
 
+  // ③の After 側の Day。完走後は最終日（Day30）、進行中は「現時点で最も新しい記録のある日」
+  // （文面か画像がある最新の到来済みの日）。記録が1つも無ければ現在の Day に落とす。
+  let afterDayNumber = elapsedDays;
+  if (completed) {
+    afterDayNumber = GOAL_DAYS;
+  } else {
+    for (let i = elapsedDays - 1; i >= 0; i--) {
+      const d = days[i]!;
+      if (d.text.trim() || d.images.length > 0) {
+        afterDayNumber = d.dayNumber;
+        break;
+      }
+    }
+  }
+
   return {
     goal: {
       id: goal.id,
@@ -809,11 +853,20 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
       endDay: goal.end_day,
       dayCount: GOAL_DAYS,
       achievedDays,
+      status,
+      dayNumber: elapsedDays,
+      elapsedDays,
+      afterDayNumber,
+      // 最終日写真の CTA は完走後のみ（進行中は最終日がまだ来ていない）。
+      showFinalPhotoCta: completed,
     },
     practices: reportPractices,
     hasTimeType: reportPractices.some((p) => p.isTimeType),
     thresholdChanges,
     days,
     reportImages,
+    // ⑤沿革（Plan と Check の答え合わせ）。日記は含まない。
+    // 走行中プレビューでは「その日までに実際に起きたこと」だけを載せる（①の未到来＝空白と同じ理由）。
+    chronicle: getChronicle(db, id, today),
   };
 }

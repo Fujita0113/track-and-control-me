@@ -5,7 +5,19 @@ import {
   ServerMessageSchema,
   GroupRefSchema,
   DEFAULTS,
+  CheckKindSchema,
+  CheckScheduleSchema,
+  CheckStatusSchema,
+  CreateCheckInputSchema,
+  CreatePlanInputSchema,
+  AnswerQuestionInputSchema,
+  WithdrawInputSchema,
+  GoalPlanSchema,
+  ChronicleSchema,
+  CHECK_CONDITION_PREFIX,
+  CHECK_TARGET,
   type ActivitySample,
+  type GoalPlan,
   type GroupRef,
 } from './index.js';
 
@@ -129,5 +141,185 @@ describe('ServerMessageSchema welcome（awayMinSeconds は optional で後方互
 describe('DEFAULTS', () => {
   it('exposes AWAY_MIN_SECONDS = 600（一元化閾値の既定）', () => {
     expect(DEFAULTS.AWAY_MIN_SECONDS).toBe(600);
+  });
+});
+
+describe('Check の enum（種類・いつ・状態）', () => {
+  it('kind は photo|question のみ', () => {
+    expect(CheckKindSchema.parse('photo')).toBe('photo');
+    expect(CheckKindSchema.parse('question')).toBe('question');
+    expect(() => CheckKindSchema.parse('video')).toThrow();
+  });
+
+  it('schedule は single|range のみ', () => {
+    expect(CheckScheduleSchema.parse('single')).toBe('single');
+    expect(CheckScheduleSchema.parse('range')).toBe('range');
+    expect(() => CheckScheduleSchema.parse('weekly')).toThrow();
+  });
+
+  it('永続状態に satisfied は無い（達成は対象日から遅延導出する・design D2）', () => {
+    expect(CheckStatusSchema.parse('active')).toBe('active');
+    expect(CheckStatusSchema.parse('cancelled')).toBe('cancelled');
+    expect(() => CheckStatusSchema.parse('satisfied')).toThrow();
+  });
+
+  it('合成条件の名前空間は既存キーと衝突しない', () => {
+    expect(CHECK_CONDITION_PREFIX).toBe('check:');
+    expect(CHECK_TARGET).toBe('CHECK');
+    for (const existing of ['total_work', 'group:abc', 'timeline:運動', 'manual:読書', 'planning:tomorrow_planned'])
+      expect(existing.startsWith(CHECK_CONDITION_PREFIX)).toBe(false);
+  });
+});
+
+describe('CreateCheckInputSchema（種類×いつ の2軸は独立）', () => {
+  it('全4通りの組み合わせを受理する', () => {
+    const combos = [
+      { kind: 'photo', caption: '前髪・正面', schedule: 'single', startDayKey: '2026-07-18' },
+      { kind: 'photo', caption: '前髪・正面', schedule: 'range', startDayKey: '2026-07-18', spanDays: 7 },
+      { kind: 'question', questionText: '使用感はどうだった？', schedule: 'single', startDayKey: '2026-07-18' },
+      { kind: 'question', questionText: '使用感はどうだった？', schedule: 'range', startDayKey: '2026-07-18', spanDays: 7 },
+    ];
+    for (const c of combos) expect(() => CreateCheckInputSchema.parse(c)).not.toThrow();
+  });
+
+  it('2軸の交差は両方の軸を出力に残す（種類が「いつ」を落とさない）', () => {
+    const parsed = CreateCheckInputSchema.parse({
+      kind: 'photo',
+      caption: '前髪・正面',
+      schedule: 'range',
+      startDayKey: '2026-07-18',
+      spanDays: 7,
+    });
+    expect(parsed).toEqual({
+      kind: 'photo',
+      caption: '前髪・正面',
+      schedule: 'range',
+      startDayKey: '2026-07-18',
+      spanDays: 7,
+    });
+  });
+
+  it('相対指定（3日後）でも入力できる', () => {
+    const parsed = CreateCheckInputSchema.parse({
+      kind: 'photo',
+      caption: '前髪・正面',
+      schedule: 'single',
+      startInDays: 3,
+    });
+    expect(parsed).toMatchObject({ schedule: 'single', startInDays: 3 });
+  });
+
+  it('場所メモ・時刻メモを任意で持てる', () => {
+    const parsed = CreateCheckInputSchema.parse({
+      kind: 'photo',
+      caption: '前髪・正面',
+      schedule: 'single',
+      startDayKey: '2026-07-18',
+      placeNote: '洗面所',
+      timeNote: '朝',
+    });
+    expect(parsed).toMatchObject({ placeNote: '洗面所', timeNote: '朝' });
+  });
+
+  it('photo はキャプション非空・question は質問文非空', () => {
+    expect(() =>
+      CreateCheckInputSchema.parse({ kind: 'photo', caption: '   ', schedule: 'single', startDayKey: '2026-07-18' }),
+    ).toThrow();
+    expect(() =>
+      CreateCheckInputSchema.parse({ kind: 'question', questionText: '', schedule: 'single', startDayKey: '2026-07-18' }),
+    ).toThrow();
+  });
+
+  it('range は spanDays >= 2 必須', () => {
+    const base = { kind: 'photo', caption: '前髪・正面', schedule: 'range', startDayKey: '2026-07-18' };
+    expect(() => CreateCheckInputSchema.parse(base)).toThrow();
+    expect(() => CreateCheckInputSchema.parse({ ...base, spanDays: 1 })).toThrow();
+    expect(() => CreateCheckInputSchema.parse({ ...base, spanDays: 2 })).not.toThrow();
+  });
+});
+
+describe('Plan / 取り下げ / 回答の入力', () => {
+  it('Plan の本文は trim して非空必須', () => {
+    expect(CreatePlanInputSchema.parse({ body: '  シャンプーを変える  ' })).toEqual({
+      body: 'シャンプーを変える',
+    });
+    expect(() => CreatePlanInputSchema.parse({ body: '   ' })).toThrow();
+  });
+
+  it('取り下げの理由は非空必須（唯一の脱出弁の代償）', () => {
+    expect(WithdrawInputSchema.parse({ reason: ' 肌に合わず返品した ' })).toEqual({
+      reason: '肌に合わず返品した',
+    });
+    expect(() => WithdrawInputSchema.parse({ reason: '' })).toThrow();
+  });
+
+  it('空回答は拒否される', () => {
+    expect(() => AnswerQuestionInputSchema.parse({ answerText: '  ' })).toThrow();
+  });
+});
+
+describe('沿革の round-trip', () => {
+  const plan: GoalPlan = {
+    id: 1,
+    goalId: 7,
+    dayKey: '2026-07-15',
+    body: 'ボリュームアップシャンプーを使えば髪質が良くなるのではないだろうか',
+    status: 'active',
+    withdrawReason: null,
+    createdAt: 1_770_000_000_000,
+    checks: [
+      {
+        id: 10,
+        planId: 1,
+        kind: 'photo',
+        caption: '前髪・正面',
+        questionText: '',
+        schedule: 'single',
+        startDayKey: '2026-07-18',
+        spanDays: null,
+        placeNote: '洗面所',
+        timeNote: '朝',
+        status: 'active',
+        cancelReason: null,
+        createdAt: 1_770_000_000_000,
+        results: [
+          { id: 100, checkId: 10, dayKey: '2026-07-18', imageId: 5, answerText: null, createdAt: 1_770_000_000_000 },
+        ],
+      },
+      {
+        id: 11,
+        planId: 1,
+        kind: 'question',
+        caption: '',
+        questionText: 'ボリュームアップシャンプーの使用感はどうだった？',
+        schedule: 'range',
+        startDayKey: '2026-07-18',
+        spanDays: 7,
+        placeNote: null,
+        timeNote: null,
+        status: 'cancelled',
+        cancelReason: '続かなかった。3日で飽きた',
+        createdAt: 1_770_000_000_000,
+        results: [
+          { id: 101, checkId: 11, dayKey: '2026-07-18', imageId: null, answerText: '泡立ちは良い', createdAt: 1_770_000_000_000 },
+        ],
+      },
+    ],
+  };
+
+  it('Plan（Check・回答を入れ子に持つ）が round-trip する', () => {
+    expect(GoalPlanSchema.parse(plan)).toEqual(plan);
+  });
+
+  it('沿革全体が round-trip する（取り下げ済みも消えない）', () => {
+    const chronicle = { goalId: 7, plans: [plan] };
+    const parsed = ChronicleSchema.parse(chronicle);
+    expect(parsed).toEqual(chronicle);
+    expect(parsed.plans[0]!.checks[1]!.cancelReason).toBe('続かなかった。3日で飽きた');
+  });
+
+  it('Check を1つも持たない Plan も妥当（方針だけの Plan）', () => {
+    const bare = { ...plan, id: 2, body: 'ブログはやめる。反応が薄いから', checks: [] };
+    expect(() => GoalPlanSchema.parse(bare)).not.toThrow();
   });
 });

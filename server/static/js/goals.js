@@ -8,6 +8,7 @@ import { planningSignalLabel } from './targets.js';
 import { condEditorRow } from './rules.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
+import { shortDay, checkWhenText } from './plan-check.js';
 import { shrinkImage, isImageFile } from './images.js';
 
 // デモ中は取得先を /api/demo/* + 仮想日付へ切替（通常モードは既存経路のまま）。
@@ -105,11 +106,17 @@ function goalCard(g, root) {
     h('div', { class: 'spacer' }),
   );
 
-  if (g.status === 'completed') {
-    const openBtn = h('button', { class: 'btn small primary', text: 'レポートを開く', type: 'button' });
+  // 完走後・進行中のどちらもレポートへ遷移できる（走行中プレビュー・spec: goal-report）。
+  // 同じ画面だが、文言を状態で分けて「まだ途中の姿」であることを一目で伝える。
+  if (g.status === 'completed' || g.status === 'active') {
+    const label = g.status === 'completed' ? 'レポートを開く' : 'レポートプレビュー';
+    const openBtn = h('button', { class: 'btn small primary', text: label, type: 'button' });
     openBtn.addEventListener('click', () => renderReport(root, g.id));
     head.appendChild(openBtn);
-  } else if (!isDemo() && g.canDelete) {
+  }
+  // 開始前はレポートを開けない（まだ1日も走っていない）ので導線を出さない。
+
+  if (!isDemo() && g.canDelete && g.status !== 'completed') {
     // デモは閲覧専用（削除手段を出さない・spec: 閲覧専用）。
     const del = h('button', { class: 'btn small danger', text: '削除', type: 'button' });
     del.addEventListener('click', async () => {
@@ -349,15 +356,19 @@ async function renderReport(root, goalId) {
   back.addEventListener('click', () => renderList(root));
   page.appendChild(back);
 
-  // ヘッダ
+  // ヘッダ。進行中は「完走」ではなく現在の Day を出す（まだ途中の姿であることを一目で伝える）。
+  const running = rep.goal.status === 'active';
   page.appendChild(h('header', { class: 'gr-header' },
-    h('div', { class: 'gr-eyebrow', text: '完走' }),
+    h('div', { class: 'gr-eyebrow', text: running ? `Day ${rep.goal.dayNumber}/${rep.goal.dayCount}` : '完走' }),
     h('h1', { class: 'gr-h1', text: rep.goal.name }),
     rep.goal.purpose ? h('p', { class: 'gr-purpose-line', text: rep.goal.purpose }) : null,
     h('div', { class: 'gr-header-meta' },
       h('span', { text: `${rep.goal.startDay} 〜 ${rep.goal.endDay}` }),
       h('span', { class: 'gr-dot', text: '·' }),
-      h('span', { class: 'gr-achieved', text: `達成 ${rep.goal.achievedDays}/${rep.goal.dayCount}` }),
+      // 進行中の達成日数は「その時点まで」の事実（分母は現時点までの日数）。
+      h('span', { class: 'gr-achieved', text: running
+        ? `達成 ${rep.goal.achievedDays}/${rep.goal.elapsedDays}（現時点）`
+        : `達成 ${rep.goal.achievedDays}/${rep.goal.dayCount}` }),
     ),
   ));
 
@@ -375,8 +386,110 @@ async function renderReport(root, goalId) {
   page.appendChild(blockBeforeAfter(rep, imgBase));
   // ④ 日記リーダー
   page.appendChild(blockReader(rep, readerState, imgBase));
+  // ⑤ 沿革（Plan と Check の答え合わせ。日記は載らない）
+  page.appendChild(blockChronicle(rep, imgBase));
 
   readerState.renderReader();
+}
+
+// ⑤ 沿革（spec: goal-chronicle）
+//
+// Plan を時系列に並べ、その下に Check を入れ子で置く。写真は画像、質問は Q&A のペア。
+// 取り下げは理由つきで残す（消さない＝逃げた事実そのものが歴史）。
+// **日記は載せない**（載る／載らないの線引きは「大きさ」ではなく「検証がぶら下がるか」）。
+// スコア・演出（紙吹雪・バッジ・合否の語）は出さず、素の時系列リストとして静かに提示する。
+function blockChronicle(rep, imgBase) {
+  const card = grCard('⑤ 沿革');
+  const plans = (rep.chronicle && rep.chronicle.plans) || [];
+  if (!plans.length) {
+    card.appendChild(h('p', { class: 'gr-empty', text: 'まだ Plan はありません。振り返りタブで賭けを立てると、ここに積み上がります。' }));
+    return card;
+  }
+  const list = h('div', { class: 'gr-chr' });
+  for (const p of plans) list.appendChild(chroniclePlan(p, rep, imgBase));
+  card.appendChild(list);
+  return card;
+}
+
+/**
+ * 沿革の Plan 1件を「社史・年表」の1エントリとして組む。
+ * 左列＝日付（Day 番号を主役に）、右列＝賭けの一文（明朝）＋配下 Check。
+ * 縦罫を貫く小さな菱形の節で時系列をつなぐ（色分け・絵文字は使わない）。
+ */
+function chroniclePlan(plan, rep, imgBase) {
+  const withdrawn = plan.status === 'withdrawn';
+  const dayNum = dayNumberOf(rep, plan.dayKey);
+
+  const dateCol = h('div', { class: 'gr-chr-date' },
+    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
+    h('div', { class: 'gr-chr-day-num', text: dayNum != null ? String(dayNum) : '—' }),
+    h('div', { class: 'gr-chr-date-sub', text: shortDay(plan.dayKey) }),
+    // 取り下げは貶めず、社史が終了事業を淡々と載せるのと同じ扱い（日付脇の小さな標）。
+    withdrawn ? h('span', { class: 'gr-chr-flag', text: '取り下げ' }) : null,
+  );
+
+  const stmt = h('p', { class: 'gr-chr-stmt', text: plan.body });
+  if (withdrawn)
+    stmt.appendChild(h('span', { class: 'gr-chr-reason', text: plan.withdrawReason || '' }));
+
+  const main = h('div', { class: 'gr-chr-main' }, stmt);
+  for (const c of plan.checks) main.appendChild(chronicleCheck(c, imgBase, withdrawn));
+
+  return h('article', { class: `gr-chr-entry${withdrawn ? ' off' : ''}` }, dateCol, main);
+}
+
+/** 沿革の Check 1件。種別は色でなく「形」で分ける（写真＝図版プレート／問い＝Q&A の文）。 */
+function chronicleCheck(check, imgBase, planWithdrawn) {
+  const cancelled = check.status === 'cancelled';
+  const isPhoto = check.kind === 'photo';
+  const label = isPhoto ? check.caption : check.questionText;
+
+  const ev = h('div', { class: `gr-chr-ev${cancelled ? ' off' : ''}` },
+    h('div', { class: 'gr-chr-cap' },
+      h('span', { class: 'gr-chr-cap-kind', text: isPhoto ? '写真 ── ' : '問い ── ' }),
+      h('b', { text: label }),
+    ),
+  );
+
+  // Check 単体の取り下げのみ理由をここに出す。Plan ごとの取り下げは左列の標＋Plan の理由で示すため、
+  // 配下 Check に同じ理由を重ねて出さない（重複を避ける）。
+  if (cancelled && !planWithdrawn)
+    ev.appendChild(h('p', { class: 'gr-chr-quit', text: check.cancelReason || '' }));
+
+  if (isPhoto) {
+    // 提出画像を読み取り専用の図版として時系列に並べる。
+    const imgs = check.results.filter((r) => r.imageId != null);
+    if (imgs.length) {
+      const plates = h('div', { class: 'gr-chr-plates' });
+      for (const r of imgs) {
+        plates.appendChild(h('figure', { class: 'gr-chr-plate' },
+          h('img', { class: 'gr-chr-plate-img', src: `${imgBase}/images/${r.imageId}`, alt: label, loading: 'lazy' }),
+          h('figcaption', { text: shortDay(r.dayKey) }),
+        ));
+      }
+      ev.appendChild(plates);
+    }
+  } else {
+    // 質問は Q&A（工夫→結果の記録そのもの）。
+    for (const r of check.results) {
+      ev.appendChild(h('div', { class: 'gr-chr-qa' },
+        h('time', { text: shortDay(r.dayKey) }),
+        h('p', { text: r.answerText || '' }),
+      ));
+    }
+  }
+
+  // 範囲Check は事実の件数を静かに添える（未回答日を美化も負債化もしない）。
+  if (check.schedule === 'range')
+    ev.appendChild(h('div', { class: 'gr-chr-note', text: `${check.spanDays}日のうち${check.results.length}日。` }));
+
+  return ev;
+}
+
+/** rep.days から Plan の day_key の Day 番号を引く（期間外・不明は null）。 */
+function dayNumberOf(rep, dayKey) {
+  const d = (rep.days || []).find((x) => x.dayKey === dayKey);
+  return d ? d.dayNumber : null;
 }
 
 function backLink(root) {
@@ -407,14 +520,15 @@ function blockCalendar(rep, rs) {
     grid.appendChild(head);
   }
 
-  // 実践ごとの行
+  // 実践ごとの行。未到来（future）は空白マスにする＝走行中プレビューで残りを黒星で埋めない。
   for (const p of rep.practices) {
     grid.appendChild(h('div', { class: 'gr-cal-label', text: niceLabel(p.target, p.conditionKey, p.label), title: p.label }));
     for (const cell of p.cells) {
+      const kind = cell.future ? 'future' : cell.met ? 'done' : 'miss';
       const el = h('button', {
-        class: `gr-cell ${cell.met ? 'done' : 'miss'}`,
+        class: `gr-cell ${kind}`,
         type: 'button',
-        title: `Day ${cell.dayNumber}: ${cell.met ? 'やった' : 'やってない'}`,
+        title: `Day ${cell.dayNumber}: ${cell.future ? 'まだ来ていない' : cell.met ? 'やった' : 'やってない'}`,
       });
       el.addEventListener('click', () => rs.renderReader(cell.dayNumber));
       if (!rs.cellsByDay.has(cell.dayNumber)) rs.cellsByDay.set(cell.dayNumber, []);
@@ -424,10 +538,14 @@ function blockCalendar(rep, rs) {
   }
   scroll.appendChild(grid);
   card.appendChild(scroll);
-  card.appendChild(h('div', { class: 'gr-legend' },
+  const legend = h('div', { class: 'gr-legend' },
     h('span', {}, h('span', { class: 'gr-cell done gr-legend-swatch' }), 'やった'),
     h('span', {}, h('span', { class: 'gr-cell miss gr-legend-swatch' }), 'やってない'),
-  ));
+  );
+  // 未到来が1マスでもある（＝進行中）ときだけ凡例に足す。完走レポートの凡例は従来どおり2値。
+  if (rep.practices.some((p) => p.cells.some((c) => c.future)))
+    legend.appendChild(h('span', {}, h('span', { class: 'gr-cell future gr-legend-swatch' }), 'まだ来ていない'));
+  card.appendChild(legend);
   return card;
 }
 
@@ -509,13 +627,15 @@ function blockBeforeAfter(rep, imgBase) {
     hasImages() ? modeSeg : null,
   ));
 
-  // 文面並置（従来どおり・画像とは独立）。
+  // 文面並置（画像とは独立）。After は完走後なら最終日、進行中なら「最も新しい記録のある日」。
   const first = rep.days[0];
-  const last = rep.days[rep.days.length - 1];
+  const last = rep.days[(rep.goal.afterDayNumber || rep.days.length) - 1] || rep.days[rep.days.length - 1];
   card.appendChild(h('div', { class: 'gr-ba' }, baCol('Before', first), baCol('After', last)));
 
-  // 最終日（Day30）の写真を追加する CTA（デモは閲覧専用なので出さない）。
-  if (!isDemo()) card.appendChild(finalPhotoCta(rep, () => { syncToggleVisibility(); renderImgs(); }));
+  // 最終日（Day30）の写真を追加する CTA。**完走後のみ**（進行中は最終日がまだ来ていない）。
+  // デモは閲覧専用なので出さない。
+  if (!isDemo() && rep.goal.showFinalPhotoCta)
+    card.appendChild(finalPhotoCta(rep, () => { syncToggleVisibility(); renderImgs(); }));
 
   // 画像領域（モードで再描画）。
   const imgHost = h('div', { class: 'gr-img-host' });
@@ -524,7 +644,10 @@ function blockBeforeAfter(rep, imgBase) {
     clear(imgHost);
     const el = state.mode === 'all' ? renderAllMode(rep, imgBase) : renderDefaultMode(rep, imgBase);
     if (el) imgHost.appendChild(el);
-    else imgHost.appendChild(h('p', { class: 'gr-empty', text: 'まだ写真がありません。上の「＋ 最終日の写真を追加」から追加できます。' }));
+    // 進行中は最終日 CTA を出していないので、それを案内する文言も出さない。
+    else imgHost.appendChild(h('p', { class: 'gr-empty', text: !isDemo() && rep.goal.showFinalPhotoCta
+      ? 'まだ写真がありません。上の「＋ 最終日の写真を追加」から追加できます。'
+      : 'まだ写真がありません。' }));
   };
   // CTA で最初の1枚が入るとトグルが必要になるので表示を同期する。
   const syncToggleVisibility = () => {

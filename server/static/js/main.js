@@ -8,7 +8,8 @@ import * as reflection from './reflection.js';
 import * as goals from './goals.js';
 import * as settings from './settings.js';
 import { maybeShowOnboarding } from './onboarding.js';
-import { renderDemoBar } from './demo.js';
+import { renderDemoBar, isDemo } from './demo.js';
+import { maybeShowDueCheckToast } from './plan-check.js';
 
 const SCREENS = { today, timeline, kanban, reflection, goals, settings };
 let current = null;
@@ -104,6 +105,9 @@ async function boot() {
     await activate(initialScreen());
     // 初回オンボーディング(ルール皆無時)。画面表示後に判定する。
     await maybeShowOnboarding();
+    // その日はじめてダッシュボードを開いたとき、回答すべき Check があれば1回だけトースト（D7）。
+    // デモは閲覧専用なので出さない。時刻でスケジュールはしない（croner・OS トースト不使用）。
+    if (!isDemo()) await maybeShowDueCheckToast(state.today);
   } catch (err) {
     const main = document.querySelector('.content');
     clear(main);

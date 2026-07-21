@@ -24,6 +24,7 @@ import {
   GoalPracticeError,
   type GoalPracticeTarget,
 } from './goals.js';
+import { createPlan, createCheck, submitPhoto, answerQuestion } from './goal-plan-check.js';
 
 /** テスト用 data URL（バイト内容は検証しないので任意バイト列でよい）。 */
 const dataUrl = (mime = 'image/png', bytes: number[] = [1, 2, 3]): string =>
@@ -645,5 +646,163 @@ describe('完了レポート（明日開始）', () => {
     expect(p.label).toBe('筋トレ'); // ラベルスナップショット
     expect(p.cells[0]!.met).toBe(true); // ① Day1 達成（カレンダーに乗る）
     expect(rep.hasTimeType).toBe(false);
+  });
+});
+
+describe('走行中プレビュー（レポートの鍵を外す・spec: goal-report / design D6）', () => {
+  // START=2026-07-11 の目標で Day12 = 2026-07-22。
+  const NOW_DAY12 = jst(2026, 7, 22, 12, 0);
+  const DAY12_KEY = '2026-07-22';
+
+  /** 総作業時間だけを採用した進行中の目標を作り、Day1..Day12 の評価行を met で埋める。 */
+  function seedRunningGoal(): number {
+    seedTomorrowRule();
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
+    for (let i = 0; i < 12; i++) {
+      seedEval(addDaysKey(START, i), [
+        { conditionKey: 'total_work', target: 'TOTAL_WORK', met: true, actualSeconds: 15000, thresholdSeconds: 14400 },
+      ]);
+    }
+    return g.id;
+  }
+
+  it('7.1 進行中でもレポートが返る（Day 12/30 の姿）', () => {
+    const id = seedRunningGoal();
+    const rep = getGoalReport(db, id, NOW_DAY12);
+    expect(rep.goal.status).toBe('active');
+    expect(rep.goal.dayNumber).toBe(12);
+    expect(rep.goal.dayCount).toBe(30);
+  });
+
+  it('7.1 開始前は従来どおり拒否される', () => {
+    seedTomorrowRule();
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
+    expect(() => getGoalReport(db, g.id, NOW_TODAY)).toThrow(GoalReportNotReadyError);
+  });
+
+  it('7.2 未到来（Day13〜30）は空白＝future で、未達成の黒星にならない', () => {
+    const id = seedRunningGoal();
+    const cells = getGoalReport(db, id, NOW_DAY12).practices[0]!.cells;
+
+    // Day1〜12 は事実どおり（到来済み・達成）。
+    for (const c of cells.slice(0, 12)) {
+      expect(c.future).toBe(false);
+      expect(c.met).toBe(true);
+    }
+    // Day13〜30 は未到来＝空白（met=false だが future=true で区別される）。
+    for (const c of cells.slice(12)) {
+      expect(c.future).toBe(true);
+      expect(c.met).toBe(false);
+    }
+    expect(cells.filter((c) => c.future)).toHaveLength(18);
+  });
+
+  it('7.2 欠測（到来済みで評価行が無い日）は未到来と区別され、未達成のまま', () => {
+    seedTomorrowRule();
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
+    // Day1 だけ評価行あり。Day2〜12 は欠測（サーバー停止日）。
+    seedEval(START, [
+      { conditionKey: 'total_work', target: 'TOTAL_WORK', met: true, actualSeconds: 15000, thresholdSeconds: 14400 },
+    ]);
+    const cells = getGoalReport(db, g.id, NOW_DAY12).practices[0]!.cells;
+    const day5 = cells[4]!;
+    expect(day5).toMatchObject({ met: false, future: false }); // 欠測＝未達成（美化しない）。
+    expect(cells[12]).toMatchObject({ met: false, future: true }); // 未到来＝空白。
+  });
+
+  it('7.2 完走後は未到来が1日も無い', () => {
+    const id = seedRunningGoal();
+    const cells = getGoalReport(db, id, NOW_COMPLETED).practices[0]!.cells;
+    expect(cells.every((c) => c.future === false)).toBe(true);
+    expect(cells).toHaveLength(30);
+  });
+
+  it('ヘッダの達成日数は現時点までを数える（未到来は数えない）', () => {
+    const id = seedRunningGoal();
+    expect(getGoalReport(db, id, NOW_DAY12).goal.achievedDays).toBe(12);
+    expect(getGoalReport(db, id, NOW_DAY12).goal.elapsedDays).toBe(12);
+    // 完走後も達成日数は同じ（Day13 以降は評価行が無い＝未達成）。
+    expect(getGoalReport(db, id, NOW_COMPLETED).goal.achievedDays).toBe(12);
+  });
+
+  it('7.3 進行中の After は「現時点で最も新しい記録のある日」', () => {
+    const id = seedRunningGoal();
+    // Day3（07-13）に日記、Day8（07-18）に画像。Day9 以降は記録なし。
+    saveJournal(db, id, '2026-07-13', 'Day3 の日記', jst(2026, 7, 13, 12, 0));
+    addJournalImage(db, id, '2026-07-18', { dataUrl: dataUrl(), caption: '前髪・正面' }, jst(2026, 7, 18, 12, 0));
+
+    const rep = getGoalReport(db, id, NOW_DAY12);
+    expect(rep.goal.afterDayNumber).toBe(8); // 画像のある Day8 が最新の記録。
+  });
+
+  it('7.3 完走後の After は最終日（Day30）', () => {
+    const id = seedRunningGoal();
+    expect(getGoalReport(db, id, NOW_COMPLETED).goal.afterDayNumber).toBe(30);
+  });
+
+  it('7.3 最終日写真の CTA は完走後のみ（進行中は出さない）', () => {
+    const id = seedRunningGoal();
+    expect(getGoalReport(db, id, NOW_DAY12).goal.showFinalPhotoCta).toBe(false);
+    expect(getGoalReport(db, id, NOW_COMPLETED).goal.showFinalPhotoCta).toBe(true);
+  });
+
+  it('7.5 記録が1つも無い進行中でも壊れない（部分データ）', () => {
+    seedTomorrowRule();
+    const g = createGoal(db, { name: 'A', practices: ['total_work'], start: 'tomorrow' }, NOW_TODAY);
+    // 評価行・日記・画像・Plan がすべて無い Day1 時点。
+    const rep = getGoalReport(db, g.id, jst(2026, 7, 11, 12, 0));
+    expect(rep.goal.achievedDays).toBe(0);
+    expect(rep.goal.dayNumber).toBe(1);
+    expect(rep.goal.afterDayNumber).toBe(1); // 記録が無ければ現在の Day に落ちる。
+    expect(rep.days).toHaveLength(30);
+    expect(rep.reportImages).toEqual([]);
+    expect(rep.chronicle.plans).toEqual([]);
+    expect(rep.practices[0]!.cells.filter((c) => c.future)).toHaveLength(29);
+  });
+
+  it('7.5 時間型実践が0個でも壊れない（②が描けない構成）', () => {
+    seedTomorrowRule();
+    const g = createGoal(db, { name: 'A', practices: ['planning:reflection_done'], start: 'tomorrow' }, NOW_TODAY);
+    const rep = getGoalReport(db, g.id, NOW_DAY12);
+    expect(rep.hasTimeType).toBe(false);
+    expect(rep.practices).toHaveLength(1);
+  });
+
+  it('7.4 ⑤沿革がレポートに含まれる（日記は含まない）', () => {
+    const id = seedRunningGoal();
+    saveJournal(db, id, '2026-07-13', '日記の本文はここに', jst(2026, 7, 13, 12, 0));
+    const plan = createPlan(db, id, { body: 'シャンプーを変える' }, jst(2026, 7, 13, 12, 0));
+    const check = createCheck(
+      db,
+      plan.id,
+      { kind: 'question', questionText: '使用感は？', schedule: 'single', startInDays: 1 },
+      jst(2026, 7, 13, 12, 0),
+    );
+    answerQuestion(db, check.id, '2026-07-14', { answerText: '泡立ちは良い' }, jst(2026, 7, 14, 12, 0));
+
+    const rep = getGoalReport(db, id, NOW_DAY12);
+    expect(rep.chronicle.goalId).toBe(id);
+    expect(rep.chronicle.plans).toHaveLength(1);
+    expect(rep.chronicle.plans[0]!.body).toBe('シャンプーを変える');
+    expect(rep.chronicle.plans[0]!.checks[0]!.results[0]!.answerText).toBe('泡立ちは良い');
+    // ④日記リーダーには日記が載るが、⑤沿革には載らない。
+    expect(JSON.stringify(rep.chronicle)).not.toContain('日記の本文はここに');
+    expect(rep.days[2]!.text).toBe('日記の本文はここに');
+  });
+
+  it('7.4 写真Check の提出画像は③の Before/After へ流入する（先指定キャプションでグループ化）', () => {
+    const id = seedRunningGoal();
+    const plan = createPlan(db, id, { body: 'シャンプーを変える' }, jst(2026, 7, 13, 12, 0));
+    const check = createCheck(
+      db,
+      plan.id,
+      { kind: 'photo', caption: '前髪・正面', schedule: 'range', startInDays: 1, spanDays: 3 },
+      jst(2026, 7, 13, 12, 0),
+    );
+    submitPhoto(db, check.id, '2026-07-14', { dataUrl: dataUrl() }, jst(2026, 7, 14, 12, 0));
+    submitPhoto(db, check.id, '2026-07-16', { dataUrl: dataUrl() }, jst(2026, 7, 16, 12, 0));
+
+    const imgs = getGoalReport(db, id, NOW_DAY12).reportImages.filter((i) => i.caption === '前髪・正面');
+    expect(imgs.map((i) => i.dayNumber)).toEqual([4, 6]); // Day4（Before）→ Day6（After）の時系列。
   });
 });

@@ -9,9 +9,15 @@ import { h, clear, fmtDur, fmtHM, colorHex, copyText, toast, emptyState } from '
 import { targetLabel, planningSignalLabel } from './targets.js';
 import { renderRuleEditing } from './rules.js';
 import { isDemo } from './demo.js';
+import { promptReason, shortDay } from './plan-check.js';
 
 let charts = [];
 let timer = null;
+/**
+ * ゲート領域の再描画関数（show() が設定）。Check の回答・取り下げ後に条件行から呼び、
+ * 解錠状態（＝パスワードの出現）まで即座に反映させる。タブ非表示中は no-op。
+ */
+let refreshGate = () => undefined;
 
 function destroyCharts() {
   for (const c of charts) {
@@ -23,6 +29,7 @@ function destroyCharts() {
 export function hide() {
   destroyCharts();
   if (timer) { clearInterval(timer); timer = null; }
+  refreshGate = () => undefined;
 }
 
 export async function show(root) {
@@ -45,7 +52,7 @@ export async function show(root) {
   await renderOverview(overviewRegion).catch((e) => toast(`概況の読み込み失敗: ${e.message}`, 'err'));
 
   // ゲート領域は初回 + 30秒毎。モーダルが開いていればスキップ(未保存入力を守る)。
-  const refreshGate = () => {
+  refreshGate = () => {
     if (document.getElementById('modal-root').classList.contains('open')) return undefined;
     return renderGate(gateRegion).catch((e) => toast(`更新失敗: ${e.message}`, 'err'));
   };
@@ -144,6 +151,10 @@ async function renderGate(region) {
 function condRow(c, planning, date) {
   const met = !!c.met;
 
+  // 目標の Check（合成条件）は、その場で答える／やめる導線を行内に持つ（spec: goal-check-gate）。
+  // ゲートで足止めされている場所で解決できるようにするため、別タブへ飛ばさない。
+  if (c.target === 'CHECK') return checkCondRow(c, date);
+
   // MANUAL_CHECK は行内チェックボックスでトグル(旧 checks.js を吸収)。
   if (c.target === 'MANUAL_CHECK') {
     const box = h('input', { type: 'checkbox' });
@@ -213,6 +224,106 @@ function condRow(c, planning, date) {
     main,
     h('span', { class: `mark ${met ? 'yes' : 'no'}`, text: met ? '✓' : '✗' }),
   );
+}
+
+/**
+ * 目標 Check の不足条件行（spec: goal-check-gate「今日タブから直接 Check に答える」）。
+ *   📷 写真 … 貼付／ファイル選択で提出。**キャプションは先指定なので聞かない**。
+ *   💬 質問 … 質問文を提示し、答え（非空）を書いて保存。
+ * どちらの行にも「やめる」（理由必須）を置く＝唯一の脱出弁をその場に用意する。
+ * 由来の Plan を副題に出し、「何のための答え合わせか」を思い出せるようにする。
+ */
+function checkCondRow(c, date) {
+  const met = !!c.met;
+  const icon = c.checkKind === 'photo' ? '📷' : '💬';
+  const row = h('div', { class: `cond cond-check ${met ? 'met' : ''}` });
+
+  // 状態の一言。範囲Check は「7/18〜7/24 の1日目」と、その日が期間の何日目かまで出す
+  // （各日が独立して要求される仕様なので、「何日目の分か」が分からないと意味が取れない）。
+  const status = met ? (c.checkKind === 'photo' ? '提出済み' : '回答済み') : c.checkKind === 'photo' ? '写真がまだ' : '未回答';
+  let when = '';
+  if (c.checkSchedule === 'range' && c.rangeDayNumber) {
+    const end = addDaysLocal(c.startDayKey, (c.spanDays || 1) - 1);
+    when = `（${shortDay(c.startDayKey)}〜${shortDay(end)} の${c.rangeDayNumber}日目）`;
+  }
+
+  const main = h('div', { class: 'cond-main' },
+    h('div', { class: 'cond-title', text: `${icon} ${c.label || 'Check'}` }),
+    h('div', { class: 'cond-sub', text: `${status}${when}` }),
+    c.planBody ? h('div', { class: 'cond-sub cond-plan', text: `└ Plan: ${c.planBody}` }) : null,
+  );
+  row.appendChild(main);
+  row.appendChild(h('span', { class: `mark ${met ? 'yes' : 'no'}`, text: met ? '✓' : '✗' }));
+  if (met) return row; // 済んだ行に操作は出さない。
+
+  const actionHost = h('div', { class: 'cond-actions' });
+  main.appendChild(actionHost);
+  const fail = (err, fallback) => toast((err.data && err.data.error) || fallback, 'err');
+  const done = (msg) => { toast(msg, 'ok'); refreshGate(); };
+
+  if (c.checkKind === 'photo') {
+    // 写真: ファイル選択／貼り付け。キャプション入力欄は出さない（先指定済み）。
+    const fileInput = h('input', { type: 'file', accept: 'image/*', class: 'cond-file' });
+    const label = h('label', { class: 'btn btn-ghost cond-btn' }, '写真を出す', fileInput);
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = '';
+      if (!file) return;
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        await api.submitCheckPhoto(c.checkId, { dataUrl, date });
+        done(`「${c.label}」を提出しました`);
+      } catch (err) {
+        fail(err, '写真を提出できませんでした');
+      }
+    });
+    actionHost.appendChild(label);
+    actionHost.appendChild(h('span', { class: 'cond-hint', text: `キャプションは「${c.label}」で保存されます` }));
+  } else {
+    // 質問: 質問文はタイトルに出ているので、答えだけを書く。空回答はサーバーが 400 で弾く。
+    const input = h('input', { type: 'text', class: 'cond-answer', placeholder: '答えを書く' });
+    const send = h('button', { type: 'button', class: 'btn btn-ghost cond-btn', text: '答える' });
+    const submit = async () => {
+      if (!input.value.trim()) { toast('答えを入力してください', 'err'); return; }
+      send.disabled = true;
+      try {
+        await api.answerCheck(c.checkId, input.value.trim(), date);
+        done('答えを記録しました');
+      } catch (err) {
+        fail(err, '答えを保存できませんでした');
+        send.disabled = false;
+      }
+    };
+    send.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    actionHost.appendChild(input);
+    actionHost.appendChild(send);
+  }
+
+  // やめる（理由必須）。取り下げた事実は沿革に残る。
+  const quit = h('button', { type: 'button', class: 'btn btn-ghost cond-btn', text: 'やめる' });
+  quit.addEventListener('click', async () => {
+    const reason = promptReason(`「${c.label}」をやめる理由（必須）`);
+    if (!reason) return;
+    try {
+      await api.cancelCheck(c.checkId, reason);
+      done('取り下げました（沿革には残ります）');
+    } catch (err) {
+      fail(err, '取り下げできませんでした');
+    }
+  });
+  actionHost.appendChild(quit);
+  return row;
+}
+
+/** File → data URL（写真提出用）。 */
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result));
+    fr.onerror = () => reject(new Error('画像を読み込めませんでした'));
+    fr.readAsDataURL(file);
+  });
 }
 
 function revealCard(date) {

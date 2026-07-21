@@ -70,6 +70,15 @@ const KEY_KIN = 'manual:筋トレ';
 // いずれも既存の谷（Day 11,12,13,15,16,20）に含まれる日のみ選ぶ＝達成日数 24/30 を変えない。
 const KIN_MISS_DAYS = new Set<number>([11, 12, 16]);
 
+// --- ⑤沿革のサンプル: Plan（賭け）と Check（答え合わせ）（spec: goal-plan-check / goal-chronicle）--
+//
+// 既存の谷（Day 11,12,13,20）へ寄せて「崩れた → 賭けを立てた → 答え合わせした」の筋が読めるようにする。
+// Plan/Check は goal_practice ではないので ①達成カレンダー・達成日数 24/30 には一切影響しない
+// （per_condition_results は上で焼き込み済みで、Check の合流はデモの評価行を書き換えない）。
+//
+// 📷×単発・📷×範囲・💬×単発・取り下げ済み を1つずつ揃える。
+const D = (n: number): string => addDaysKey(DEMO_START_DAY, n - 1); // Day 番号 → day_key。
+
 /**
  * 30日ぶんの筋書き（達成 24/30・中盤に谷→後半持ち直し）。
  * workMin = その日の総作業分、refl = 振り返り記入、tmr = 明日タスク登録。
@@ -194,6 +203,95 @@ function solidPng(rgb: [number, number, number], w = 480, h = 360): Buffer {
 const IMG_BEFORE = solidPng([138, 148, 166]); // 灰（初日）
 const IMG_MID = solidPng([224, 165, 58]); // 琥珀（中間）
 const IMG_AFTER = solidPng([76, 175, 106]); // 緑（最終日）
+const IMG_SKY = solidPng([132, 178, 214]); // 空色（範囲Check の「その日の空」）
+const IMG_DESK = solidPng([196, 172, 140]); // 木目（単発Check の「朝の机」）
+
+/**
+ * ⑤沿革のサンプル（Plan / Check / 回答 / 取り下げ）を焼き込む。
+ * すべて固定 day_key・固定タイムスタンプ（`Date.now()` 非依存）。
+ *
+ * 筋書き（既存の谷に寄せる）:
+ *   Day11 谷で崩れる → Day11 に「朝へ前倒し」の賭け（📷×単発・💬×単発 で答え合わせ）
+ *   Day13 閾値を 3h へ下げた判断を Plan として残す（📷×範囲 で7日中5日の記録）
+ *   Day20 取りこぼしから「寝る前のスマホ」の賭け → 続かず**理由つきで取り下げ**（沿革には残る）
+ */
+function seedPlansAndChecks(db: DB): void {
+  const insPlan = db.prepare(
+    `INSERT INTO goal_plan (id, goal_id, day_key, body, status, withdraw_reason, created_at)
+     VALUES (@id, @goal, @day, @body, @status, @reason, @now)`,
+  );
+  const insCheck = db.prepare(
+    `INSERT INTO goal_check
+       (id, plan_id, kind, caption, question_text, schedule, start_day_key, span_days, place_note, time_note, status, cancel_reason, created_at)
+     VALUES (@id, @plan, @kind, @caption, @question, @schedule, @start, @span, @place, @time, @status, @cancel, @now)`,
+  );
+  const insResult = db.prepare(
+    `INSERT INTO goal_check_result (check_id, day_key, image_id, answer_text, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  const insImg = db.prepare(
+    `INSERT INTO goal_journal_image (goal_id, day_key, caption, mime, bytes, width, height, sort_order, created_at)
+     VALUES (?, ?, ?, 'image/png', ?, 480, 360, ?, ?)`,
+  );
+  /** 写真Check の提出＝先指定キャプションで画像を保存し、その image_id を回答に持つ（design D5）。 */
+  const submitPhoto = (checkId: number, dayKey: string, caption: string, bytes: Buffer, sort: number): void => {
+    const imageId = insImg.run(DEMO_GOAL_ID, dayKey, caption, bytes, sort, SEED_TS).lastInsertRowid as number;
+    insResult.run(checkId, dayKey, imageId, null, SEED_TS);
+  };
+
+  // --- Plan A（Day11 の谷で立てた賭け）------------------------------------
+  // 文面は社史調の言い切り（飾らない）。Plan→Check が素直につながる筋にする。
+  insPlan.run({
+    id: 1, goal: DEMO_GOAL_ID, day: D(11),
+    body: '作業を朝いちに前倒しする。夜に回すと崩れるため。',
+    status: 'active', reason: null, now: SEED_TS,
+  });
+  // A1: 📷×単発 — Day14 に「朝の机」を1枚。提出済み。
+  insCheck.run({
+    id: 1, plan: 1, kind: 'photo', caption: '朝の机', question: '',
+    schedule: 'single', start: D(14), span: null, place: '自室', time: '朝',
+    status: 'active', cancel: null, now: SEED_TS,
+  });
+  submitPhoto(1, D(14), '朝の机', IMG_DESK, 0);
+  // A2: 💬×単発 — Day15 に一度だけ答える。
+  insCheck.run({
+    id: 2, plan: 1, kind: 'question', caption: '', question: '前倒しで集中は変わったか',
+    schedule: 'single', start: D(15), span: null, place: null, time: null,
+    status: 'active', cancel: null, now: SEED_TS,
+  });
+  insResult.run(2, D(15), null, '朝は入りが速い。前夜に眠れないと崩れる。', SEED_TS);
+
+  // --- Plan B（Day13 の閾値引き下げの判断そのものを残す）-------------------
+  insPlan.run({
+    id: 2, goal: DEMO_GOAL_ID, day: D(13),
+    body: '総作業の基準を4時間から3時間へ下げる。ゼロの日を作らないため。',
+    status: 'active', reason: null, now: SEED_TS,
+  });
+  // B1: 📷×範囲 — Day14〜Day20 の7日間、毎日「その日の空」を撮る。7日中5日提出（Day16・Day19 はサボり）。
+  // サボった日は繰り越さず、期間を過ぎたら消える＝沿革には「7日中5日提出」と事実どおり残る。
+  insCheck.run({
+    id: 3, plan: 2, kind: 'photo', caption: 'その日の空', question: '',
+    schedule: 'range', start: D(14), span: 7, place: null, time: '朝',
+    status: 'active', cancel: null, now: SEED_TS,
+  });
+  for (const [i, day] of [14, 15, 17, 18, 20].entries()) submitPhoto(3, D(day), 'その日の空', IMG_SKY, i);
+
+  // --- Plan C（Day20 の取りこぼしから立て、続かず取り下げた）---------------
+  // 取り下げた事実と理由は沿革に残す＝「逃げた事実そのものが歴史に残る」（design D9）。
+  insPlan.run({
+    id: 3, goal: DEMO_GOAL_ID, day: D(20),
+    body: '就寝前のスマホをやめる。',
+    status: 'withdrawn', reason: '続かず。意志ではなく置き場所から変える。', now: SEED_TS,
+  });
+  // C1: 💬×範囲 — Day21〜Day25 の5日間。2日答えたところで Plan ごと取り下げ（未達なので cancelled）。
+  insCheck.run({
+    id: 4, plan: 3, kind: 'question', caption: '', question: 'スマホを見ずに寝られたか',
+    schedule: 'range', start: D(21), span: 5, place: null, time: '夜',
+    status: 'cancelled', cancel: '続かず。意志ではなく置き場所から変える。', now: SEED_TS,
+  });
+  insResult.run(4, D(21), null, '見ずに寝られた。朝の目覚めは軽い。', SEED_TS);
+  insResult.run(4, D(22), null, 'ベッドで30分見てしまった。手の届く場所にあるのが因。', SEED_TS);
+}
 
 /** デモ用サンプルを空の（マイグレーション済み）DB へ seed する。 */
 export function seedDemo(db: DB): void {
@@ -293,6 +391,8 @@ export function seedDemo(db: DB): void {
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '作業スペース', IMG_AFTER, 0, SEED_TS);
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '植物', IMG_AFTER, 1, SEED_TS);
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '記念', IMG_AFTER, 2, SEED_TS);
+
+    seedPlansAndChecks(db);
 
     // --- 2つ目のデモ目標: 手動チェックのみ（非時間型）を採用した完走目標 -----------
     // 時間型実践が無いため、完走レポートは①達成カレンダーのみ・②時間の推移は出ない。
