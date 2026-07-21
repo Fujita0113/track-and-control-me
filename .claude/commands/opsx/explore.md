@@ -136,6 +136,18 @@ If the user mentions a change or you detect one is relevant:
 
 ---
 
+## Heavy changes: capture a user-flow walkthrough
+
+For **heavy or cross-cutting changes** — many screens touched, subtle UX, a long or interdependent surface — the four standard artifacts (proposal/specs/design/tasks) often aren't enough to pin down *exactly* what the finished experience should feel like. In those cases, offer to capture a **`ユーザーフロー.md`** companion in the change directory:
+
+- A **screen-by-screen walkthrough** of the user actually walking the flow, grounded in a concrete worked example (a real 題材), not abstract requirements.
+- It becomes the change's **single source of acceptance criteria** — proposal.md and design.md reference it ("詳細は `ユーザーフロー.md` を唯一の受け入れ基準とする") rather than restating the flow.
+- It's a **companion file**, not one of the four OpenSpec artifacts, and not schema-validated. Precedent: the `long-term-goal-loop` (issue #54) change.
+
+When to offer it: reach for it on large/subtle changes; skip it for small, mechanical, or single-surface ones. As always in explore — **offer, the user decides, don't auto-create.**
+
+---
+
 ## What You Don't Have To Do
 
 - Follow a script
