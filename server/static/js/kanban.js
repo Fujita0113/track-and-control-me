@@ -8,6 +8,9 @@
 import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, addDays, localDateKey, toast, colorHex } from './util.js';
+import { createMarkdownEditor } from './md-editor.js';
+
+const NOTES_PLACEHOLDER = 'クリックして入力…   # 見出し ／ [ ] チェック ／ - リスト';
 
 const COLS = [
   { key: 'HOLD', label: '保留', kind: 'plain' },
@@ -79,7 +82,6 @@ export function computeDue(fromCol, toCol, tomorrowOn, workday) {
 // --- 画面状態 -------------------------------------------------------------
 let rootEl = null;
 let S = null;
-let blurTimer = null;
 const saveTimers = new Map(); // `${id}:${field}` → { timer, run }
 
 export async function show(root) {
@@ -88,8 +90,8 @@ export async function show(root) {
   S = {
     tasks: [],
     detailId: null,
-    editLine: -1,
-    pendingCaret: null,
+    notesEditor: null,
+    focusNotes: false,
     composingCol: null,
     composerText: '',
     categorizePick: null, // { id, col } カテゴリ付けモードで作成直後の選択対象
@@ -108,7 +110,6 @@ export async function show(root) {
 
 export function hide() {
   flushSaves();
-  if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
   document.body.classList.remove('kb-page');
 }
 
@@ -211,7 +212,10 @@ function afterRender() {
   // 詳細パネルのタイトルは DOM 挿入後（scrollHeight 確定後）に初期高さを確定する。
   const detTitle = rootEl.querySelector('textarea.kb-detail-title');
   if (detTitle) autosize(detTitle);
-  focusEditorLine();
+  if (S.focusNotes) {
+    S.focusNotes = false;
+    if (S.notesEditor) S.notesEditor.focus();
+  }
 }
 
 // --- SVG ヘルパ -------------------------------------------------------------
@@ -641,7 +645,7 @@ function completeTask(t, x, y) {
   t.status = 'DONE';
   t.done_at = Date.now();
   S.completingId = t.id;
-  if (S.detailId === t.id) { S.detailId = null; S.editLine = -1; S.dueCalOpen = false; }
+  if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; }
   renderAll();
   api.updateTask(t.id, { status: 'DONE' }).catch((err) => toast(`保存に失敗: ${err.message}`, 'err'));
   setTimeout(() => {
@@ -677,7 +681,7 @@ async function restoreTask(t) {
   if (normStatus(t.status) !== 'DONE') return;
   const prevStatus = t.status;
   const prevDoneAt = t.done_at;
-  if (S.detailId === t.id) { S.detailId = null; S.editLine = -1; S.dueCalOpen = false; }
+  if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; }
   // 楽観更新: 当該タスクを TODO 列末尾へ移し、派生表示（件数/達成率/ドーナツ/ログ/カード）を即整合。
   t.status = 'TODO';
   t.done_at = null;
@@ -734,8 +738,7 @@ async function commitComposer(keepOpen, openDet) {
     if (openDet) {
       S.composingCol = null;
       S.detailId = t.id;
-      S.editLine = 0;
-      S.pendingCaret = 0;
+      S.focusNotes = true;
     } else if (keepOpen && categorizeMode()) {
       // カテゴリ付けモード（Enter 作成時）: 次入力の位置に作成タスクのカテゴリ選択を出す（design D5）。
       try { S.groups = await api.getGroups(); } catch { S.groups = S.groups || []; }
@@ -958,9 +961,7 @@ function logEl() {
 function openDetail(t) {
   flushSaves();
   S.detailId = t.id;
-  const empty = !(t.notes && t.notes.trim());
-  S.editLine = empty ? 0 : -1;
-  S.pendingCaret = empty ? 0 : null;
+  S.focusNotes = !(t.notes && t.notes.trim());
   S.dueCalOpen = false;
   renderAll();
 }
@@ -968,7 +969,6 @@ function openDetail(t) {
 function closeDetail() {
   flushSaves();
   S.detailId = null;
-  S.editLine = -1;
   S.dueCalOpen = false;
   renderAll();
 }
@@ -981,6 +981,7 @@ function autosize(el) {
 
 function detailEl(t) {
   const panel = h('div', { class: 'kb-detail' });
+  let notesEditor = null;
 
   panel.appendChild(h('div', { class: 'kb-detail-close-row' },
     h('button', { class: 'kb-detail-close', type: 'button', title: '閉じる', onclick: closeDetail }, iconClose())));
@@ -1003,7 +1004,7 @@ function detailEl(t) {
       e.preventDefault();
       flushSaves();
       titleInp.blur();
-      enterEdit(t, 0, 0);
+      if (notesEditor) notesEditor.focus();
     }
   });
   panel.appendChild(h('div', { class: 'kb-detail-title-wrap' }, titleInp));
@@ -1026,9 +1027,22 @@ function detailEl(t) {
   panel.appendChild(h('div', { class: 'kb-hr' }));
 
   const body = h('div', { class: 'kb-detail-body' });
-  const ed = h('div', { class: 'kb-ed', id: 'kb-ed-root' });
-  buildEditorInto(ed, t);
-  body.appendChild(ed);
+  const ph = h('div', { class: 'rf-ph', text: NOTES_PLACEHOLDER });
+  let initializingNotes = true;
+  notesEditor = createMarkdownEditor({
+    initial: t.notes || '',
+    placeholder: NOTES_PLACEHOLDER,
+    onChange: (raw) => {
+      ph.style.display = raw.trim() === '' ? 'block' : 'none';
+      if (initializingNotes) return;
+      writeNotes(t, raw);
+    },
+    // Ctrl/Cmd+Enter: 詳細では確定保存のみ行い、パネルは開いたまま（振り返りと同様、閉じない）。
+    onSubmit: () => flushSaves(),
+  });
+  initializingNotes = false;
+  S.notesEditor = notesEditor;
+  body.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, notesEditor.el));
   panel.appendChild(body);
 
   panel.appendChild(h('div', { class: 'kb-detail-foot' },
@@ -1039,7 +1053,7 @@ function detailEl(t) {
         try {
           await api.deleteTask(t.id);
           S.tasks = S.tasks.filter((x) => x.id !== t.id);
-          S.detailId = null; S.editLine = -1; S.dueCalOpen = false;
+          S.detailId = null; S.dueCalOpen = false;
           toast('削除しました', 'ok');
         } catch (err) { toast(`削除に失敗: ${err.message}`, 'err'); }
         renderAll();
@@ -1157,339 +1171,10 @@ function calendarEl(t) {
   return cal;
 }
 
-// --- ライブ Markdown エディタ(行ブロック) ---------------------------------------
-// 参照の parseBlock/blockToLine/detectShortcut/renderEditorBlock を vanilla へ移植。
-function getLines(t) {
-  const notes = t.notes || '';
-  return notes.length ? notes.split('\n') : [''];
-}
+// --- ノート保存 -------------------------------------------------------------
 function writeNotes(t, v) {
   t.notes = v;
   scheduleSave(t, 'notes');
-}
-
-function parseBlock(line) {
-  let m;
-  if ((m = line.match(/^(#{1,3})\s+(.*)$/))) return { type: `h${m[1].length}`, content: m[2] };
-  if ((m = line.match(/^[-*]\s+\[([ xX])\]\s?(.*)$/))) return { type: 'todo', checked: m[1].toLowerCase() === 'x', content: m[2] };
-  if ((m = line.match(/^[-*]\s+(.*)$/))) return { type: 'bullet', content: m[1] };
-  if ((m = line.match(/^(\d+)\.\s+(.*)$/))) return { type: 'ordered', number: parseInt(m[1], 10), content: m[2] };
-  if ((m = line.match(/^>\s+(.*)$/))) return { type: 'quote', content: m[1] };
-  return { type: 'p', content: line };
-}
-function blockToLine(b) {
-  switch (b.type) {
-    case 'h1': return `# ${b.content}`;
-    case 'h2': return `## ${b.content}`;
-    case 'h3': return `### ${b.content}`;
-    case 'todo': return `- [${b.checked ? 'x' : ' '}] ${b.content}`;
-    case 'bullet': return `- ${b.content}`;
-    case 'ordered': return `${b.number || 1}. ${b.content}`;
-    case 'quote': return `> ${b.content}`;
-    default: return b.content;
-  }
-}
-function detectShortcut(v) {
-  let m;
-  if ((m = v.match(/^[-*] \[[ ]?\] (.*)$/))) return { type: 'todo', checked: false, content: m[1] };
-  if ((m = v.match(/^[-*] \[[xX]\] (.*)$/))) return { type: 'todo', checked: true, content: m[1] };
-  if ((m = v.match(/^\[[ ]?\] (.*)$/))) return { type: 'todo', checked: false, content: m[1] };
-  if ((m = v.match(/^\[[xX]\] (.*)$/))) return { type: 'todo', checked: true, content: m[1] };
-  if ((m = v.match(/^(#{1,3}) (.*)$/))) return { type: `h${m[1].length}`, content: m[2] };
-  if ((m = v.match(/^[-*] (.*)$/))) return { type: 'bullet', content: m[1] };
-  if ((m = v.match(/^(\d+)\. (.*)$/))) return { type: 'ordered', content: m[2] };
-  if ((m = v.match(/^> (.*)$/))) return { type: 'quote', content: m[1] };
-  return null;
-}
-function orderedNumber(lines, i) {
-  let n = 1;
-  for (let j = i - 1; j >= 0; j--) {
-    if (parseBlock(lines[j]).type === 'ordered') n++;
-    else break;
-  }
-  return n;
-}
-function contentClass(b) {
-  switch (b.type) {
-    case 'h1': return 'kb-ed-h1';
-    case 'h2': return 'kb-ed-h2';
-    case 'h3': return 'kb-ed-h3';
-    case 'todo': return `kb-ed-todo${b.checked ? ' checked' : ''}`;
-    case 'quote': return 'kb-ed-qt';
-    case 'bullet': case 'ordered': return 'kb-ed-li-txt';
-    default: return 'kb-ed-p';
-  }
-}
-function editorPlaceholder(b, only) {
-  if (b.content !== '') return '';
-  if (only && b.type === 'p') return 'クリックして入力…   # 見出し ／ [ ] チェック ／ - リスト';
-  const map = { todo: 'To-do', bullet: 'リスト項目', ordered: 'リスト項目', h1: '見出し1', h2: '見出し2', h3: '見出し3', quote: '引用', p: 'テキスト' };
-  return map[b.type] || '';
-}
-
-// インライン Markdown(コード・太字・斜体・リンク) → DOM ノード列。
-// CSP のため innerHTML は使わず要素を組み立てる。
-function mdInlineNodes(s) {
-  const out = [];
-  const re = /(`([^`]+)`)|(\*\*([^*]+)\*\*)|(\*([^*\n]+)\*)|(\[([^\]]+)\]\(([^)\s]+)\))/g;
-  let last = 0;
-  let m;
-  while ((m = re.exec(s))) {
-    if (m.index > last) out.push(document.createTextNode(s.slice(last, m.index)));
-    if (m[1]) out.push(h('code', { class: 'kb-md-code', text: m[2] }));
-    else if (m[3]) out.push(h('strong', { text: m[4] }));
-    else if (m[5]) out.push(h('em', { text: m[6] }));
-    else if (m[7]) out.push(h('a', { class: 'kb-md-link', href: m[9], target: '_blank', rel: 'noreferrer', text: m[8] }));
-    last = re.lastIndex;
-  }
-  if (last < s.length) out.push(document.createTextNode(s.slice(last)));
-  return out;
-}
-
-function buildEditorInto(wrap, t) {
-  clear(wrap);
-  const lines = getLines(t);
-  if (lines.length === 1 && lines[0] === '' && S.editLine !== 0) {
-    wrap.appendChild(h('div', {
-      class: 'kb-ed-empty',
-      text: 'クリックして入力…   # 見出し ／ [ ] チェック ／ - リスト',
-      onmousedown: (e) => { e.preventDefault(); enterEdit(t, 0, 0); },
-    }));
-    return;
-  }
-  lines.forEach((line, i) => wrap.appendChild(editorBlockEl(t, i, line, i === S.editLine, lines)));
-}
-
-function renderEditor(t) {
-  const wrap = document.getElementById('kb-ed-root');
-  if (!wrap) return;
-  buildEditorInto(wrap, t);
-  focusEditorLine();
-}
-
-function focusEditorLine() {
-  const ta = rootEl ? rootEl.querySelector('.kb-ed-input') : null;
-  if (!ta) return;
-  ta.style.height = 'auto';
-  ta.style.height = `${ta.scrollHeight}px`;
-  if (S.pendingCaret != null) {
-    const pos = Math.max(0, Math.min(S.pendingCaret, ta.value.length));
-    S.pendingCaret = null;
-    try { ta.focus(); ta.setSelectionRange(pos, pos); } catch { /* noop */ }
-  }
-}
-
-function editorBlockEl(t, i, line, active, lines) {
-  const b = parseBlock(line);
-  const cls = contentClass(b);
-  let inner;
-  if (active) {
-    const ta = h('textarea', {
-      class: `kb-ed-input ${cls}`, rows: '1',
-      placeholder: editorPlaceholder(b, lines.length === 1),
-    });
-    ta.value = b.content;
-    ta.addEventListener('input', () => onContentChange(t, i, ta));
-    ta.addEventListener('keydown', (e) => onBlockKey(t, i, e));
-    ta.addEventListener('blur', () => onLineBlur(t));
-    inner = ta;
-  } else if (b.content === '') {
-    inner = h('span', { class: `kb-ed-blank ${cls}`, text: ' ' });
-  } else {
-    inner = h('span', { class: `kb-ed-span ${cls}` }, ...mdInlineNodes(b.content));
-  }
-  const holder = h('div', { class: 'kb-ed-holder', dataset: { content: '1' } }, inner);
-  const md = active ? null : (e) => startEdit(e, t, i);
-
-  if (b.type.charAt(0) === 'h') {
-    return h('div', { class: 'kb-ed-blk h', onmousedown: md }, holder);
-  }
-  if (b.type === 'todo') {
-    const box = h('span', {
-      class: `kb-ed-box${b.checked ? ' checked' : ''}`,
-      onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); toggleCheckbox(t, i); },
-    }, b.checked ? iconCheckSmall('10', '#fff', '3') : null);
-    return h('div', { class: 'kb-ed-blk flex', onmousedown: md }, box, holder);
-  }
-  if (b.type === 'bullet') {
-    return h('div', { class: 'kb-ed-blk flex li', onmousedown: md },
-      h('span', { class: 'kb-ed-marker', text: '•' }), holder);
-  }
-  if (b.type === 'ordered') {
-    return h('div', { class: 'kb-ed-blk flex li', onmousedown: md },
-      h('span', { class: 'kb-ed-marker num', text: `${orderedNumber(lines, i)}.` }), holder);
-  }
-  if (b.type === 'quote') {
-    return h('div', { class: 'kb-ed-blk quote', onmousedown: md }, holder);
-  }
-  return h('div', { class: 'kb-ed-blk', onmousedown: md }, holder);
-}
-
-function enterEdit(t, i, caret) {
-  if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; }
-  const len = parseBlock(getLines(t)[i]).content.length;
-  S.pendingCaret = caret == null ? len : Math.max(0, Math.min(caret, len));
-  S.editLine = i;
-  renderEditor(t);
-}
-
-function startEdit(e, t, i) {
-  if (e && e.preventDefault) e.preventDefault();
-  const len = parseBlock(getLines(t)[i]).content.length;
-  enterEdit(t, i, getClickOffset(e, len));
-}
-
-function getClickOffset(e, contentLen) {
-  try {
-    const wrap = (e.currentTarget && e.currentTarget.querySelector('[data-content]')) || e.currentTarget;
-    let node = null;
-    let no = 0;
-    if (document.caretPositionFromPoint) {
-      const cp = document.caretPositionFromPoint(e.clientX, e.clientY);
-      if (cp) { node = cp.offsetNode; no = cp.offset; }
-    } else if (document.caretRangeFromPoint) {
-      const r = document.caretRangeFromPoint(e.clientX, e.clientY);
-      if (r) { node = r.startContainer; no = r.startOffset; }
-    }
-    if (node && wrap && wrap.contains(node)) return Math.min(textOffsetWithin(wrap, node, no), contentLen);
-  } catch { /* noop */ }
-  return contentLen;
-}
-
-function textOffsetWithin(container, node, nodeOffset) {
-  let total = 0;
-  let found = false;
-  const walk = (n) => {
-    if (found) return;
-    if (n.nodeType === 3) {
-      if (n === node) { total += nodeOffset; found = true; return; }
-      total += n.textContent.length;
-    } else {
-      if (n === node) {
-        for (let k = 0; k < nodeOffset && k < n.childNodes.length; k++) total += n.childNodes[k].textContent.length;
-        found = true;
-        return;
-      }
-      for (let c = 0; c < n.childNodes.length; c++) { walk(n.childNodes[c]); if (found) return; }
-    }
-  };
-  walk(container);
-  return total;
-}
-
-function onLineBlur(t) {
-  blurTimer = setTimeout(() => {
-    blurTimer = null;
-    // 構造編集(Enter 改行など)の再描画で編集テキストエリアが差し替わると、外れた旧
-    // テキストエリアの blur がこの遅延タイマーを仕掛ける。発火時点では focusEditorLine が
-    // 既に新テキストエリアへフォーカス済みのため、実フォーカスが別の .kb-ed-input なら
-    // 「単なる差し替え」とみなし編集を継続する。エディタ外へ真に出た時のみ終了(issue #16)。
-    const a = document.activeElement;
-    if (a && a.classList && a.classList.contains('kb-ed-input')) return;
-    S.editLine = -1;
-    renderEditor(t);
-  }, 130);
-}
-
-function onContentChange(t, i, ta) {
-  const val = ta.value;
-  const lines = getLines(t);
-  const block = parseBlock(lines[i]);
-  if (block.type === 'p') {
-    const conv = detectShortcut(val);
-    if (conv) {
-      lines[i] = blockToLine({ type: conv.type, content: conv.content, checked: conv.checked, number: 1 });
-      S.pendingCaret = 0;
-      writeNotes(t, lines.join('\n'));
-      renderEditor(t);
-      return;
-    }
-  }
-  lines[i] = blockToLine({ ...block, content: val });
-  writeNotes(t, lines.join('\n'));
-  ta.style.height = 'auto';
-  ta.style.height = `${ta.scrollHeight}px`;
-}
-
-function onBlockKey(t, i, e) {
-  if (e.isComposing || e.keyCode === 229) return;
-  const lines = getLines(t);
-  const block = parseBlock(lines[i]);
-  const content = block.content;
-  const caret = e.target.selectionStart;
-  const end = e.target.selectionEnd;
-  const cancelBlur = () => { if (blurTimer) { clearTimeout(blurTimer); blurTimer = null; } };
-  const listy = ['todo', 'bullet', 'ordered', 'quote'].includes(block.type);
-
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    cancelBlur();
-    if (listy && content === '') {
-      lines[i] = '';
-      S.pendingCaret = 0;
-      writeNotes(t, lines.join('\n'));
-      S.editLine = i;
-      renderEditor(t);
-      return;
-    }
-    const before = content.slice(0, caret);
-    const after = content.slice(caret);
-    lines[i] = blockToLine({ ...block, content: before });
-    const newType = block.type.charAt(0) === 'h' ? 'p' : block.type;
-    lines.splice(i + 1, 0, blockToLine({ type: newType, content: after, checked: false, number: 1 }));
-    S.pendingCaret = 0;
-    writeNotes(t, lines.join('\n'));
-    S.editLine = i + 1;
-    renderEditor(t);
-  } else if (e.key === 'Backspace' && caret === 0 && end === 0) {
-    if (block.type !== 'p') {
-      e.preventDefault();
-      cancelBlur();
-      lines[i] = content;
-      S.pendingCaret = 0;
-      writeNotes(t, lines.join('\n'));
-      S.editLine = i;
-      renderEditor(t);
-      return;
-    }
-    if (i > 0) {
-      e.preventDefault();
-      cancelBlur();
-      const prev = parseBlock(lines[i - 1]);
-      const pos = prev.content.length;
-      lines.splice(i - 1, 2, blockToLine({ ...prev, content: prev.content + content }));
-      S.pendingCaret = pos;
-      writeNotes(t, lines.join('\n'));
-      S.editLine = i - 1;
-      renderEditor(t);
-    }
-  } else if (e.key === 'ArrowUp' && caret === 0 && i > 0) {
-    e.preventDefault();
-    cancelBlur();
-    S.pendingCaret = parseBlock(lines[i - 1]).content.length;
-    S.editLine = i - 1;
-    renderEditor(t);
-  } else if (e.key === 'ArrowDown' && caret === content.length && i < lines.length - 1) {
-    e.preventDefault();
-    cancelBlur();
-    S.pendingCaret = parseBlock(lines[i + 1]).content.length;
-    S.editLine = i + 1;
-    renderEditor(t);
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    S.editLine = -1;
-    renderEditor(t);
-  }
-}
-
-function toggleCheckbox(t, i) {
-  const lines = getLines(t);
-  const b = parseBlock(lines[i]);
-  if (b.type !== 'todo') return;
-  b.checked = !b.checked;
-  lines[i] = blockToLine(b);
-  writeNotes(t, lines.join('\n'));
-  renderEditor(t);
 }
 
 // --- 祝福演出 -----------------------------------------------------------------

@@ -671,34 +671,20 @@ textarea.kb-detail-title:focus { outline: none; border: none; }
 .kb-cal-quick.plain { border: 1px solid #E8E7E3; background: #fff; color: #9B9A94; }
 .kb-cal-quick.plain:hover { background: #FAFAF8; }
 
-/* ライブ Markdown エディタ(行ブロック) */
-.kb-ed { min-height: 300px; }
-.kb-ed-empty { min-height: 300px; color: #B5B4AE; font-size: 14px; cursor: text; padding: 2px 0; line-height: 1.7; }
-.kb-ed-blk { margin: 5px 0; cursor: text; }
-.kb-ed-blk.h { margin: 14px 0 4px; }
-.kb-ed-blk.li { margin: 4px 0; }
-.kb-ed-blk.flex { display: flex; gap: 9px; align-items: flex-start; }
-.kb-ed-blk.quote { border-left: 3px solid #D8D7D1; padding: 2px 0 2px 12px; margin: 7px 0; }
-.kb-ed-holder { flex: 1; min-width: 0; }
-.kb-ed-h1 { font-size: 19px; font-weight: 700; line-height: 1.4; color: #37352F; letter-spacing: -0.01em; }
-.kb-ed-h2 { font-size: 16.5px; font-weight: 700; line-height: 1.4; color: #37352F; letter-spacing: -0.01em; }
-.kb-ed-h3 { font-size: 14.5px; font-weight: 700; line-height: 1.45; color: #37352F; }
-.kb-ed-p { font-size: 14px; line-height: 1.75; color: #37352F; }
-.kb-ed-todo { font-size: 14px; line-height: 1.6; color: #37352F; }
-.kb-ed-todo.checked { color: #9B9A94; text-decoration: line-through; }
-.kb-ed-qt { font-size: 14px; line-height: 1.6; color: #6B6A65; }
-.kb-ed-li-txt { font-size: 14px; line-height: 1.7; color: #37352F; }
-.kb-ed-span { word-break: break-word; }
-.kb-ed-blank { color: #C5C4BD; }
-textarea.kb-ed-input { display: block; width: 100%; min-height: 0; box-sizing: border-box; border: none; border-radius: 0; outline: none; resize: none; background: transparent; padding: 0; margin: 0; font-family: inherit; overflow: hidden; }
-textarea.kb-ed-input:focus { outline: none; border: none; }
-.kb-ed-input::placeholder { color: #C5C4BD; }
-.kb-ed-box { width: 16px; height: 16px; border-radius: 4px; flex-shrink: 0; margin-top: 3px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; background: #fff; border: 1.6px solid #CFCEC8; box-sizing: border-box; }
-.kb-ed-box.checked { background: #2E9E63; border: none; }
-.kb-ed-marker { color: #9B9A94; line-height: 1.7; flex-shrink: 0; }
-.kb-ed-marker.num { font-variant-numeric: tabular-nums; }
-.kb-md-code { background: #F0EFEB; padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88em; color: #B4493B; }
-.kb-md-link { color: #2E7D54; }
+/* 共有 Markdown エディタ(.rf-ed / md-editor.js)をカード詳細へ埋め込み。
+   余白・最小高さ・見出しサイズを旧 .kb-ed 相当に揃える最小調整(kanban-detail-shared-editor)。 */
+.kb-detail-body .rf-ed-wrap { position: relative; min-height: 280px; }
+.kb-detail-body .rf-ph { position: absolute; top: 0; left: 0; right: 0; pointer-events: none; color: #B5B4AE; font-size: 14px; line-height: 1.7; }
+.kb-detail-body .rf-ed { min-height: 280px; padding: 0; font-size: 14px; line-height: 1.75; color: #37352F; caret-color: #2E9E63; }
+.kb-detail-body .rf-ed-h1 { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; padding-top: 10px; }
+.kb-detail-body .rf-ed-h2 { font-size: 16.5px; font-weight: 700; letter-spacing: -0.01em; padding-top: 8px; }
+.kb-detail-body .rf-ed-h3,
+.kb-detail-body .rf-ed-h4,
+.kb-detail-body .rf-ed-h5,
+.kb-detail-body .rf-ed-h6 { font-size: 14.5px; font-weight: 700; padding-top: 6px; }
+.kb-detail-body .rf-ed-quote { border-left-color: #D8D7D1; color: #6B6A65; font-style: normal; }
+.kb-detail-body .rf-ed-code { color: #B4493B; }
+.kb-detail-body .rf-ed-check.on::before { background: #2E9E63; border-color: #2E9E63; }
 
 /* 祝福演出レイヤ */
 .kb-celebrate { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
