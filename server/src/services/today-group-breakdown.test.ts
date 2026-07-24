@@ -6,6 +6,7 @@ import { totalWorkSecondsForDay } from './categories.js';
 import { upsertFutureRuleSet } from '../rules/rules.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
+import { resolveIdentity, renameIdentity } from './group-identity.js';
 
 /**
  * spec: today-group-breakdown — 今日タブ/range の「グループ別」内訳を、記録時点スナップショット
@@ -144,6 +145,21 @@ describe('2.3 未グループは単一行として表示され非計上ヒント
     seedSession(db, UNGROUPED_KEY, 'ungrouped', null, 20 * MIN);
     const ung = daySummary(db, DAY).groups.find((g) => g.stableGroupId === UNGROUPED_KEY)!;
     expect(ung.countsTowardTotal).toBe(true);
+  });
+});
+
+describe('2.5 改名した区間は identity レジストリ経由で現在名の1スライスへ合算される', () => {
+  it('改名前後の区間が同一 identity として合算され、旧名のスライスは残らない', () => {
+    resolveIdentity(db, '競技プログラミング', 'yellow');
+    seedSession(db, 'sid-a', '競技プログラミング', 'yellow', 90 * MIN);
+    renameIdentity(db, { name: '競技プログラミング', color: 'yellow' }, { name: '競プロ', color: 'yellow' });
+    seedSession(db, 'sid-a', '競プロ', 'yellow', 30 * MIN);
+
+    const groups = daySummary(db, DAY).groups;
+    expect(groups.find((g) => g.name === '競技プログラミング')).toBeUndefined();
+    const merged = groups.find((g) => g.name === '競プロ');
+    expect(merged).toBeDefined();
+    expect(merged!.seconds).toBe(120 * 60);
   });
 });
 

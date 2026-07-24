@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import type { DB } from '../db/index.js';
 import { getConfig, updateConfig, type AppConfigRow } from '../db/index.js';
 import { daySummary, rangeSummary, listGroups, todayKey } from '../services/summary.js';
+import { listRecentGroupIdentities, resolveGroupDisplay } from '../services/group-identity.js';
+import { isExtensionOutdated, MIN_EXTENSION_VERSION } from '../services/ext-version.js';
 import {
   listRuleSets,
   getRuleSet,
@@ -13,6 +15,7 @@ import {
   ThresholdReasonRequiredError,
   RuleConditionError,
   type ConditionInput,
+  type RuleSetWithConditions,
 } from '../rules/rules.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { listChecks, setCheck } from '../rules/checks.js';
@@ -26,19 +29,40 @@ import type { ApiDeps } from './types.js';
 
 export type { ApiDeps };
 
-/** app_config を API 表示用に整形（salt は伏せる）。 */
-function publicConfig(cfg: AppConfigRow): Omit<AppConfigRow, 'password_hash_salt'> & {
-  hasSalt: boolean;
-} {
+/**
+ * GROUP 条件へ表示名を添える（spec: group-rule-identity）。UI が UUID/identity ID を
+ * 直接解決しなくて済むよう、`group_name`/`group_color`/`group_needs_reset` をここで埋め込む。
+ */
+function decorateRuleSet(db: DB, rs: RuleSetWithConditions) {
+  return {
+    ...rs,
+    conditions: rs.conditions.map((c) => {
+      if (c.target !== 'GROUP') return c;
+      const gd = resolveGroupDisplay(db, c);
+      return { ...c, group_name: gd.name, group_color: gd.color, group_needs_reset: gd.needsReset };
+    }),
+  };
+}
+
+/** app_config を API 表示用に整形（salt は伏せる）。拡張ビルドの警告フラグも添える（design D7-4）。 */
+function publicConfig(
+  db: DB,
+  cfg: AppConfigRow,
+): Omit<AppConfigRow, 'password_hash_salt'> & { hasSalt: boolean; extensionOutdated: boolean; minExtensionVersion: string } {
   const { password_hash_salt, ...rest } = cfg;
-  return { ...rest, hasSalt: password_hash_salt.length > 0 };
+  return {
+    ...rest,
+    hasSalt: password_hash_salt.length > 0,
+    extensionOutdated: isExtensionOutdated(db),
+    minExtensionVersion: MIN_EXTENSION_VERSION,
+  };
 }
 
 export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Promise<void> {
   const { db } = deps;
 
   // --- 設定 ---------------------------------------------------------------
-  app.get('/api/config', async () => publicConfig(getConfig(db)));
+  app.get('/api/config', async () => publicConfig(db, getConfig(db)));
 
   app.patch('/api/config', async (req) => {
     const body = (req.body ?? {}) as Partial<AppConfigRow>;
@@ -63,11 +87,20 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
     const patch: Record<string, unknown> = {};
     for (const k of allowed) if (k in body) patch[k] = body[k];
     updateConfig(db, patch as Partial<AppConfigRow>);
-    return publicConfig(getConfig(db));
+    return publicConfig(db, getConfig(db));
   });
 
   // --- グループ（ルール編集のピッカー用）---------------------------------
+  // /api/groups は tab_group（壊れた UUID 行）由来。後方互換のため残すが UI からは使わない。
   app.get('/api/groups', async () => listGroups(db));
+
+  // 直近 N 日に実測された identity 一覧（design D6・spec: group-identity-registry）。
+  // 合計時間降順・60秒未満は除外。ルール編集・目標のインライン条件作成のグループ選択肢の源泉。
+  app.get('/api/groups/recent', async (req) => {
+    const q = req.query as { days?: string };
+    const days = q.days ? Number(q.days) : 30;
+    return listRecentGroupIdentities(db, Number.isFinite(days) && days > 0 ? days : 30);
+  });
 
   // --- 手動カテゴリ（記録ポップオーバーのチップ; 直近使用順）--------------
   app.get('/api/categories', async () => listManualCategories(db));
@@ -89,11 +122,12 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
   });
 
   // --- ルール -------------------------------------------------------------
-  app.get('/api/rules', async () => listRuleSets(db));
+  app.get('/api/rules', async () => listRuleSets(db).map((rs) => decorateRuleSet(db, rs)));
 
   app.get('/api/rules/:date', async (req) => {
     const { date } = req.params as { date: string };
-    return getRuleSet(db, date) ?? { ruleSet: null, conditions: [] };
+    const rs = getRuleSet(db, date);
+    return rs ? decorateRuleSet(db, rs) : { ruleSet: null, conditions: [] };
   });
 
   app.put('/api/rules/:date', async (req, reply) => {

@@ -1,6 +1,7 @@
 import zlib from 'node:zlib';
 import type { DB } from '../db/index.js';
 import { addDaysKey } from './goals.js';
+import { resolveIdentity, renameIdentity } from './group-identity.js';
 
 /**
  * デモ（お試し）モードのサンプルデータ（spec: demo-mode / design.md D4）。
@@ -457,8 +458,30 @@ export function seedDemo(db: DB): void {
     for (const [gid, name, color, [sh, sm], [eh, em]] of allocSessions) {
       const s = allocMs(sh, sm);
       const e = allocMs(eh, em);
+      // recompute.ts 相当: セッション確定時に identity を解決する（group-rule-snapshot-identity）。
+      resolveIdentity(db, name, color, gid, e);
       insAllocSession.run(gid, name, color, s, e, DEMO_ALLOC_DAY, e - s, SEED_TS);
     }
+
+    // --- 改名（登録済み）の筋書き（group-rule-snapshot-identity・design D3/D4）-------------
+    // 「執筆」→「調査」（上記）は改名イベントとして記録されていない別々の組なので分離したまま。
+    // こちらは実際に `renameIdentity` を通した「登録済みの改名」＝進捗が巻き戻らないことを示す。
+    // 同一 stable_group_id を「英会話」(cyan) → 「英語」(cyan) へ改名して使い回す。
+    const renameGid = 'demo-rename-lang';
+    const beforeRename = { name: '英会話', color: 'cyan' };
+    const afterRename = { name: '英語', color: 'cyan' };
+    const renameAt = allocMs(17, 30);
+    resolveIdentity(db, beforeRename.name, beforeRename.color, renameGid, allocMs(17, 0));
+    insAllocSession.run(
+      renameGid, beforeRename.name, beforeRename.color,
+      allocMs(17, 0), allocMs(17, 30), DEMO_ALLOC_DAY, 30 * 60 * 1000, SEED_TS,
+    );
+    renameIdentity(db, beforeRename, afterRename, renameAt);
+    resolveIdentity(db, afterRename.name, afterRename.color, renameGid, allocMs(18, 0));
+    insAllocSession.run(
+      renameGid, afterRename.name, afterRename.color,
+      allocMs(17, 30), allocMs(18, 0), DEMO_ALLOC_DAY, 30 * 60 * 1000, SEED_TS,
+    );
     // 休憩（自己申告 MANUAL・grey）12:00–12:45。配分バーに MANUAL スライスを1本見せる。
     db.prepare(
       `INSERT INTO activity_log_entry

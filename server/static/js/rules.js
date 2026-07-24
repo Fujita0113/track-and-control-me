@@ -46,7 +46,8 @@ export async function renderRuleEditing(root) {
     // 既存ルールがあれば凍結ポリシーどおり「翌日」を対象にする。
     const rules = await api.getRules().catch(() => []);
     const target = rules.length === 0 ? state.today : addDays(state.today, 1);
-    const groups = await api.getGroups().catch(() => []);
+    // グループ選択肢は直近30日に実測された identity から（tab_group の UUID 行は使わない・spec: group-identity-registry）。
+    const groups = await api.getGroupsRecent().catch(() => []);
     const goals = await api.getGoals().catch(() => []);
     const existing = await api.getRule(target).catch(() => null);
     // 初期条件は3段分岐:
@@ -65,7 +66,7 @@ export async function renderRuleEditing(root) {
   addTodayBtn.addEventListener('click', async () => {
     const [rulesets, groups] = await Promise.all([
       api.getRules().catch(() => []),
-      api.getGroups().catch(() => []),
+      api.getGroupsRecent().catch(() => []),
     ]);
     const eff = effectiveTodayRule(rulesets, state.today);
     if (!eff || !eff.conditions.length) {
@@ -99,7 +100,7 @@ async function renderList(body, reload) {
   body.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
   const [rulesets, groups, goals] = await Promise.all([
     api.getRules(),
-    api.getGroups().catch(() => []),
+    api.getGroupsRecent().catch(() => []),
     api.getGoals().catch(() => []),
   ]);
   const locked = computeLocked(goals);
@@ -110,9 +111,8 @@ async function renderList(body, reload) {
     return;
   }
 
-  const groupName = new Map(groups.map((g) => [g.stable_group_id, g.name]));
   for (const rs of rulesets) {
-    body.appendChild(rulesetCard(rs, groups, groupName, reload, locked));
+    body.appendChild(rulesetCard(rs, groups, reload, locked));
   }
 }
 
@@ -123,10 +123,14 @@ function statusBadge(status) {
   return h('span', { class: 'badge', text: '過去' });
 }
 
-function condText(c, groupName) {
+function condText(c) {
   const label = targetLabel(c.target);
   if (c.target === 'TOTAL_WORK') return `${label} ≥ ${fmtHM(c.threshold_seconds || 0)}`;
-  if (c.target === 'GROUP') return `${label}[${groupName.get(c.stable_group_id) || c.stable_group_id}] ≥ ${fmtHM(c.threshold_seconds || 0)}`;
+  // group_name/group_needs_reset はサーバーが埋め込む(identity の現在名; 旧条件は「要再設定」付き)。
+  if (c.target === 'GROUP') {
+    const name = c.group_name ? `${c.group_name}${c.group_needs_reset ? '（要再設定）' : ''}` : '?';
+    return `${label}[${name}] ≥ ${fmtHM(c.threshold_seconds || 0)}`;
+  }
   // TIMELINE は「<カテゴリ> ◯分以上」で表示する（timeline: 生キーは出さない）。
   if (c.target === 'TIMELINE') return `${c.label || 'カテゴリ'} ${Math.round((c.threshold_seconds || 0) / 60)}分以上`;
   if (c.target === 'MANUAL_CHECK') return `${label}: ${c.label || c.condition_key}`;
@@ -135,7 +139,7 @@ function condText(c, groupName) {
   return label;
 }
 
-export function rulesetCard(rs, groups, groupName, onChange, locked = { keys: new Set(), byKey: new Map() }) {
+export function rulesetCard(rs, groups, onChange, locked = { keys: new Set(), byKey: new Map() }) {
   const editable = rs.ruleSet.status === 'DRAFT_FUTURE';
   const isDraftToday = rs.ruleSet.status === 'DRAFT_TODAY';
   const card = h('div', { class: 'card' });
@@ -186,7 +190,7 @@ export function rulesetCard(rs, groups, groupName, onChange, locked = { keys: ne
   const list = h('div', { class: 'list', style: { marginTop: '10px' } });
   if (!rs.conditions.length) list.appendChild(emptyState('条件なし'));
   for (const c of rs.conditions) {
-    const row = h('div', { class: 'list-row' }, h('span', { class: 'grow', text: condText(c, groupName) }));
+    const row = h('div', { class: 'list-row' }, h('span', { class: 'grow', text: condText(c) }));
     if (isDraftToday && additionKeys.has(c.condition_key)) {
       row.appendChild(h('span', { class: 'badge accent', text: '＋ 当日追加' }));
     } else if (isDraftToday) {
@@ -300,6 +304,7 @@ function condToInput(c) {
   return {
     target: c.target,
     stableGroupId: c.stable_group_id || undefined,
+    groupIdentityId: c.group_identity_id ?? undefined,
     comparator: 'GTE',
     thresholdSeconds: c.threshold_seconds ?? null,
     label: c.label || undefined,
@@ -315,7 +320,6 @@ function condToInput(c) {
  * baseline を緩める編集はサーバが baseline 違反（400）で拒否する。
  */
 export function openTodayAddEditor(date, baseline, additions, groups, onDone) {
-  const groupName = new Map(groups.map((g) => [g.stable_group_id, g.name]));
   const body = h('div', { class: 'modal-body' });
   body.appendChild(h('p', { class: 'muted', text: `対象日: ${date}（当日）。既存の条件はロックされ、当日は「新しい条件の追加」だけができます（追加分は同日中は自由に編集・削除でき、翌日から凍結されます）。` }));
 
@@ -324,7 +328,7 @@ export function openTodayAddEditor(date, baseline, additions, groups, onDone) {
     const bl = h('div', { class: 'list' });
     for (const c of baseline) {
       bl.appendChild(h('div', { class: 'list-row' },
-        h('span', { class: 'grow', text: condText(c, groupName) }),
+        h('span', { class: 'grow', text: condText(c) }),
         h('span', { class: 'badge warn', text: '🔒 当日ロック' }),
       ));
     }
@@ -378,7 +382,7 @@ function fromRow(c) {
     target: c.target,
     conditionKey: c.condition_key,
     minutes: c.threshold_seconds ? Math.round(c.threshold_seconds / 60) : 0,
-    stableGroupId: c.stable_group_id || '',
+    groupIdentityId: c.group_identity_id ?? null,
     label: c.label || '',
     signalKey: c.signal_key || '',
   };
@@ -387,7 +391,7 @@ function fromRow(c) {
 /**
  * 単一の条件エディタ行（純粋な行ビルダー）。全5ターゲット＋PLANNING フラット化・カテゴリ補完・
  * グループ選択を1つの <select> で扱う。goals.js の「毎日やること」からも再利用する（locked=false）。
- * `row._get()` が `{ target, thresholdSeconds?, stableGroupId?, label?, signalKey? }` を返す。
+ * `row._get()` が `{ target, thresholdSeconds?, groupIdentityId?, label?, signalKey? }` を返す。
  */
 export function condEditorRow(c, groups, locked = false) {
   // 条件はフラットな1つの <select>。PLANNING は signal_key ごとの項目(今日の振り返り / 明日のタスク登録 …)。
@@ -400,8 +404,9 @@ export function condEditorRow(c, groups, locked = false) {
   kindSel.value = kindVal;
   const minutes = h('input', { type: 'number', min: '0', step: '5', value: String(c.minutes ?? 0) });
   minutes.style.width = '80px';
-  const groupSel = h('select', {}, ...groups.map((x) => h('option', { value: x.stable_group_id }, x.name)));
-  if (c.stableGroupId) groupSel.value = c.stableGroupId;
+  // グループ選択肢は直近実測 identity（合計時間降順・spec: group-identity-registry）。UUID は出さない。
+  const groupSel = h('select', {}, ...groups.map((x) => h('option', { value: String(x.id) }, x.name)));
+  if (c.groupIdentityId != null) groupSel.value = String(c.groupIdentityId);
   const labelInp = h('input', { type: 'text', value: c.label || '', placeholder: 'チェック項目名' });
 
   // TIMELINE 用: 手動カテゴリ（直近使用順）を候補に出す自由入力。未登録名は保存時にレジストリへ upsert される。
@@ -453,7 +458,7 @@ export function condEditorRow(c, groups, locked = false) {
   row._get = () => {
     const { target, signalKey } = conditionKindTarget(kindSel.value);
     if (target === 'TOTAL_WORK') return { target, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
-    if (target === 'GROUP') return { target, stableGroupId: groupSel.value, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
+    if (target === 'GROUP') return { target, groupIdentityId: groupSel.value ? Number(groupSel.value) : null, thresholdSeconds: (Number(minutes.value) || 0) * 60 };
     if (target === 'TIMELINE') return { target, label: catInp.value.trim() || 'uncategorized', thresholdSeconds: (Number(minutes.value) || 0) * 60 };
     if (target === 'MANUAL_CHECK') return { target, label: labelInp.value.trim() || 'チェック' };
     if (target === 'PLANNING') return { target, signalKey: signalKey || null };

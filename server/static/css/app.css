@@ -199,8 +199,9 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
   padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
 }
 .cond .cond-main { flex: 1; min-width: 0; }
-.cond .cond-title { font-weight: 600; }
+.cond .cond-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .cond .cond-sub { color: var(--muted); font-size: 12.5px; }
+.cond-color-chip { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .cond.met { border-color: #bfe0c8; background: var(--ok-weak); }
 .mark { font-size: 18px; font-weight: 700; }
 .mark.yes { color: var(--ok); }
@@ -1060,6 +1061,17 @@ body.rf-page .content { max-width: 1200px; }
 .rf-thumb-cap:focus { outline: none; border-color: #b9caf2; }
 .rf-thumb-del { position: absolute; top: 5px; right: 5px; width: 22px; height: 22px; line-height: 1; border: none; border-radius: 50%; background: rgba(20,28,40,0.62); color: #fff; font-size: 15px; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; }
 .rf-thumb-del:hover { background: #c0392b; }
+
+/* --- 拡張機能ビルド警告帯（design D7-4・spec: extension-stable-group-id）--- */
+.ext-warning-banner {
+  padding: 8px 16px;
+  background: #fff4e5;
+  border-bottom: 1px solid #f0c896;
+  color: #7a4a00;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ext-warning-banner[hidden] { display: none; }
 
 /* --- お試し（デモ）モード帯（spec: demo-mode）------------------------------ */
 /* 通常モードと視覚的にはっきり区別するため、紫系の帯＋点線ボーダで縁取る。 */

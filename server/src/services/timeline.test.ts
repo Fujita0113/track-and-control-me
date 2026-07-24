@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { openDb, updateConfig, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
 import { getTimeline } from './timeline.js';
+import { resolveIdentity, renameIdentity } from './group-identity.js';
 
 /**
  * timeline-revamp D2: ギャップ抽出の閾値を `away_min_seconds` に一元化した回帰テスト。
@@ -185,5 +186,23 @@ describe('getTimeline AUTO ブロックの identity 単位化', () => {
     const totalCredited = tl.auto.reduce((sum, b) => sum + b.creditedMs, 0);
     const expected = (20 + 30 + 30 + 30) * 60 * 1000; // 各区間の credited_ms(=区間長) 合計。
     expect(totalCredited).toBe(expected);
+  });
+});
+
+describe('getTimeline 改名（identity レジストリ）をまたいだ AUTO ブロックの結合', () => {
+  it('改名した隣接ブロックは同一 identity として1ランへ結合され、現在名でラベル付けされる', () => {
+    const db = openDb(':memory:');
+    resolveIdentity(db, '競技プログラミング', 'yellow');
+    insertSessionEx(db, { group: 'sid-a', title: '競技プログラミング', color: 'yellow', startAt: jst(13, 0), endAt: jst(14, 30) });
+    renameIdentity(db, { name: '競技プログラミング', color: 'yellow' }, { name: '競プロ', color: 'yellow' });
+    insertSessionEx(db, { group: 'sid-a', title: '競プロ', color: 'yellow', startAt: jst(14, 30), endAt: jst(15, 0) });
+
+    const tl = getTimeline(db, DAY, jst(15, 0));
+    // 名前が変わったことを理由に分断されず、現在名「競プロ」で1本のブロックになる。
+    const blocks = tl.auto.filter((b) => b.startAt < jst(15, 0) && b.endAt > jst(13, 0));
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.title).toBe('競プロ');
+    expect(blocks[0]!.startAt).toBe(jst(13, 0));
+    expect(blocks[0]!.endAt).toBe(jst(15, 0));
   });
 });

@@ -242,7 +242,8 @@ async function openCreateForm(onDone) {
   // --- 毎日やること（既存項目の選択 ＋ その場で新規作成を1ブロックに統合）--------
   // 見出し横の＋から、今日タブと同じ条件エディタ（condEditorRow）で全5ターゲットを新規作成できる。
   // 既存の実効ルール項目はチェックで選び、新規行は「これから作成」として開始日ルールへ追記される。
-  const groups = await api.getGroups().catch(() => []);
+  // グループ選択肢は直近30日に実測された identity から（tab_group の UUID 行は使わない・spec: goal-inline-condition）。
+  const groups = await api.getGroupsRecent().catch(() => []);
 
   // ＋で追加する新規行のホスト（condEditorRow をそのまま挿す）。
   const addHost = h('div', { class: 'list gr-newconds' });
@@ -309,7 +310,7 @@ async function openCreateForm(onDone) {
     const name = nameInp.value.trim();
     if (!name) { toast('目標名を入力してください', 'err'); return; }
     const practices = [...candHost.querySelectorAll('input[type="checkbox"]:checked')].map((b) => b.value);
-    // ＋で追加した各行の _get()（{target, thresholdSeconds?, stableGroupId?, label?, signalKey?}）をそのまま送る。
+    // ＋で追加した各行の _get()（{target, thresholdSeconds?, groupIdentityId?, label?, signalKey?}）をそのまま送る。
     const newConditions = [...addHost.querySelectorAll('.cond-editor')].map((row) => row._get && row._get()).filter(Boolean);
     if (!practices.length && !newConditions.length) { toast('毎日やることを1つ以上選ぶか、＋から追加してください', 'err'); return; }
     save.disabled = true;

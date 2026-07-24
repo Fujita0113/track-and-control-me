@@ -259,10 +259,20 @@ describe('配分バー seed（reflection-alloc-group-identity）', () => {
     expect(reflect).toBeDefined();
     expect(reflect.seconds).toBe(3 * 3600);
     expect(reflect.color).toBe('purple');
-    // WORK は「振り返り / 勉強 / 制作」に加え、改名使い回し（issue #52）の「執筆 / 調査」の5スライス。
-    // 同一 identity の分裂は起きないが、改名した別 identity は別スライスとして現れる。
-    expect(work).toHaveLength(5);
-    expect(new Set(work.map((s) => s.label))).toEqual(new Set(['振り返り', '勉強', '制作', '執筆', '調査']));
+    // WORK は「振り返り / 勉強 / 制作」に加え、改名使い回し（issue #52・未登録）の「執筆 / 調査」、
+    // および登録済み改名（group-rule-snapshot-identity）で合算された「英語」の6スライス。
+    // 同一 identity の分裂は起きないが、改名イベントとして記録されていない別 identity は別スライスのまま。
+    expect(work).toHaveLength(6);
+    expect(new Set(work.map((s) => s.label))).toEqual(
+      new Set(['振り返り', '勉強', '制作', '執筆', '調査', '英語']),
+    );
+    // 「英会話」→「英語」の登録済み改名: 改名前後の2区間(30分×2)が同一 identity として
+    // 現在名「英語」の1本(60分)へ合算される。旧名「英会話」のスライスは残らない（進捗が巻き戻らない）。
+    const renamed = work.find((s) => s.label === '英語')!;
+    expect(renamed).toBeDefined();
+    expect(renamed.seconds).toBe(60 * 60);
+    expect(renamed.color).toBe('cyan');
+    expect(work.some((s) => s.label === '英会話')).toBe(false);
     // 振り返りが最大スライス（埋没せず先頭）。
     expect(a.slices[0]!.label).toBe('振り返り');
     // WORK スライス合計＝daySummary（today-group-breakdown）の同グループ合計（ドリフト防止）。
@@ -297,6 +307,17 @@ describe('タイムライン identity 単位化 seed（timeline-group-identity /
     const reflStart = zonedTimeToEpoch(2026, 6, 25, 9, 0, 0, TZ);
     const reflEnd = zonedTimeToEpoch(2026, 6, 25, 10, 0, 0, TZ);
     expect(tl.auto.some((b) => b.title === '振り返り' && b.startAt === reflStart && b.endAt === reflEnd)).toBe(true);
+  });
+
+  it('登録済みの改名（英会話→英語）は隣接ブロックが1本へ結合され現在名で表示される', () => {
+    const now = zonedTimeToEpoch(2026, 6, 25, 23, 0, 0, TZ);
+    const tl = getTimeline(db, DEMO_ALLOC_DAY, now);
+    const start = zonedTimeToEpoch(2026, 6, 25, 17, 0, 0, TZ);
+    const end = zonedTimeToEpoch(2026, 6, 25, 18, 0, 0, TZ);
+    const merged = tl.auto.find((b) => b.startAt === start && b.endAt === end);
+    expect(merged).toBeDefined();
+    expect(merged!.title).toBe('英語'); // 改名前の「英会話」区間を含め、現在名の1ブロック。
+    expect(tl.auto.some((b) => b.title === '英会話')).toBe(false);
   });
 });
 

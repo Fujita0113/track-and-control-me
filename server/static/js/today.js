@@ -187,11 +187,19 @@ function condRow(c, planning, date) {
   }
 
   let title = targetLabel(c.target);
+  let chipColor = null;
   let sub = '';
   if (c.target === 'TOTAL_WORK') {
     sub = `${fmtHM(c.actualSeconds || 0)} / ${fmtHM(c.thresholdSeconds || 0)}`;
   } else if (c.target === 'GROUP') {
-    title = `グループ: ${c.stableGroupId || '?'}`;
+    // identity の現在名（改名後）＋色チップで表示する。UUID は出さない（spec: group-rule-identity）。
+    title = `グループ: ${c.groupName || '不明なグループ（要再設定）'}`;
+    chipColor = c.groupColor || null;
+    sub = `${fmtHM(c.actualSeconds || 0)} / ${fmtHM(c.thresholdSeconds || 0)}`;
+  } else if (c.target === 'TIMELINE') {
+    // 「<カテゴリ> ◯分以上」＋「実績 / 閾値」（spec: group-rule-identity・ゲート画面の TIMELINE 表示）。
+    const min = Math.round((c.thresholdSeconds || 0) / 60);
+    title = `${c.label || 'カテゴリ'} ${min}分以上`;
     sub = `${fmtHM(c.actualSeconds || 0)} / ${fmtHM(c.thresholdSeconds || 0)}`;
   } else if (c.target === 'PLANNING') {
     // フラット化: signal_key の日本語ラベルをそのまま条件名にする(「翌日計画: …」の接頭辞は付けない)。
@@ -210,11 +218,18 @@ function condRow(c, planning, date) {
     }
   }
 
+  const titleEl = h('div', { class: 'cond-title' });
+  if (chipColor) {
+    const chip = h('span', { class: 'cond-color-chip' });
+    chip.style.background = colorHex(chipColor);
+    titleEl.appendChild(chip);
+  }
+  titleEl.appendChild(document.createTextNode(title));
   const main = h('div', { class: 'cond-main' },
-    h('div', { class: 'cond-title', text: title }),
+    titleEl,
     h('div', { class: 'cond-sub', text: sub }),
   );
-  if ((c.target === 'TOTAL_WORK' || c.target === 'GROUP') && c.thresholdSeconds) {
+  if ((c.target === 'TOTAL_WORK' || c.target === 'GROUP' || c.target === 'TIMELINE') && c.thresholdSeconds) {
     const pct = Math.min(100, Math.round(((c.actualSeconds || 0) / c.thresholdSeconds) * 100));
     const bar = h('div', { class: 'progress' }, h('span', {}));
     bar.firstChild.style.width = `${pct}%`;

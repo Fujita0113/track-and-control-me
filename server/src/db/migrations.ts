@@ -5,6 +5,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { UNGROUPED_KEY } from '@track/contract';
 
 export interface Migration {
   version: number;
@@ -786,5 +787,61 @@ CREATE TABLE goal_check_result (
 );
 CREATE INDEX idx_goal_check_result_check ON goal_check_result(check_id, day_key);
 `,
+  },
+  {
+    version: 18,
+    name: 'group-rule-snapshot-identity',
+    // グループ identity レジストリ（spec: group-identity-registry / design.md D1）。
+    // 記録時点スナップショット (tab_group_name_snapshot, group_color_snapshot) を安定した内部 identity
+    // へ解決する。拡張機能が採番する stable_group_id には依存しない（そちらは壊れている・proposal.md）。
+    // color は別名表の複合主キーに使うため NOT NULL DEFAULT ''（NULL は UNIQUE/PK 判定で常に非一致になる
+    // SQLite の性質を避けるため、summary.ts の COALESCE(color,'') 規約とキーを揃える）。
+    sql: /* sql */ `
+CREATE TABLE group_identity (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  color TEXT,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+
+CREATE TABLE group_identity_alias (
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '',
+  identity_id INTEGER NOT NULL REFERENCES group_identity(id) ON DELETE CASCADE,
+  since INTEGER NOT NULL,
+  PRIMARY KEY (name, color)
+);
+CREATE INDEX idx_group_identity_alias_identity ON group_identity_alias(identity_id);
+
+-- 解錠ルール条件の identity 参照（spec: group-rule-identity）。既存 stable_group_id 列は後方互換で残す。
+ALTER TABLE rule_condition ADD COLUMN group_identity_id INTEGER;
+`,
+    // 既存 session の distinct (tab_group_name_snapshot, group_color_snapshot)（空名・未グループを除く）から
+    // identity と別名を初期構築する（design.md Migration Plan 2）。既存 session / daily_totals_snapshot /
+    // unlock_evaluation の行は一切書き換えない。改名履歴は推測できないため、初期構築時の別名は
+    // identity ごとに1組（(name,color) そのもの）とする。
+    run: (db) => {
+      const rows = db
+        .prepare(
+          `SELECT tab_group_name_snapshot AS name, COALESCE(group_color_snapshot, '') AS color,
+                  MIN(started_at) AS first_seen, MAX(started_at) AS last_seen
+             FROM session
+            WHERE stable_group_id <> ? AND tab_group_name_snapshot <> ''
+            GROUP BY tab_group_name_snapshot, COALESCE(group_color_snapshot, '')`,
+        )
+        .all(UNGROUPED_KEY) as { name: string; color: string; first_seen: number; last_seen: number }[];
+
+      const insIdentity = db.prepare(
+        'INSERT INTO group_identity (name, color, created_at, last_seen_at) VALUES (?, ?, ?, ?)',
+      );
+      const insAlias = db.prepare(
+        'INSERT INTO group_identity_alias (name, color, identity_id, since) VALUES (?, ?, ?, ?)',
+      );
+      for (const r of rows) {
+        const info = insIdentity.run(r.name, r.color || null, r.first_seen, r.last_seen);
+        insAlias.run(r.name, r.color, info.lastInsertRowid as number, r.first_seen);
+      }
+    },
   },
 ];

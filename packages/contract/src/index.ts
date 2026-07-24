@@ -55,13 +55,20 @@ export const GroupColorSchema = z.enum([
 ]);
 export type GroupColor = z.infer<typeof GroupColorSchema>;
 
-/** イベント種別（ハートビート＋遷移イベント。design.md D3）。 */
+/**
+ * イベント種別（ハートビート＋遷移イベント。design.md D3）。
+ * `GROUP_RENAMED` はタブグループの改名検出（spec: tab-group-rename-tracking）を表す種別として
+ * 追加する。改名は `ActivitySample.eventType` としては流れない（サンプル側は従来どおり
+ * `GROUP_UPDATED`）。`GROUP_RENAMED` は改名専用メッセージ（`GroupRenameMessage`）や
+ * サーバー側ログが参照する事象タグとして使う。
+ */
 export const EventTypeSchema = z.enum([
   'HEARTBEAT',
   'TAB_ACTIVATED',
   'TAB_GROUP_CHANGED',
   'GROUP_UPDATED',
   'GROUP_REMOVED',
+  'GROUP_RENAMED',
   'WINDOW_FOCUS_CHANGED',
   'IDLE_STATE_CHANGED',
 ]);
@@ -157,11 +164,31 @@ export const PingMessageSchema = z.object({
 });
 export type PingMessage = z.infer<typeof PingMessageSchema>;
 
+/** タブグループ改名の (旧名,旧色) → (新名,新色) の組。 */
+export const GroupNameColorSchema = z.object({
+  name: z.string(),
+  color: GroupColorSchema,
+});
+
+/**
+ * タブグループの改名イベント（design.md D3・spec: tab-group-rename-tracking）。
+ * `ActivitySample` とは別のメッセージとして送る（区間化の入力に意味の異なる制御イベントを混入させない）。
+ * 拡張側で静止5秒デバウンス済みの確定 1 件のみが送られる。
+ */
+export const GroupRenameMessageSchema = z.object({
+  type: z.literal('groupRename'),
+  from: GroupNameColorSchema,
+  to: GroupNameColorSchema,
+  at: z.number().int(),
+});
+export type GroupRenameMessage = z.infer<typeof GroupRenameMessageSchema>;
+
 /** 拡張 → backend のメッセージ（判別 union）。 */
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   HelloMessageSchema,
   SampleMessageSchema,
   PingMessageSchema,
+  GroupRenameMessageSchema,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 

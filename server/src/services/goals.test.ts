@@ -25,6 +25,7 @@ import {
   type GoalPracticeTarget,
 } from './goals.js';
 import { createPlan, createCheck, submitPhoto, answerQuestion } from './goal-plan-check.js';
+import { resolveIdentity } from './group-identity.js';
 
 /** テスト用 data URL（バイト内容は検証しないので任意バイト列でよい）。 */
 const dataUrl = (mime = 'image/png', bytes: number[] = [1, 2, 3]): string =>
@@ -267,22 +268,20 @@ describe('目標作成時のインライン条件作成（newConditions・明日
     expect(ruleThresholds(START).get('total_work')).toBe(14400);
   });
 
-  it('GROUP をその場で作成して採用でき、group:<id>（7200秒）が追記される', () => {
+  it('GROUP をその場で作成して採用でき、group:<identityId>（7200秒）が追記される', () => {
     upsertFutureRuleSet(db, START, { conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400 }] }, NOW_TODAY);
-    // 既存グループを1つ用意する（バリデーションが tab_group の存在を要求する）。
-    db.prepare(
-      `INSERT INTO tab_group (stable_group_id, name, color, external_group_id, first_seen_at, last_seen_at)
-       VALUES ('g-reading', '読書', NULL, NULL, ?, ?)`,
-    ).run(NOW_TODAY, NOW_TODAY);
+    // 既存 identity を1つ用意する（バリデーションが group_identity の存在を要求する）。
+    const identityId = resolveIdentity(db, '読書', 'blue')!;
     const g = createGoal(
       db,
-      { name: '読書2h', practices: [], newConditions: [{ target: 'GROUP', stableGroupId: 'g-reading', thresholdSeconds: 7200 }], start: 'tomorrow' },
+      { name: '読書2h', practices: [], newConditions: [{ target: 'GROUP', groupIdentityId: identityId, thresholdSeconds: 7200 }], start: 'tomorrow' },
       NOW_TODAY,
     );
-    expect(g.practices.map((p) => p.conditionKey)).toContain('group:g-reading');
-    const p = g.practices.find((x) => x.conditionKey === 'group:g-reading')!;
+    const key = `group:${identityId}`;
+    expect(g.practices.map((p) => p.conditionKey)).toContain(key);
+    const p = g.practices.find((x) => x.conditionKey === key)!;
     expect(p.target).toBe('GROUP');
-    expect(ruleThresholds(START).get('group:g-reading')).toBe(7200);
+    expect(ruleThresholds(START).get(key)).toBe(7200);
   });
 
   it('MANUAL_CHECK をその場で作成して採用でき、manual:<ラベル>（閾値なし）が追記される', () => {
@@ -355,11 +354,11 @@ describe('目標作成時のインライン条件作成（newConditions・明日
         NOW_TODAY,
       ),
     ).toThrow(GoalPracticeError);
-    // GROUP の stableGroupId が存在しない。
+    // GROUP の groupIdentityId が存在しない。
     expect(() =>
       createGoal(
         db,
-        { name: 'x', practices: [], newConditions: [{ target: 'GROUP', stableGroupId: 'no-such', thresholdSeconds: 3600 }], start: 'tomorrow' },
+        { name: 'x', practices: [], newConditions: [{ target: 'GROUP', groupIdentityId: 999999, thresholdSeconds: 3600 }], start: 'tomorrow' },
         NOW_TODAY,
       ),
     ).toThrow(GoalPracticeError);

@@ -2,11 +2,13 @@ import { DEFAULTS } from '@track/contract';
 import type { EventType, IdleState } from '@track/contract';
 import { getAwayMinSeconds, getWsConfig } from './config';
 import {
+  flushPendingRenames,
   gatherState,
   migrateGroupMapsIfNeeded,
   onGroupRemovedFromMap,
   onGroupUpserted,
   resetGroupIdMapOnStartup,
+  type RenamePair,
 } from './groups';
 import { buildSample } from './sampler';
 import {
@@ -161,6 +163,11 @@ function hhmm(ms: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** 確定した改名候補をサーバーへ送る（`groups.ts` のデバウンス確定後・SW ウェイク時の補填の双方から呼ばれる）。 */
+async function sendGroupRename(pair: RenamePair): Promise<void> {
+  await wsClient.sendGroupRename(pair.from, pair.to);
+}
+
 /** 30秒周期のハートビートアラームを（無ければ）作成する。 */
 async function ensureHeartbeatAlarm(): Promise<void> {
   const existing = await chrome.alarms.get(HEARTBEAT_ALARM);
@@ -177,6 +184,8 @@ async function bootstrap(): Promise<void> {
   chrome.idle.setDetectionInterval(DEFAULTS.IDLE_DETECTION_SECONDS);
   await ensureBootId();
   await migrateGroupMapsIfNeeded();
+  // 前回 SW 停止でデバウンスタイマーが失われた保留中の改名候補を送出する（design D3）。
+  await flushPendingRenames(sendGroupRename);
   await ensureHeartbeatAlarm();
   // スリープ・再起動復帰など idle 遷移イベントを取りこぼしうるウェイクでも復帰通知を補足する。
   await checkAwayReturnOnWake();
@@ -230,7 +239,7 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
 
 chrome.tabGroups.onUpdated.addListener((group) => {
   void (async () => {
-    await onGroupUpserted(group);
+    await onGroupUpserted(group, sendGroupRename);
     await emitSample('GROUP_UPDATED');
   })();
 });

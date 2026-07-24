@@ -15,6 +15,7 @@ import {
 import { getReflection } from './reflection.js';
 import { todayKey } from './summary.js';
 import type { ConditionResult } from '../rules/evaluate.js';
+import { resolveGroupDisplay, getIdentity } from './group-identity.js';
 
 /**
  * 30日チャレンジ（目標）のライフサイクル・レポート集計・日記（spec: goal-challenge /
@@ -121,6 +122,7 @@ export interface AdoptCandidate {
   target: GoalPracticeTarget;
   label: string;
   stableGroupId: string | null;
+  groupIdentityId: number | null;
   signalKey: string | null;
   thresholdSeconds: number | null;
 }
@@ -141,19 +143,14 @@ export function adoptCandidates(db: DB, nowMs = Date.now(), start: GoalStart = '
   const startDay = goalStartDay(db, nowMs, start);
   const eff = getEffectiveRuleSet(db, startDay, nowMs);
   if (!eff) return [];
-  const groupNames = new Map(
-    (db.prepare('SELECT stable_group_id, name FROM tab_group').all() as {
-      stable_group_id: string;
-      name: string;
-    }[]).map((g) => [g.stable_group_id, g.name]),
-  );
   const out: AdoptCandidate[] = [];
   for (const c of eff.conditions) {
     out.push({
       conditionKey: c.condition_key,
       target: c.target as GoalPracticeTarget,
-      label: practiceLabel(c.target as GoalPracticeTarget, c, groupNames),
+      label: practiceLabel(db, c.target as GoalPracticeTarget, c),
       stableGroupId: c.stable_group_id,
+      groupIdentityId: c.group_identity_id,
       signalKey: c.signal_key,
       thresholdSeconds: c.threshold_seconds,
     });
@@ -162,13 +159,22 @@ export function adoptCandidates(db: DB, nowMs = Date.now(), start: GoalStart = '
 }
 
 function practiceLabel(
+  db: DB,
   target: GoalPracticeTarget,
-  c: { stable_group_id: string | null; signal_key: string | null; label: string | null; threshold_seconds: number | null },
-  groupNames: Map<string, string>,
+  c: {
+    stable_group_id: string | null;
+    group_identity_id?: number | null;
+    signal_key: string | null;
+    label: string | null;
+    threshold_seconds: number | null;
+  },
 ): string {
   if (target === 'TOTAL_WORK') return '総作業時間';
-  if (target === 'GROUP')
-    return `グループ: ${(c.stable_group_id && groupNames.get(c.stable_group_id)) || c.stable_group_id || '?'}`;
+  if (target === 'GROUP') {
+    // identity の現在名（新規）。旧 group:<stableGroupId> は tab_group 名 + 要再設定（design D8）。
+    const gd = resolveGroupDisplay(db, c);
+    return `グループ: ${gd.needsReset ? `${gd.name}（要再設定）` : gd.name}`;
+  }
   if (target === 'PLANNING') return c.signal_key ?? '翌日計画';
   if (target === 'TIMELINE') {
     // 「<カテゴリ> ◯分以上」。timeline: 生キーは出さない。
@@ -249,7 +255,8 @@ function dayKeyOf(db: DB, ms: number): string {
 export interface NewInlineCondition {
   target: GoalPracticeTarget;
   thresholdSeconds?: number;
-  stableGroupId?: string | null;
+  /** グループ identity の内部 ID（直近使用グループの一覧から選択・spec: goal-inline-condition）。 */
+  groupIdentityId?: number | null;
   label?: string | null;
   signalKey?: string | null;
 }
@@ -271,7 +278,7 @@ function inlineToInput(nc: NewInlineCondition): ConditionInput {
   const label = (nc.label ?? '').toString().trim();
   return {
     target: nc.target,
-    stableGroupId: (nc.stableGroupId ?? '').toString().trim() || null,
+    groupIdentityId: typeof nc.groupIdentityId === 'number' ? nc.groupIdentityId : null,
     comparator: 'GTE',
     thresholdSeconds: typeof nc.thresholdSeconds === 'number' ? nc.thresholdSeconds : null,
     label: label || null,
@@ -284,6 +291,7 @@ function conditionRowToInput(c: RuleConditionRow): ConditionInput {
   return {
     target: c.target,
     stableGroupId: c.stable_group_id,
+    groupIdentityId: c.group_identity_id,
     comparator: (c.comparator as 'GTE') || 'GTE',
     thresholdSeconds: c.threshold_seconds,
     label: c.label,
@@ -314,10 +322,8 @@ export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): 
     if (TIME_TARGETS.has(t) && !(typeof nc.thresholdSeconds === 'number' && nc.thresholdSeconds > 0))
       throw new GoalPracticeError('時間（分）は1分以上で指定してください');
     if (t === 'GROUP') {
-      const sg = (nc.stableGroupId ?? '').trim();
-      if (!sg) throw new GoalPracticeError('グループを選択してください');
-      const exists = db.prepare('SELECT 1 FROM tab_group WHERE stable_group_id = ?').get(sg);
-      if (!exists) throw new GoalPracticeError('選択したグループが存在しません');
+      if (typeof nc.groupIdentityId !== 'number') throw new GoalPracticeError('グループを選択してください');
+      if (!getIdentity(db, nc.groupIdentityId)) throw new GoalPracticeError('選択したグループが存在しません');
     }
     // TIMELINE はカテゴリ名、MANUAL_CHECK はチェック名として label 非空必須。
     if ((t === 'TIMELINE' || t === 'MANUAL_CHECK') && !(nc.label ?? '').trim())

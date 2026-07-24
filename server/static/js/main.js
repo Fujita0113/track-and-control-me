@@ -93,6 +93,21 @@ function initialScreen() {
   return (location.hash || '').startsWith('#timeline') ? 'timeline' : 'today';
 }
 
+/**
+ * 拡張機能が最小要求版未満のビルドで動いていれば警告帯を出す（design D7-4）。
+ * 「修正済みなのに反映されていない」を無警告で見逃さないための可視化（spec: extension-stable-group-id）。
+ */
+function showExtensionWarningIfNeeded() {
+  const banner = document.getElementById('ext-warning-banner');
+  if (!banner) return;
+  if (!state.config || !state.config.extensionOutdated) {
+    banner.hidden = true;
+    return;
+  }
+  banner.textContent = '拡張機能が古いビルドです。再読み込みしてください（edge://extensions で再読み込み）。';
+  banner.hidden = false;
+}
+
 async function boot() {
   bootNav();
   // デモの日付操作・開始/終了は現在画面の再描画を要求する。
@@ -102,6 +117,7 @@ async function boot() {
   try {
     await loadState();
     meta.textContent = `作業日 ${state.today} · tz ${state.config.tz}`;
+    showExtensionWarningIfNeeded();
     await activate(initialScreen());
     // 初回オンボーディング(ルール皆無時)。画面表示後に判定する。
     await maybeShowOnboarding();

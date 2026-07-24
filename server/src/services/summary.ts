@@ -4,27 +4,7 @@ import { getConfig } from '../db/index.js';
 import { totalWorkSecondsForDay, countsTowardTotal } from './categories.js';
 import { getEvaluation, evaluateDay, type EvalResult } from '../rules/evaluate.js';
 import { dayKeyFor, nextDayKey } from '../aggregation/index.js';
-
-/**
- * 内訳の合成キー区切り（US, 0x1f）。表示名・色に現れ得ない制御文字を採用し、
- * `(name,color)` の identity 衝突を避ける（design.md D2）。
- */
-export const SNAP_KEY_SEP = '\x1f';
-
-/**
- * 記録時点スナップショットの identity キー（design D1）。
- * 未グループ（`stable_group_id = UNGROUPED_KEY`）は名前/色に依らず単一キー `UNGROUPED_KEY` へ集約。
- * それ以外は `name + SNAP_KEY_SEP + (color ?? '')`。
- * `snapshotGroups`（SQL 側）と `getDayAllocation`（配分バー）はこの規則を共有し二重定義しない。
- */
-export function snapshotIdentityKey(stableGroupId: string, name: string, color: string | null): string {
-  return stableGroupId === UNGROUPED_KEY ? UNGROUPED_KEY : name + SNAP_KEY_SEP + (color ?? '');
-}
-
-/** スナップショット identity の表示名（未グループは固定ラベル）。 */
-export function snapshotDisplayName(sid: string, name: string): string {
-  return sid === UNGROUPED_KEY ? 'その他（未グループ）' : name;
-}
+import { loadIdentityResolver } from './group-identity.js';
 
 interface SnapshotGroupRow {
   sid: string;
@@ -34,27 +14,36 @@ interface SnapshotGroupRow {
 }
 
 /**
- * 当日 `session` を記録時点スナップショット `(tab_group_name_snapshot, group_color_snapshot)` 単位で
- * 集計し、内訳行（ms 降順）を返す（design.md D1/D2、spec: today-group-breakdown）。
- * 未グループ（`stable_group_id = UNGROUPED_KEY`）は名前/色に依らず単一行 `UNGROUPED_KEY` へ集約する。
+ * 当日 `session` を記録時点スナップショット `(tab_group_name_snapshot, group_color_snapshot)` を
+ * identity（`group-identity-registry`）へ解決した単位で集計し、内訳行（ms 降順）を返す
+ * （design.md D1/D5、spec: today-group-breakdown）。表示名・色は identity の**現在値**（改名後）。
+ * 未グループ（`stable_group_id = UNGROUPED_KEY`）は名前/色に依らず単一行へ集約する。
  */
 function snapshotGroups(db: DB, dayKey: string): SnapshotGroupRow[] {
-  // sid の識別規則は `snapshotIdentityKey`（TS 側）と同一でなければならない（design D1・二重定義禁止）:
-  //   UNGROUPED_KEY → UNGROUPED_KEY / それ以外 → name + SNAP_KEY_SEP + (color ?? '')。
-  return db
+  const raw = db
     .prepare(
-      `SELECT
-         CASE WHEN stable_group_id = @ung THEN @ung
-              ELSE tab_group_name_snapshot || @sep || COALESCE(group_color_snapshot, '') END AS sid,
-         tab_group_name_snapshot AS name,
-         group_color_snapshot AS color,
-         SUM(credited_ms) AS ms
-       FROM session
-       WHERE day_key = @day
-       GROUP BY sid
-       ORDER BY ms DESC`,
+      `SELECT tab_group_name_snapshot AS name, group_color_snapshot AS color,
+              (stable_group_id = @ung) AS is_ungrouped, SUM(credited_ms) AS ms
+         FROM session
+        WHERE day_key = @day
+        GROUP BY is_ungrouped, tab_group_name_snapshot, COALESCE(group_color_snapshot, '')`,
     )
-    .all({ ung: UNGROUPED_KEY, sep: SNAP_KEY_SEP, day: dayKey }) as SnapshotGroupRow[];
+    .all({ ung: UNGROUPED_KEY, day: dayKey }) as {
+    name: string;
+    color: string | null;
+    is_ungrouped: number;
+    ms: number;
+  }[];
+
+  const resolver = loadIdentityResolver(db);
+  const merged = new Map<string, SnapshotGroupRow>();
+  for (const r of raw) {
+    const resolved = resolver.resolve(r.name, r.color, r.is_ungrouped ? UNGROUPED_KEY : 'sg');
+    const prev = merged.get(resolved.key);
+    if (prev) prev.ms += r.ms;
+    else merged.set(resolved.key, { sid: resolved.key, name: resolved.name, color: resolved.color, ms: r.ms });
+  }
+  return [...merged.values()].sort((a, b) => b.ms - a.ms);
 }
 
 /**
@@ -93,11 +82,12 @@ export function todayKey(db: DB, nowMs = Date.now()): string {
 
 export function daySummary(db: DB, dayKey: string): DaySummary {
   const cfg = getConfig(db);
-  // 内訳は権威集計(daily_totals)ではなく、記録時点スナップショット(session)由来で分類する（design.md D1）。
+  // 内訳は権威集計(daily_totals)ではなく、記録時点スナップショットを identity へ解決した単位で
+  // 分類する（design.md D1/D5）。表示名・色は identity の現在値（snapshotGroups が解決済み）。
   const groups: GroupTotal[] = snapshotGroups(db, dayKey).map((r) => ({
     stableGroupId: r.sid,
-    name: snapshotDisplayName(r.sid, r.name),
-    color: r.sid === UNGROUPED_KEY ? null : r.color,
+    name: r.name,
+    color: r.color,
     ms: r.ms,
     seconds: r.ms / 1000,
     countsTowardTotal: countsTowardTotal(r.sid, cfg),
@@ -130,11 +120,11 @@ export function rangeSummary(db: DB, from: string, to: string): RangeDay[] {
   let cur = from;
   let guard = 0;
   while (cur <= to && guard++ < 3660) {
-    // 内訳（棒グラフ系列）はスナップショット identity 由来（design.md D1）。系列 key＝合成キー。
+    // 内訳（棒グラフ系列）は identity 由来（design.md D1/D5）。系列 key＝identity キー・現在名で連続表示。
     const groups = snapshotGroups(db, cur).map((r) => ({
       stableGroupId: r.sid,
-      name: snapshotDisplayName(r.sid, r.name),
-      color: r.sid === UNGROUPED_KEY ? null : r.color,
+      name: r.name,
+      color: r.color,
       seconds: r.ms / 1000,
     }));
     // 総作業時間 KPI は権威集計(daily_totals)源泉のまま（当日サマリと同一規則。未グループ除外を尊重）。

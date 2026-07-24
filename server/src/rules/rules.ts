@@ -88,6 +88,8 @@ export interface RuleConditionRow {
   rule_set_id: number;
   target: RuleTarget;
   stable_group_id: string | null;
+  /** グループ identity 参照（design.md D1・spec: group-rule-identity）。新規条件は必ずこれを持つ。 */
+  group_identity_id: number | null;
   comparator: string;
   threshold_seconds: number | null;
   label: string | null;
@@ -98,7 +100,10 @@ export interface RuleConditionRow {
 
 export interface ConditionInput {
   target: RuleTarget;
+  /** @deprecated identity 参照（groupIdentityId）に置き換え済み。旧 group:<uuid> 条件の読み戻し専用。 */
   stableGroupId?: string | null;
+  /** グループ identity の内部 ID。新規 GROUP 条件は必ずこれを指定する（stableGroupId は使わない）。 */
+  groupIdentityId?: number | null;
   comparator?: 'GTE';
   thresholdSeconds?: number | null;
   label?: string | null;
@@ -151,7 +156,9 @@ export function deriveConditionKey(c: ConditionInput): string {
     case 'TOTAL_WORK':
       return 'total_work';
     case 'GROUP':
-      return `group:${c.stableGroupId ?? 'unknown'}`;
+      // 新規・編集経路は必ず identity 参照（groupIdentityId）を書く（spec: group-rule-identity）。
+      // stableGroupId は旧 group:<uuid> 条件の読み戻し（後方互換）専用。
+      return c.groupIdentityId != null ? `group:${c.groupIdentityId}` : `group:${c.stableGroupId ?? 'unknown'}`;
     case 'MANUAL_CHECK':
       // ラベル（チェックのテキスト）を安定キーに用いる（TIMELINE の timeline:<ラベル> と対称）。
       // 並び順に依存しないため manual:<index> の弱同一性を解消する（spec: manual-check-stable-key）。
@@ -189,6 +196,7 @@ function contentHash(combinator: string, conditions: ConditionInput[]): string {
     conditions: conditions.map((c) => ({
       target: c.target,
       stableGroupId: c.stableGroupId ?? null,
+      groupIdentityId: c.groupIdentityId ?? null,
       comparator: c.comparator ?? 'GTE',
       thresholdSeconds: c.thresholdSeconds ?? null,
       label: c.label ?? null,
@@ -363,7 +371,8 @@ function sameConditionAttrs(bc: RuleConditionRow, c: ConditionInput): boolean {
     (bc.threshold_seconds ?? null) === (c.thresholdSeconds ?? null) &&
     (bc.label ?? null) === (c.label ?? null) &&
     (bc.signal_key ?? null) === (c.signalKey ?? null) &&
-    (bc.stable_group_id ?? null) === (c.stableGroupId ?? null)
+    (bc.stable_group_id ?? null) === (c.stableGroupId ?? null) &&
+    (bc.group_identity_id ?? null) === (c.groupIdentityId ?? null)
   );
 }
 
@@ -423,8 +432,8 @@ function upsertTodayRuleSet(
 
   const insCond = db.prepare(
     `INSERT INTO rule_condition
-       (rule_set_id, target, stable_group_id, comparator, threshold_seconds, label, signal_key, condition_key, sort_order)
-     VALUES (@set, @target, @group, @comparator, @threshold, @label, @signal, @key, @sort)`,
+       (rule_set_id, target, stable_group_id, group_identity_id, comparator, threshold_seconds, label, signal_key, condition_key, sort_order)
+     VALUES (@set, @target, @group, @groupIdentityId, @comparator, @threshold, @label, @signal, @key, @sort)`,
   );
 
   const tx = db.transaction(() => {
@@ -445,6 +454,7 @@ function upsertTodayRuleSet(
           set: rs!.id,
           target: bc.target,
           group: bc.stable_group_id,
+          groupIdentityId: bc.group_identity_id,
           comparator: bc.comparator || 'GTE',
           threshold: bc.threshold_seconds,
           label: bc.label,
@@ -473,6 +483,7 @@ function upsertTodayRuleSet(
         set: rs!.id,
         target: x.c.target,
         group: x.c.stableGroupId ?? null,
+        groupIdentityId: x.c.groupIdentityId ?? null,
         comparator: x.c.comparator ?? 'GTE',
         threshold: x.c.thresholdSeconds ?? null,
         label: x.c.label ?? null,
@@ -546,14 +557,15 @@ export function upsertFutureRuleSet(
     db.prepare('DELETE FROM rule_condition WHERE rule_set_id = ?').run(rs.id);
     const ins = db.prepare(
       `INSERT INTO rule_condition
-        (rule_set_id, target, stable_group_id, comparator, threshold_seconds, label, signal_key, condition_key, sort_order)
-       VALUES (@set, @target, @group, @comparator, @threshold, @label, @signal, @key, @sort)`,
+        (rule_set_id, target, stable_group_id, group_identity_id, comparator, threshold_seconds, label, signal_key, condition_key, sort_order)
+       VALUES (@set, @target, @group, @groupIdentityId, @comparator, @threshold, @label, @signal, @key, @sort)`,
     );
     input.conditions.forEach((c, i) => {
       ins.run({
         set: rs!.id,
         target: c.target,
         group: c.stableGroupId ?? null,
+        groupIdentityId: c.groupIdentityId ?? null,
         comparator: c.comparator ?? 'GTE',
         threshold: c.thresholdSeconds ?? null,
         label: c.label ?? null,

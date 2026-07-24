@@ -3,6 +3,9 @@ import { ClientMessageSchema, WS_PATH, type ServerMessage } from '@track/contrac
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { storeSample } from '../services/ingest.js';
+import { renameIdentity } from '../services/group-identity.js';
+import { todayKey } from '../services/summary.js';
+import { evaluateDay } from '../rules/evaluate.js';
 
 /**
  * `/ingest` WebSocket ルート（design.md D2）。
@@ -65,6 +68,19 @@ export function registerIngestRoute(app: FastifyInstance, deps: IngestDeps): voi
 
       if (parsed.type === 'ping') {
         send(socket, { type: 'pong', serverTime: Date.now() });
+        return;
+      }
+
+      if (parsed.type === 'groupRename') {
+        // 改名の適用（design D3/D4・spec: tab-group-rename-tracking）。1トランザクションで
+        // 現在名更新・旧名の別名保持・新名の別名登録・必要なら統合・実践ラベルスナップショット更新まで行う。
+        try {
+          renameIdentity(deps.db, parsed.from, parsed.to, parsed.at);
+          // 当日の評価キャッシュを直ちに更新する（次回定期更新まで最大30秒古い名前が残るのを避ける）。
+          evaluateDay(deps.db, todayKey(deps.db));
+        } catch (err) {
+          deps.log?.(`ingest: 改名の適用に失敗 ${(err as Error).message}`);
+        }
         return;
       }
 

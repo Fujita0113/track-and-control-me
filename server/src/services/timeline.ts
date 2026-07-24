@@ -3,7 +3,7 @@ import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { boundaryStartOfDay, nextDayKey } from '../aggregation/index.js';
 import { recordCategoryUse } from './manual-categories.js';
-import { snapshotIdentityKey, snapshotDisplayName } from './summary.js';
+import { loadIdentityResolver, type IdentityResolver } from './group-identity.js';
 
 /**
  * 行動記録タイムライン（spec: activity-timeline / tasks 6.3–6.5, 6.7）。
@@ -80,8 +80,8 @@ interface SessionRow {
   credited_ms: number;
 }
 
-const idOf = (s: SessionRow): string =>
-  snapshotIdentityKey(s.stable_group_id, s.tab_group_name_snapshot, s.group_color_snapshot);
+const idOf = (resolver: IdentityResolver, s: SessionRow) =>
+  resolver.resolve(s.tab_group_name_snapshot, s.group_color_snapshot, s.stable_group_id);
 
 /**
  * セッションの `coactive_group_keys`（同時オープンだった他グループの sid 集合）を
@@ -90,10 +90,11 @@ const idOf = (s: SessionRow): string =>
  * フォールバックする。自 identity と重複は除外する。
  */
 function resolveCoactive(
+  resolver: IdentityResolver,
   s: SessionRow,
   bySid: Map<string, SessionRow[]>,
 ): { key: string; name: string }[] {
-  const selfIdentity = idOf(s);
+  const selfIdentity = idOf(resolver, s).key;
   const out: { key: string; name: string }[] = [];
   const seen = new Set<string>();
   for (const k of JSON.parse(s.coactive_group_keys) as string[]) {
@@ -101,14 +102,15 @@ function resolveCoactive(
     let name: string;
     if (k === UNGROUPED_KEY) {
       idKey = UNGROUPED_KEY;
-      name = snapshotDisplayName(UNGROUPED_KEY, '');
+      name = 'その他（未グループ）';
     } else {
       const rows = bySid.get(k) ?? [];
       const r =
         rows.find((row) => row.started_at < s.ended_at && row.ended_at > s.started_at) ?? rows[0];
       if (r) {
-        idKey = idOf(r);
-        name = snapshotDisplayName(idKey, r.tab_group_name_snapshot);
+        const resolved = idOf(resolver, r);
+        idKey = resolved.key;
+        name = resolved.name;
       } else {
         idKey = k;
         name = k;
@@ -122,10 +124,11 @@ function resolveCoactive(
 }
 
 /**
- * 記録時点スナップショット identity（名前＋色）単位で近接セッションを1ブロックへ coalesce。
- * identity が異なるセッションは決して同一ブロックへ入れない（issue #52）。
+ * identity（`group-identity-registry`・改名の別名解決込み）単位で近接セッションを1ブロックへ coalesce。
+ * identity が異なるセッションは決して同一ブロックへ入れない（issue #52）。改名をまたいだ区間は
+ * 同一 identity として結合され、ブロックのタイトル・色は identity の**現在値**になる（design D5）。
  */
-function coalesceSessions(sessions: SessionRow[], thresholdMs: number): AutoBlock[] {
+function coalesceSessions(resolver: IdentityResolver, sessions: SessionRow[], thresholdMs: number): AutoBlock[] {
   // 同時オープングループの表示名解決用の sid → セッション索引。
   const bySid = new Map<string, SessionRow[]>();
   for (const s of sessions) {
@@ -136,16 +139,18 @@ function coalesceSessions(sessions: SessionRow[], thresholdMs: number): AutoBloc
   // 束ねは identity 単位。
   const byIdentity = new Map<string, SessionRow[]>();
   for (const s of sessions) {
-    const arr = byIdentity.get(idOf(s)) ?? [];
+    const key = idOf(resolver, s).key;
+    const arr = byIdentity.get(key) ?? [];
     arr.push(s);
-    byIdentity.set(idOf(s), arr);
+    byIdentity.set(key, arr);
   }
   const blocks: (AutoBlock & { _coSeen?: Set<string> })[] = [];
   for (const [identityKey, arr] of byIdentity) {
     arr.sort((a, b) => a.started_at - b.started_at);
     let cur: (AutoBlock & { _coSeen: Set<string> }) | null = null;
     for (const s of arr) {
-      const rc = resolveCoactive(s, bySid);
+      const resolved = idOf(resolver, s);
+      const rc = resolveCoactive(resolver, s, bySid);
       if (cur && s.started_at - cur.endAt <= thresholdMs) {
         cur.endAt = Math.max(cur.endAt, s.ended_at);
         cur.creditedMs += s.credited_ms;
@@ -161,8 +166,8 @@ function coalesceSessions(sessions: SessionRow[], thresholdMs: number): AutoBloc
           kind: 'AUTO',
           identityKey,
           stableGroupId: s.stable_group_id,
-          title: snapshotDisplayName(identityKey, s.tab_group_name_snapshot),
-          color: identityKey === UNGROUPED_KEY ? null : s.group_color_snapshot,
+          title: resolved.name,
+          color: identityKey === UNGROUPED_KEY ? null : resolved.color,
           startAt: s.started_at,
           endAt: s.ended_at,
           coactiveGroupKeys: rc.map((c) => c.key),
@@ -219,7 +224,8 @@ export function getTimeline(db: DB, dayKey: string, nowMs = Date.now()): Timelin
   const sessions = db
     .prepare('SELECT * FROM session WHERE day_key = ? ORDER BY started_at')
     .all(dayKey) as SessionRow[];
-  const auto = coalesceSessions(sessions, cfg.session_coalesce_seconds * 1000);
+  const resolver = loadIdentityResolver(db);
+  const auto = coalesceSessions(resolver, sessions, cfg.session_coalesce_seconds * 1000);
 
   const manualRows = db
     .prepare("SELECT * FROM activity_log_entry WHERE day_key = ? AND entry_type = 'MANUAL' ORDER BY start_at")

@@ -6,6 +6,7 @@ import { listActiveChecksOn } from '../services/goal-plan-check.js';
 import { checkConditionKey } from '../services/goal-check-state.js';
 import { getEffectiveRuleSet, type RuleTarget } from './rules.js';
 import { getCheck } from './checks.js';
+import { listAliases, resolveGroupDisplay } from '../services/group-identity.js';
 
 /**
  * 当日集計に対するルール評価 & latch（design.md D7 / task 4.5）。
@@ -32,6 +33,9 @@ export interface ConditionResult {
   thresholdSeconds?: number | null;
   label?: string | null;
   stableGroupId?: string | null;
+  /** GROUP のとき identity の現在名/色（要再設定ヒント込み・design.md D8・task 2.5）。UI が UUID を触らずに描画できる。 */
+  groupName?: string | null;
+  groupColor?: string | null;
   signalKey?: string | null;
   /** target='CHECK' のとき、由来の Check / Plan（今日タブが不足条件行から直接答えるために使う）。 */
   checkId?: number;
@@ -123,18 +127,41 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
     for (const c of eff.conditions) {
       let met = false;
       let actualSeconds: number | undefined;
+      let groupDisplay: { name: string; color: string | null; needsReset: boolean } | undefined;
       switch (c.target) {
         case 'TOTAL_WORK':
           actualSeconds = totalWorkSeconds;
           met = actualSeconds >= (c.threshold_seconds ?? 0);
           break;
         case 'GROUP': {
-          const row = db
-            .prepare(
-              'SELECT COALESCE(SUM(ms), 0) AS ms FROM daily_totals_snapshot WHERE day_key = ? AND stable_group_id = ?',
-            )
-            .get(dayKey, c.stable_group_id) as { ms: number };
-          actualSeconds = Math.floor(row.ms / 1000);
+          groupDisplay = resolveGroupDisplay(db, c);
+          if (c.group_identity_id != null) {
+            // identity の別名すべてに一致する session.credited_ms 合算（design D2）。
+            // 内訳(today-group-breakdown)と同一源泉のため、定義上ゲートの進捗と一致する。
+            const aliases = listAliases(db, c.group_identity_id);
+            if (aliases.length === 0) {
+              actualSeconds = 0;
+            } else {
+              const placeholders = aliases.map(() => '(?, ?)').join(', ');
+              const params = aliases.flatMap((a) => [a.name, a.color ?? '']);
+              const row = db
+                .prepare(
+                  `SELECT COALESCE(SUM(credited_ms), 0) AS ms FROM session
+                   WHERE day_key = ? AND (tab_group_name_snapshot, COALESCE(group_color_snapshot, '')) IN (${placeholders})`,
+                )
+                .get(dayKey, ...params) as { ms: number };
+              actualSeconds = Math.floor(row.ms / 1000);
+            }
+          } else {
+            // 後方互換: identity 参照を持たない旧 group:<stableGroupId> 条件は従来経路のまま評価する
+            // （過去の判定を変えない・spec: group-rule-identity）。
+            const row = db
+              .prepare(
+                'SELECT COALESCE(SUM(ms), 0) AS ms FROM daily_totals_snapshot WHERE day_key = ? AND stable_group_id = ?',
+              )
+              .get(dayKey, c.stable_group_id) as { ms: number };
+            actualSeconds = Math.floor(row.ms / 1000);
+          }
           met = actualSeconds >= (c.threshold_seconds ?? 0);
           break;
         }
@@ -169,6 +196,8 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
         thresholdSeconds: c.threshold_seconds,
         label: c.label,
         stableGroupId: c.stable_group_id,
+        groupName: groupDisplay ? (groupDisplay.needsReset ? `${groupDisplay.name}（要再設定）` : groupDisplay.name) : undefined,
+        groupColor: groupDisplay?.color,
         signalKey: c.signal_key,
       });
     }

@@ -2,6 +2,8 @@ import { DEFAULTS, WS_PATH } from '@track/contract';
 import type {
   ActivitySample,
   ClientMessage,
+  GroupColor,
+  GroupRenameMessage,
   HelloMessage,
   PingMessage,
   SampleMessage,
@@ -101,6 +103,23 @@ export class WsClient {
   /** サンプルを送る。welcome 済みかつ OPEN なら即送信、そうでなければキューへ退避。 */
   async sendSample(sample: ActivitySample): Promise<void> {
     const message: SampleMessage = { type: 'sample', sample };
+    await this.sendOrQueue(message);
+  }
+
+  /**
+   * タブグループの改名イベントを送る（design D3・spec: tab-group-rename-tracking）。
+   * `groups.ts` 側で静止5秒デバウンス済みの確定1件のみが呼ぶ。`ActivitySample` とは別メッセージ。
+   */
+  async sendGroupRename(
+    from: { name: string; color: GroupColor },
+    to: { name: string; color: GroupColor },
+  ): Promise<void> {
+    const message: GroupRenameMessage = { type: 'groupRename', from, to, at: Date.now() };
+    await this.sendOrQueue(message);
+  }
+
+  /** welcome 済み+OPEN なら即送信、そうでなければ切断中キューへ退避（サンプル/改名で共有）。 */
+  private async sendOrQueue(message: ClientMessage): Promise<void> {
     const serialized = JSON.stringify(message);
     if (this.welcomed && this.socket && this.socket.readyState === WebSocket.OPEN) {
       try {

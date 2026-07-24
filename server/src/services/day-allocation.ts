@@ -1,7 +1,6 @@
-import { UNGROUPED_KEY } from '@track/contract';
 import type { DB } from '../db/index.js';
 import { getTimeline } from './timeline.js';
-import { todayKey, snapshotIdentityKey, snapshotDisplayName } from './summary.js';
+import { todayKey } from './summary.js';
 
 /**
  * 一日の配分（day allocation）集計（spec: reflection-day-overview / design D2・D3）。
@@ -42,20 +41,18 @@ export function getDayAllocation(db: DB, dayKey: string, nowMs = Date.now()): Da
   const tl = getTimeline(db, dayKey, nowMs);
   const isToday = todayKey(db, nowMs) === dayKey;
 
-  // WORK スライス: 名前＋色 identity 別に credited_ms を合算（today-group-breakdown と共有・design D1）。
-  // ラベル・色は identity 内の最新（startAt 最大）記録時点スナップショットを採用。
-  // 未グループ identity は表示名「その他（未グループ）」・色 null に揃える。
+  // WORK スライス: identity 別に credited_ms を合算（today-group-breakdown と共有・design D1/D5）。
+  // AutoBlock は timeline.ts で既に identity（改名の別名解決込み）へ揃え済みなので、
+  // その identityKey/title/color をそのまま束ね単位に使う（二重解決しない）。
   const workMap = new Map<string, { label: string; color: string | null; ms: number; last: number }>();
   for (const b of tl.auto) {
-    const identity = snapshotIdentityKey(b.stableGroupId, b.title, b.color);
-    const label = snapshotDisplayName(identity, b.title);
-    const color = identity === UNGROUPED_KEY ? null : b.color;
+    const identity = b.identityKey;
     const prev = workMap.get(identity);
     if (prev) {
       prev.ms += b.creditedMs;
-      if (b.startAt >= prev.last) { prev.label = label; prev.color = color; prev.last = b.startAt; }
+      if (b.startAt >= prev.last) { prev.label = b.title; prev.color = b.color; prev.last = b.startAt; }
     } else {
-      workMap.set(identity, { label, color, ms: b.creditedMs, last: b.startAt });
+      workMap.set(identity, { label: b.title, color: b.color, ms: b.creditedMs, last: b.startAt });
     }
   }
 

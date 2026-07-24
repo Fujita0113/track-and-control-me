@@ -39,6 +39,8 @@ export const api = {
 
   // グループ
   getGroups: () => req('GET', '/api/groups'),
+  // 直近実測グループ（identity 単位・合計時間降順・spec: group-identity-registry）。
+  getGroupsRecent: (days) => req('GET', `/api/groups/recent${days ? `?${q({ days })}` : ''}`),
 
   // 手動カテゴリ（記録ポップオーバーのチップ; 直近使用順）
   getCategories: () => req('GET', '/api/categories'),

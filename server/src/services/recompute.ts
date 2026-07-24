@@ -4,6 +4,7 @@ import { getConfig, toAggregationConfig } from '../db/index.js';
 import { aggregateSamples, type AggregationResult, type RawSample } from '../aggregation/index.js';
 import type { SplitOverride } from '../aggregation/aggregate.js';
 import { loadSplitOverrides } from './timeline.js';
+import { resolveIdentity } from './group-identity.js';
 
 /**
  * raw_sample → 集計 → セッション/日次合計/除外 の永続化（design.md D4/D6）。
@@ -118,6 +119,9 @@ function persist(db: DB, result: AggregationResult, onlyDays?: string[]): void {
     }
     for (const s of result.sessions) {
       if (!target(s.dayKey)) continue;
+      // セッション確定時に記録時点スナップショットを identity へ解決する（design.md D1・task 1.6）。
+      // 未グループ・空名は resolveIdentity 側で identity を作らない。
+      resolveIdentity(db, s.title, s.color, s.stableGroupId, s.endMs);
       // category_key_snapshot は dormant（カテゴリ層撤廃）。既定値のみ保持。
       const cat = 'uncategorized';
       insSession.run({

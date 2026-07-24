@@ -7,7 +7,9 @@ TBD - created by syncing change goal-inline-rule-timeline-highlight. Update Purp
 
 ### Requirement: 目標作成時に新規条件を作成して採用できる
 
-目標作成は、既存条件の採用に加えて、その場で新規ルール条件を作成し同時に採用 SHALL できる。対応ターゲットは今日タブの条件エディタと同等の**全5ターゲット（`TOTAL_WORK` / `GROUP` / `TIMELINE` / `MANUAL_CHECK` / `PLANNING`）**とする。各ターゲットの新規条件は次を持つ: `TOTAL_WORK` は `thresholdSeconds`（> 0）、`GROUP` は既存グループの `stableGroupId` と `thresholdSeconds`（> 0）、`TIMELINE` はカテゴリ名 `label`（非空）と `thresholdSeconds`（> 0）、`MANUAL_CHECK` はチェック名 `label`（非空・閾値なし）、`PLANNING` は `signalKey`。新規条件は**目標の開始日（今日開始なら当日ルール・明日開始なら翌日ルール）の実効ルールセットへ追記**したうえで、そのターゲットに応じた `condition_key`（`total_work` / `group:<stableGroupId>` / `timeline:<ラベル>` / `manual:<ラベル>` / `planning:<signalKey>`）を採用 SHALL する。今日開始で当日ルールへ追記する場合は、`same-day-rule-additions` の当日追加経路（`DRAFT_TODAY`・baseline 保存）で追記 SHALL する。作成と採用は一体の操作として扱い、途中で失敗（凍結・ジャンル固定・採用不整合・バリデーション）した場合は目標も条件も作成してはならない（MUST NOT）。追加しようとした条件の `condition_key` が開始日の実効ルールに既存の場合（`TOTAL_WORK` / `PLANNING` の singleton や同名の `GROUP` / `TIMELINE` / `MANUAL_CHECK`）は、重複追記せず既存条件の採用へ寄せる SHALL。
+目標作成は、既存条件の採用に加えて、その場で新規ルール条件を作成し同時に採用 SHALL できる。対応ターゲットは今日タブの条件エディタと同等の**全5ターゲット（`TOTAL_WORK` / `GROUP` / `TIMELINE` / `MANUAL_CHECK` / `PLANNING`）**とする。各ターゲットの新規条件は次を持つ: `TOTAL_WORK` は `thresholdSeconds`（> 0）、`GROUP` は**グループ identity**（直近使用グループの一覧から選択した identity ID）と `thresholdSeconds`（> 0）、`TIMELINE` はカテゴリ名 `label`（非空）と `thresholdSeconds`（> 0）、`MANUAL_CHECK` はチェック名 `label`（非空・閾値なし）、`PLANNING` は `signalKey`。新規条件は**目標の開始日（今日開始なら当日ルール・明日開始なら翌日ルール）の実効ルールセットへ追記**したうえで、そのターゲットに応じた `condition_key`（`total_work` / `group:<identityId>` / `timeline:<ラベル>` / `manual:<ラベル>` / `planning:<signalKey>`）を採用 SHALL する。今日開始で当日ルールへ追記する場合は、`same-day-rule-additions` の当日追加経路（`DRAFT_TODAY`・baseline 保存）で追記 SHALL する。作成と採用は一体の操作として扱い、途中で失敗（凍結・ジャンル固定・採用不整合・バリデーション）した場合は目標も条件も作成してはならない（MUST NOT）。追加しようとした条件の `condition_key` が開始日の実効ルールに既存の場合（`TOTAL_WORK` / `PLANNING` の singleton や同名の `GROUP` / `TIMELINE` / `MANUAL_CHECK`）は、重複追記せず既存条件の採用へ寄せる SHALL。
+
+`GROUP` のグループ選択肢は、直近に実測された identity の一覧（`group-identity-registry`）から提示 SHALL し、`tab_group` テーブルの行や UUID 文字列を提示してはならない（MUST NOT）。
 
 #### Scenario: 明日開始でカテゴリ＋分数の TIMELINE 条件を作成して採用できる
 
@@ -26,8 +28,8 @@ TBD - created by syncing change goal-inline-rule-timeline-highlight. Update Purp
 
 #### Scenario: グループ作業（GROUP）をその場で作成して採用できる
 
-- **WHEN** 既存グループを選び、新規「そのグループ・2時間」の GROUP 条件を追加して目標を作成する
-- **THEN** 開始日ルールへ `target='GROUP'`・当該 `stable_group_id`・`threshold_seconds=7200`・`condition_key='group:<stableGroupId>'` が追記され、その `condition_key` が採用される
+- **WHEN** 直近使用グループの一覧から `競技プログラミング` を選び、新規「そのグループ・2時間」の GROUP 条件を追加して目標を作成する
+- **THEN** 開始日ルールへ `target='GROUP'`・当該 identity 参照・`threshold_seconds=7200`・`condition_key='group:<identityId>'` が追記され、その `condition_key` が採用される
 
 #### Scenario: 手動チェック（MANUAL_CHECK）をその場で作成して採用できる
 

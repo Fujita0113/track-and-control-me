@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Track & Control Me",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Edge タブグループ単位で作業時間を計測し、ローカル backend へハートビートを送る MV3 拡張。",
   "minimum_chrome_version": "116",
   "permissions": ["tabs", "tabGroups", "idle", "alarms", "storage", "notifications"],
