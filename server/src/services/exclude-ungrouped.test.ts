@@ -5,7 +5,7 @@ import { MIGRATIONS } from '../db/migrations.js';
 import { totalWorkMsForDay, totalWorkSecondsForDay } from './categories.js';
 import { daySummary, rangeSummary } from './summary.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { upsertFutureRuleSet } from '../rules/rules.js';
+import { createRule } from './rule-registry.js';
 import { evaluateDay } from '../rules/evaluate.js';
 
 /**
@@ -102,12 +102,7 @@ describe('5.3 ルール評価（TOTAL_WORK）へ一貫波及する', () => {
   const THRESHOLD_S = 120 * 60; // 120 分以上
 
   function seedRule(db: DB): void {
-    upsertFutureRuleSet(
-      db,
-      DAY,
-      { combinator: 'ALL', conditions: [{ target: 'TOTAL_WORK', thresholdSeconds: THRESHOLD_S }] },
-      NOW_BEFORE,
-    );
+    createRule(db, { target: 'TOTAL_WORK', thresholdSeconds: THRESHOLD_S, startDay: DAY, reason: 'r' }, NOW_BEFORE);
   }
 
   it('ON かつ未グループのみでは総作業時間条件が未達成（unmet）', () => {

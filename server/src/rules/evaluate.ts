@@ -1,76 +1,56 @@
 import type { DB } from '../db/index.js';
-import { CHECK_TARGET } from '@track/contract';
 import { totalWorkSecondsForDay } from '../services/categories.js';
 import { resolvePlanningSignal } from '../services/planning.js';
-import { listActiveChecksOn } from '../services/goal-plan-check.js';
-import { checkConditionKey } from '../services/goal-check-state.js';
-import { getEffectiveRuleSet, type RuleTarget } from './rules.js';
 import { getCheck } from './checks.js';
+import {
+  listActiveRules,
+  ruleConditionKey,
+  ruleSchedule,
+  isRuleMetOn,
+  rangeDayNumber,
+  rangeSpanDays,
+  type RuleRow,
+  type RuleTarget,
+  type RuleSchedule,
+} from '../services/rule-registry.js';
 import { listAliases, resolveGroupDisplay } from '../services/group-identity.js';
 
 /**
- * 当日集計に対するルール評価 & latch（design.md D7 / task 4.5）。
- * combinator=ALL（AND）。一度 first_met_at が刻まれたら以後 UNLOCKED を維持
- * （手動編集で総計が減っても relock しない）。
+ * 当日集計に対するルール評価 & latch（design.md D3・D4 / spec: editable-rule-registry・goal-check-gate）。
+ * 実効ルールは `rule` 行から `rule:<id>` 起点で解決する（凍結モデル・`daily_rule_set` は撤廃済み）。
+ * すべての実効ルールは **AND** で合成する（「採用」ジャンル・combinator の概念は撤廃・D3）。
+ * 一度 first_met_at が刻まれたら以後 UNLOCKED を維持（手動編集で総計が減っても relock しない）。
  *
- * 目標の Check は日次ルールセットとは別寿命のため、rule_condition には入れず、
- * ここで**合成条件**として AND 合流させる（goal-check-gate / design D4）。
+ * PHOTO/QUESTION（旧 Check）はもう合成条件ではなく第一級ルールとして同じ経路で合流する
+ * （`check:<checkId>` 名前空間は廃止・design D3・spec: goal-check-gate）。
  */
 
 export type UnlockStatus = 'LOCKED' | 'UNLOCKED';
 
-/**
- * 条件の種別。`CHECK` は rule_condition 由来ではない合成条件（Check の合流）で、
- * ルールとして編集できない＝ `RuleTarget` とは別枠に置く。
- */
-export type ConditionTarget = RuleTarget | typeof CHECK_TARGET;
-
 export interface ConditionResult {
+  /** 安定キー。当日以降は常に `rule:<id>`（過去の凍結行のみ legacy 形式がありうる）。 */
   conditionKey: string;
-  target: ConditionTarget;
+  ruleId: number;
+  target: RuleTarget;
   met: boolean;
   actualSeconds?: number;
   thresholdSeconds?: number | null;
   label?: string | null;
   stableGroupId?: string | null;
-  /** GROUP のとき identity の現在名/色（要再設定ヒント込み・design.md D8・task 2.5）。UI が UUID を触らずに描画できる。 */
+  /** GROUP のとき identity の現在名/色（要再設定ヒント込み・design.md D8）。UI が UUID を触らずに描画できる。 */
   groupName?: string | null;
   groupColor?: string | null;
   signalKey?: string | null;
-  /** target='CHECK' のとき、由来の Check / Plan（今日タブが不足条件行から直接答えるために使う）。 */
-  checkId?: number;
-  checkKind?: 'photo' | 'question';
-  checkSchedule?: 'single' | 'range';
-  /** 範囲Check のとき「N日中の何日目か」（1 始まり）。単発は null。 */
+  /** PHOTO/QUESTION のスケジュール（今日タブ・不足条件の表示に使う）。 */
+  schedule?: RuleSchedule;
+  /** 範囲ルールのとき「N日中の何日目か」（1始まり）。単発・永続は null。 */
   rangeDayNumber?: number | null;
   spanDays?: number | null;
-  startDayKey?: string;
-  planBody?: string;
+  startDay?: string;
+  endDay?: string | null;
+  /** このルールを追う目標（紐づく最初の1件・design D6）。無ければグローバル扱い。 */
   goalId?: number;
   goalName?: string;
-}
-
-/**
- * 対象日に有効な Check を合成条件へ写す（D4）。
- * `conditionKey='check:<id>'` は既存キー（total_work / group: / timeline: / manual: / planning:）と衝突しない。
- * `label` にキャプション／質問文を載せ、今日タブが不足条件としてそのまま表示できるようにする（5.2）。
- */
-function checkConditions(db: DB, dayKey: string): ConditionResult[] {
-  return listActiveChecksOn(db, dayKey).map((c) => ({
-    conditionKey: checkConditionKey(c.checkId),
-    target: CHECK_TARGET,
-    met: c.met,
-    label: c.label,
-    checkId: c.checkId,
-    checkKind: c.kind,
-    checkSchedule: c.schedule,
-    rangeDayNumber: c.rangeDayNumber,
-    spanDays: c.spanDays,
-    startDayKey: c.startDayKey,
-    planBody: c.planBody,
-    goalId: c.goalId,
-    goalName: c.goalName,
-  }));
 }
 
 export interface EvalResult {
@@ -95,6 +75,122 @@ interface UnlockRow {
   updated_at: number;
 }
 
+/** ルールに紐づく最初の目標（id 昇順・design D6）。無ければ undefined（グローバル扱い）。 */
+function primaryGoalForRule(db: DB, ruleId: number): { id: number; name: string } | undefined {
+  const row = db
+    .prepare(
+      `SELECT g.id AS id, g.name AS name FROM goal_rule gr JOIN goal g ON g.id = gr.goal_id
+        WHERE gr.rule_id = ? ORDER BY g.id LIMIT 1`,
+    )
+    .get(ruleId) as { id: number; name: string } | undefined;
+  return row;
+}
+
+function answerDayKeysFor(db: DB, ruleId: number): string[] {
+  return (
+    db.prepare('SELECT day_key FROM rule_answer WHERE rule_id = ?').all(ruleId) as { day_key: string }[]
+  ).map((r) => r.day_key);
+}
+
+function evaluateRule(db: DB, rule: RuleRow, dayKey: string, totalWorkSeconds: number): ConditionResult {
+  const conditionKey = ruleConditionKey(rule.id);
+  const schedule = ruleSchedule(rule.start_day, rule.end_day);
+  const goal = primaryGoalForRule(db, rule.id);
+  const base: ConditionResult = {
+    conditionKey,
+    ruleId: rule.id,
+    target: rule.target,
+    met: false,
+    label: rule.label,
+    signalKey: rule.signal_key,
+    schedule,
+    startDay: rule.start_day,
+    endDay: rule.end_day,
+    goalId: goal?.id,
+    goalName: goal?.name,
+  };
+
+  switch (rule.target) {
+    case 'TOTAL_WORK':
+      return {
+        ...base,
+        actualSeconds: totalWorkSeconds,
+        thresholdSeconds: rule.threshold_seconds,
+        met: totalWorkSeconds >= (rule.threshold_seconds ?? 0),
+      };
+    case 'GROUP': {
+      const groupDisplay = resolveGroupDisplay(db, rule);
+      let actualSeconds: number;
+      if (rule.group_identity_id != null) {
+        const aliases = listAliases(db, rule.group_identity_id);
+        if (aliases.length === 0) {
+          actualSeconds = 0;
+        } else {
+          const placeholders = aliases.map(() => '(?, ?)').join(', ');
+          const params = aliases.flatMap((a) => [a.name, a.color ?? '']);
+          const row = db
+            .prepare(
+              `SELECT COALESCE(SUM(credited_ms), 0) AS ms FROM session
+               WHERE day_key = ? AND (tab_group_name_snapshot, COALESCE(group_color_snapshot, '')) IN (${placeholders})`,
+            )
+            .get(dayKey, ...params) as { ms: number };
+          actualSeconds = Math.floor(row.ms / 1000);
+        }
+      } else {
+        // 後方互換: identity 参照を持たない旧 group:<stableGroupId> 条件は従来経路のまま評価する
+        // （過去の判定を変えない・spec: group-rule-identity）。
+        const row = db
+          .prepare(
+            'SELECT COALESCE(SUM(ms), 0) AS ms FROM daily_totals_snapshot WHERE day_key = ? AND stable_group_id = ?',
+          )
+          .get(dayKey, rule.stable_group_id) as { ms: number };
+        actualSeconds = Math.floor(row.ms / 1000);
+      }
+      return {
+        ...base,
+        actualSeconds,
+        thresholdSeconds: rule.threshold_seconds,
+        stableGroupId: rule.stable_group_id,
+        groupName: groupDisplay.needsReset ? `${groupDisplay.name}（要再設定）` : groupDisplay.name,
+        groupColor: groupDisplay.color,
+        met: actualSeconds >= (rule.threshold_seconds ?? 0),
+      };
+    }
+    case 'TIMELINE': {
+      // 持ち分 = (end_at - start_at) / n（同時記録は n=構成数で按分、単独記録は n=1 で区間長そのまま）。
+      const row = db
+        .prepare(
+          `SELECT COALESCE(SUM((end_at - start_at) * 1.0 / n), 0) AS ms
+           FROM activity_log_entry
+           WHERE day_key = ? AND entry_type = 'MANUAL' AND category_key = ?`,
+        )
+        .get(dayKey, rule.label) as { ms: number };
+      const actualSeconds = Math.floor(row.ms / 1000);
+      return {
+        ...base,
+        actualSeconds,
+        thresholdSeconds: rule.threshold_seconds,
+        met: actualSeconds >= (rule.threshold_seconds ?? 0),
+      };
+    }
+    case 'MANUAL_CHECK':
+      return { ...base, met: getCheck(db, dayKey, conditionKey) };
+    case 'PLANNING':
+      return { ...base, met: resolvePlanningSignal(db, dayKey, rule.signal_key) };
+    case 'PHOTO':
+    case 'QUESTION': {
+      const answerDayKeys = answerDayKeysFor(db, rule.id);
+      return {
+        ...base,
+        label: rule.target === 'PHOTO' ? rule.caption : rule.question_text,
+        met: isRuleMetOn(rule.target, schedule, answerDayKeys, dayKey),
+        rangeDayNumber: rangeDayNumber(rule.start_day, rule.end_day, dayKey),
+        spanDays: rangeSpanDays(rule.start_day, rule.end_day),
+      };
+    }
+  }
+}
+
 export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalResult {
   const prev = db
     .prepare('SELECT * FROM unlock_evaluation WHERE day_key = ?')
@@ -114,103 +210,11 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
     };
   }
 
-  const eff = getEffectiveRuleSet(db, dayKey, nowMs);
-  const perCondition: ConditionResult[] = [];
-  let conditionsMet: boolean;
-
-  if (!eff || eff.conditions.length === 0) {
-    // ルール未定義 → undefined_day_policy=LOCKED（達成不能）。
-    // Check は合流させても LOCKED は動かないが、今日タブが不足条件として描けるよう結果には載せる。
-    conditionsMet = false;
-  } else {
-    const totalWorkSeconds = totalWorkSecondsForDay(db, dayKey);
-    for (const c of eff.conditions) {
-      let met = false;
-      let actualSeconds: number | undefined;
-      let groupDisplay: { name: string; color: string | null; needsReset: boolean } | undefined;
-      switch (c.target) {
-        case 'TOTAL_WORK':
-          actualSeconds = totalWorkSeconds;
-          met = actualSeconds >= (c.threshold_seconds ?? 0);
-          break;
-        case 'GROUP': {
-          groupDisplay = resolveGroupDisplay(db, c);
-          if (c.group_identity_id != null) {
-            // identity の別名すべてに一致する session.credited_ms 合算（design D2）。
-            // 内訳(today-group-breakdown)と同一源泉のため、定義上ゲートの進捗と一致する。
-            const aliases = listAliases(db, c.group_identity_id);
-            if (aliases.length === 0) {
-              actualSeconds = 0;
-            } else {
-              const placeholders = aliases.map(() => '(?, ?)').join(', ');
-              const params = aliases.flatMap((a) => [a.name, a.color ?? '']);
-              const row = db
-                .prepare(
-                  `SELECT COALESCE(SUM(credited_ms), 0) AS ms FROM session
-                   WHERE day_key = ? AND (tab_group_name_snapshot, COALESCE(group_color_snapshot, '')) IN (${placeholders})`,
-                )
-                .get(dayKey, ...params) as { ms: number };
-              actualSeconds = Math.floor(row.ms / 1000);
-            }
-          } else {
-            // 後方互換: identity 参照を持たない旧 group:<stableGroupId> 条件は従来経路のまま評価する
-            // （過去の判定を変えない・spec: group-rule-identity）。
-            const row = db
-              .prepare(
-                'SELECT COALESCE(SUM(ms), 0) AS ms FROM daily_totals_snapshot WHERE day_key = ? AND stable_group_id = ?',
-              )
-              .get(dayKey, c.stable_group_id) as { ms: number };
-            actualSeconds = Math.floor(row.ms / 1000);
-          }
-          met = actualSeconds >= (c.threshold_seconds ?? 0);
-          break;
-        }
-        case 'TIMELINE': {
-          // 当日の MANUAL 記録のうち category_key が条件ラベルに一致するものの持ち分を合算。
-          // 持ち分 = (end_at - start_at) / n（同時記録は n=構成数で按分、単独記録は n=1 で区間長そのまま）。
-          // n は既定1のため既存・単独記録・過去データは結果不変。別ラベル・AUTO_SESSION は算入しない。
-          const row = db
-            .prepare(
-              `SELECT COALESCE(SUM((end_at - start_at) * 1.0 / n), 0) AS ms
-               FROM activity_log_entry
-               WHERE day_key = ? AND entry_type = 'MANUAL' AND category_key = ?`,
-            )
-            .get(dayKey, c.label) as { ms: number };
-          actualSeconds = Math.floor(row.ms / 1000);
-          met = actualSeconds >= (c.threshold_seconds ?? 0);
-          break;
-        }
-        case 'MANUAL_CHECK':
-          met = getCheck(db, dayKey, c.condition_key);
-          break;
-        case 'PLANNING':
-          // signal_key で評価シグナルを選択（null は tomorrow_planned＝後方互換）。
-          met = resolvePlanningSignal(db, dayKey, c.signal_key);
-          break;
-      }
-      perCondition.push({
-        conditionKey: c.condition_key,
-        target: c.target,
-        met,
-        actualSeconds,
-        thresholdSeconds: c.threshold_seconds,
-        label: c.label,
-        stableGroupId: c.stable_group_id,
-        groupName: groupDisplay ? (groupDisplay.needsReset ? `${groupDisplay.name}（要再設定）` : groupDisplay.name) : undefined,
-        groupColor: groupDisplay?.color,
-        signalKey: c.signal_key,
-      });
-    }
-    const combinator = eff.ruleSet.combinator;
-    conditionsMet =
-      combinator === 'ANY' ? perCondition.some((p) => p.met) : perCondition.every((p) => p.met);
-  }
-
-  // Check の合流は combinator に関わらず **AND**（合流は当日ゲートを厳しくする方向にのみ働く・D4）。
-  // ANY ルールで OR 合流させると Check が「他の条件で代替できる」ものになり、コミット装置として壊れる。
-  const checks = checkConditions(db, dayKey);
-  perCondition.push(...checks);
-  if (!checks.every((c) => c.met)) conditionsMet = false;
+  const activeRules = listActiveRules(db, dayKey);
+  const totalWorkSeconds = totalWorkSecondsForDay(db, dayKey);
+  const perCondition = activeRules.map((rule) => evaluateRule(db, rule, dayKey, totalWorkSeconds));
+  // 全ルール AND（採用・combinator の概念は撤廃・design D3）。実効ルールが皆無なら達成不能。
+  const conditionsMet = perCondition.length > 0 && perCondition.every((p) => p.met);
 
   // latch: first_met_at は一度刻まれたら保持。
   const priorFirstMet = prev?.first_met_at ?? null;
@@ -250,7 +254,7 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
     perCondition,
     firstMetAt,
     revealFired,
-    hasRuleSet: !!eff && eff.conditions.length > 0,
+    hasRuleSet: perCondition.length > 0,
     justUnlocked,
   };
 }

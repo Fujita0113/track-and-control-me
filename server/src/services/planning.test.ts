@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { upsertFutureRuleSet } from '../rules/rules.js';
+import { createRule } from './rule-registry.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { saveReflection } from './reflection.js';
 import { createTask } from './tasks.js';
@@ -28,19 +28,13 @@ let db: DB;
 beforeEach(() => {
   db = openDb(':memory:');
   // 当日ルール: 総作業 >= 1h ＆ PLANNING（翌日計画完了）。
-  upsertFutureRuleSet(
-    db,
-    DAY_TODAY,
-    {
-      combinator: 'ALL',
-      conditions: [
-        { target: 'TOTAL_WORK', thresholdSeconds: 3600 },
-        // signal_key 未設定（null）は後方互換で tomorrow_planned として評価される。
-        { target: 'PLANNING', signalKey: null, conditionKey: 'planning' },
-      ],
-    },
-    NOW_YESTERDAY,
-  );
+  createRule(db, { target: 'TOTAL_WORK', thresholdSeconds: 3600, startDay: DAY_TODAY, reason: 'r' }, NOW_YESTERDAY);
+  // signal_key 未設定（null）は後方互換で tomorrow_planned として評価される（既存データの再現のため
+  // rule-registry の新規作成バリデーションを経由せず直接 INSERT する）。
+  db.prepare(
+    `INSERT INTO rule (target, comparator, threshold_seconds, label, signal_key, start_day, end_day, status, created_at)
+     VALUES ('PLANNING', 'GTE', NULL, NULL, NULL, ?, NULL, 'active', ?)`,
+  ).run(DAY_TODAY, NOW_YESTERDAY);
   seedTotals(db, 'g-dev', 4000 * 1000); // 総作業 4000s >= 3600
 });
 
@@ -153,21 +147,14 @@ describe('resolvePlanningSignal（単独シグナル / signal_key 駆動）', ()
   });
 
   it('ゲート統合: signal_key=reflection_done は振り返りだけで達成しうる', () => {
-    // 別途、reflection_done 単独条件のルールを翌日発効で作り評価する。
-    upsertFutureRuleSet(
-      db,
-      DAY_TOMORROW,
-      {
-        combinator: 'ALL',
-        conditions: [{ target: 'PLANNING', signalKey: 'reflection_done', conditionKey: 'refl' }],
-      },
-      NOW_TODAY,
-    );
+    // 別途、reflection_done 単独条件のルールを翌日発効で作り評価する（beforeEach の signalKey=null
+    // ルールも同時に有効なため、signalKey で絞って読む）。
+    createRule(db, { target: 'PLANNING', signalKey: 'reflection_done', startDay: DAY_TOMORROW, reason: 'r' }, NOW_TODAY);
     const NOW_TMR = jst(2026, 7, 11, 12, 0);
     let r = evaluateDay(db, DAY_TOMORROW, NOW_TMR);
-    expect(r.perCondition.find((p) => p.target === 'PLANNING')!.met).toBe(false);
+    expect(r.perCondition.find((p) => p.signalKey === 'reflection_done')!.met).toBe(false);
     saveReflection(db, DAY_TOMORROW, '明日側の振り返り');
     r = evaluateDay(db, DAY_TOMORROW, NOW_TMR);
-    expect(r.perCondition.find((p) => p.target === 'PLANNING')!.met).toBe(true);
+    expect(r.perCondition.find((p) => p.signalKey === 'reflection_done')!.met).toBe(true);
   });
 });

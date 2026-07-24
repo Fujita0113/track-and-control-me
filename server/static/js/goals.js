@@ -4,11 +4,10 @@
 import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, toast, openModal, closeModal, emptyState, fmtHM, attachTooltip, ctrlEnterToSave } from './util.js';
-import { planningSignalLabel } from './targets.js';
-import { condEditorRow } from './rules.js';
+import { ruleNiceLabel } from './targets.js';
+import { buildRuleForm, ruleDisplayLabel, ruleScheduleText, ruleKindIcon, shortDay, promptReason } from './rule-form.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
-import { shortDay, checkWhenText } from './plan-check.js';
 import { shrinkImage, isImageFile } from './images.js';
 
 // デモ中は取得先を /api/demo/* + 仮想日付へ切替（通常モードは既存経路のまま）。
@@ -34,14 +33,6 @@ export function hide() {
 export async function show(root) {
   destroyCharts();
   await renderList(root);
-}
-
-// --- 実践ラベル（PLANNING は signal_key を日本語化）---------------------
-function niceLabel(target, conditionKey, fallback) {
-  if (target === 'PLANNING' && String(conditionKey).startsWith('planning:')) {
-    return planningSignalLabel(conditionKey.slice('planning:'.length));
-  }
-  return fallback || conditionKey;
 }
 
 // --- 一覧 -----------------------------------------------------------------
@@ -72,7 +63,7 @@ async function renderList(root) {
   if (!goals.length) {
     body.appendChild(emptyState(isDemo()
       ? 'サンプルを読み込めませんでした。設定タブで「サンプルをリセット」をお試しください。'
-      : 'まだ目標がありません。「＋ 新しい目標」から、開始日（今日／明日）の実効ルールの実践を採用して30日チャレンジを始められます。'));
+      : 'まだ目標がありません。「＋ 新しい目標」から、名前と一緒にその場でルール（守ること）を作って30日チャレンジを始められます。'));
     return;
   }
 
@@ -132,7 +123,7 @@ function goalCard(g, root) {
   card.appendChild(h('div', { class: 'period muted', text: `${g.startDay} 〜 ${g.endDay}` }));
 
   const chips = h('div', { class: 'gr-chips' });
-  for (const p of g.practices) chips.appendChild(h('span', { class: 'gr-chip', text: niceLabel(p.target, p.conditionKey, p.label) }));
+  for (const r of g.rules) chips.appendChild(h('span', { class: 'gr-chip', text: `${ruleKindIcon(r.target)} ${ruleDisplayLabel(r)}` }));
   card.appendChild(chips);
   return card;
 }
@@ -211,14 +202,14 @@ async function openCreateForm(onDone) {
   body.appendChild(purposeInp);
 
   // --- 開始日の選択（今日から／明日から・既定=今日から）------------------
-  // 今日開始は当日を Day1 として即「進行中」。採用候補は選んだ開始日の実効ルールから解決する。
+  // 今日開始は当日を Day1 として即「進行中」。
   let start = 'today';
   body.appendChild(h('label', { class: 'gr-flabel', text: '開始日' }));
   const startSeg = h('div', { class: 'gr-start-seg' });
-  const startBtns = [
+  [
     { v: 'today', label: '今日から' },
     { v: 'tomorrow', label: '明日から' },
-  ].map(({ v, label }) => {
+  ].forEach(({ v, label }) => {
     const b = h('button', { class: 'gr-start-btn', type: 'button', text: label });
     if (v === start) b.classList.add('on');
     b.addEventListener('click', () => {
@@ -226,78 +217,40 @@ async function openCreateForm(onDone) {
       start = v;
       for (const x of startSeg.children) x.classList.toggle('on', x === b);
       syncIntro();
-      loadCandidates();
     });
     startSeg.appendChild(b);
-    return b;
   });
   body.appendChild(startSeg);
   const syncIntro = () => {
     introEl.textContent = start === 'today'
-      ? '目標は今日から30日間の固定期間で始まり、当日を Day 1 として進行します。採用した実践は期間中ジャンル固定になります（当日に採用した条件は当日から固定・閾値の変更は理由つきで可能）。'
-      : '目標は明日から30日間の固定期間で始まります。採用した実践は期間中ジャンル固定になります（閾値の変更は理由つきで可能）。';
+      ? '目標は今日から30日間の固定期間で始まり、当日を Day 1 として進行します。ここで作ったルールはこの目標へ自動で紐づきます。'
+      : '目標は明日から30日間の固定期間で始まります。ここで作ったルールはこの目標へ自動で紐づきます。';
   };
   syncIntro();
 
-  // --- 毎日やること（既存項目の選択 ＋ その場で新規作成を1ブロックに統合）--------
-  // 見出し横の＋から、今日タブと同じ条件エディタ（condEditorRow）で全5ターゲットを新規作成できる。
-  // 既存の実効ルール項目はチェックで選び、新規行は「これから作成」として開始日ルールへ追記される。
+  // --- ルール（この目標で守ること。その場で新規作成のみ・「採用」は無い）--------
   // グループ選択肢は直近30日に実測された identity から（tab_group の UUID 行は使わない・spec: goal-inline-condition）。
   const groups = await api.getGroupsRecent().catch(() => []);
-
-  // ＋で追加する新規行のホスト（condEditorRow をそのまま挿す）。
-  const addHost = h('div', { class: 'list gr-newconds' });
-  const addBtn = h('button', {
-    class: 'btn small', type: 'button', text: '＋ 追加', title: '毎日やることを追加', 'aria-label': '毎日やることを追加',
-  });
-  addBtn.addEventListener('click', () => {
-    // 既定は TIMELINE（カテゴリ＋分数）。種別セレクトで全5ターゲットへ切替できる。削除も可能。
-    const row = condEditorRow({ target: 'TIMELINE', label: '', minutes: 30 }, groups, false);
-    row.classList.add('gr-newcond-editor');
-    addHost.appendChild(row);
-  });
+  const today = state.today;
+  const formsHost = h('div', { class: 'list gr-newconds' });
+  const forms = [];
+  const addRuleForm = () => {
+    const form = buildRuleForm({ todayKey: today, groups });
+    form.el.classList.add('gr-newcond-editor');
+    const rm = h('button', { class: 'icon-btn', type: 'button', text: '🗑', title: '削除' });
+    rm.addEventListener('click', () => { row.remove(); const i = forms.indexOf(form); if (i >= 0) forms.splice(i, 1); });
+    const row = h('div', { class: 'row', style: { alignItems: 'flex-start', gap: '8px' } }, form.el, rm);
+    forms.push(form);
+    formsHost.appendChild(row);
+  };
+  const addBtn = h('button', { class: 'btn small', type: 'button', text: '＋ ルールを追加' });
+  addBtn.addEventListener('click', addRuleForm);
   body.appendChild(h('div', { class: 'section-head gr-daily-head' },
-    h('label', { class: 'gr-flabel', text: '毎日やること' }),
+    h('label', { class: 'gr-flabel', text: 'ルール（この目標で守ること）' }),
     addBtn,
   ));
-  const noteEl = h('p', { class: 'muted', style: { fontSize: '12px', margin: '0' } });
-  body.appendChild(noteEl);
-
-  const candHost = h('div', { class: 'list' });
-  body.appendChild(candHost);
-  body.appendChild(addHost);
-
-  // 開始日に連動して既存項目（実効ルール）を解決・再描画する。＋の新規行は開始日に依らないので保持する。
-  const loadCandidates = async () => {
-    noteEl.textContent = start === 'today'
-      ? '今日の実効ルールにある項目を選ぶか、＋から新しく作れます（作成すると今日のルールに加わります）。'
-      : '明日の実効ルールにある項目を選ぶか、＋から新しく作れます（作成すると明日のルールに加わります）。';
-    clear(candHost);
-    candHost.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
-    let candidates = [];
-    try { candidates = await api.getGoalCandidates(start); } catch { candidates = []; }
-    clear(candHost);
-    if (!candidates.length) {
-      candHost.appendChild(emptyState(start === 'today'
-        ? '今日の実効ルールに選べる項目がありません。＋から新しく作れます。'
-        : '明日の実効ルールに選べる項目がありません。＋から新しく作れます。'));
-      return;
-    }
-    for (const c of candidates) {
-      // value=condition_key（total_work / group:… / timeline:… / manual:…）が作成 POST に入る。
-      const box = h('input', { type: 'checkbox', value: c.conditionKey });
-      const label = niceLabel(c.target, c.conditionKey, c.label);
-      // 時間型（TOTAL_WORK/GROUP）のみ「≥ 時間」サブラベルを付ける。
-      // MANUAL_CHECK は非時間型（チェックのテキストのみ）、TIMELINE は閾値がラベルに含まれる。
-      const sub = (c.target === 'TOTAL_WORK' || c.target === 'GROUP') && c.thresholdSeconds
-        ? `　≥ ${fmtHM(c.thresholdSeconds)}` : '';
-      candHost.appendChild(h('label', { class: 'cond' },
-        box,
-        h('div', { class: 'cond-main' }, h('div', { class: 'cond-title', text: label + sub })),
-      ));
-    }
-  };
-  await loadCandidates();
+  body.appendChild(formsHost);
+  addRuleForm(); // 最初の1件は既定で出しておく。
 
   // 初日写真のステージング（作成時に Day1 へ保存）。
   const stager = buildCreateImageStager();
@@ -309,13 +262,12 @@ async function openCreateForm(onDone) {
   save.addEventListener('click', async () => {
     const name = nameInp.value.trim();
     if (!name) { toast('目標名を入力してください', 'err'); return; }
-    const practices = [...candHost.querySelectorAll('input[type="checkbox"]:checked')].map((b) => b.value);
-    // ＋で追加した各行の _get()（{target, thresholdSeconds?, groupIdentityId?, label?, signalKey?}）をそのまま送る。
-    const newConditions = [...addHost.querySelectorAll('.cond-editor')].map((row) => row._get && row._get()).filter(Boolean);
-    if (!practices.length && !newConditions.length) { toast('毎日やることを1つ以上選ぶか、＋から追加してください', 'err'); return; }
+    const rules = forms.map((f) => f.read());
+    if (!rules.length) { toast('ルールを1つ以上追加してください', 'err'); return; }
+    if (rules.some((r) => !r.reason)) { toast('各ルールの理由を入力してください', 'err'); return; }
     save.disabled = true;
     try {
-      const g = await api.createGoal({ name, purpose: purposeInp.value.trim(), practices, newConditions, start });
+      const g = await api.createGoal({ name, purpose: purposeInp.value.trim(), rules, start });
       // ステージ済みの初日写真を Day1（start_day）へ保存（個別失敗はトーストのみ・作成は成立済み）。
       for (const item of stager.staged) {
         try { await api.addGoalJournalImage(g.id, g.startDay, { dataUrl: item.dataUrl, caption: (item.caption || '').trim() }); }
@@ -325,7 +277,6 @@ async function openCreateForm(onDone) {
       closeModal();
       onDone();
     } catch (err) {
-      // 400（バリデーション・閾値理由）／409（ジャンル固定・凍結）をそのままトースト表示。
       toast(err.data?.error || `失敗: ${err.message}`, 'err');
       save.disabled = false;
     }
@@ -373,6 +324,10 @@ async function renderReport(root, goalId) {
     ),
   ));
 
+  // 完走フォーク（続ける／終える）。レポート先頭に出す（spec: goal-lifecycle-fork）。
+  const forkBlock = blockLifecycleFork(rep, root);
+  if (forkBlock) page.appendChild(forkBlock);
+
   // 読み手状態（④ で使う。①のマス/日付セレクタから連動）。
   const readerState = { selected: 1, cellsByDay: new Map(), headerByDay: new Map(), renderReader: null };
 
@@ -381,116 +336,163 @@ async function renderReport(root, goalId) {
 
   // ① 達成カレンダー
   page.appendChild(blockCalendar(rep, readerState));
-  // ② 時間の推移（時間型実践がある場合のみ）
+  // ② 時間の推移（時間型ルールがある場合のみ）
   if (rep.hasTimeType) page.appendChild(blockTimeSeries(rep));
   // ③ Before / After（2モード＋最終日CTA）
   page.appendChild(blockBeforeAfter(rep, imgBase));
   // ④ 日記リーダー
   page.appendChild(blockReader(rep, readerState, imgBase));
-  // ⑤ 沿革（Plan と Check の答え合わせ。日記は載らない）
+  // ⑤ 沿革（ルール操作の年表。日記は載らない）
   page.appendChild(blockChronicle(rep, imgBase));
 
   readerState.renderReader();
 }
 
+// 完走フォーク（続ける／終える・spec: goal-lifecycle-fork）。
+// 未決定なら分岐ボタンを、決定済みならその結果を静かに示す。
+function blockLifecycleFork(rep, root) {
+  const g = rep.goal;
+  if (!g.showLifecycleFork && !g.lifecycleChoice) return null;
+  const card = h('section', { class: 'gr-card gr-fork' });
+
+  if (g.lifecycleChoice === 'continued') {
+    card.appendChild(h('p', { class: 'gr-fork-lead', text: `${g.name} を続けています（新しい30日目標が Day 1/30 で作られました）。` }));
+    return card;
+  }
+  if (g.lifecycleChoice === 'ended') {
+    card.appendChild(h('p', { class: 'gr-fork-lead', text: `${g.name} をここで終えました。` }));
+    if (g.lifecycleReason) card.appendChild(h('p', { class: 'muted', text: g.lifecycleReason }));
+    return card;
+  }
+
+  card.appendChild(h('p', { class: 'gr-fork-lead', text: `${g.name} の1ヶ月が終わりました。続けますか？` }));
+  const contBtn = h('button', { class: 'btn primary', type: 'button', text: '続ける' });
+  const endBtn = h('button', { class: 'btn', type: 'button', text: 'ここで終える' });
+  contBtn.addEventListener('click', async () => {
+    contBtn.disabled = true;
+    try {
+      const newGoal = isDemo() ? await api.demo.continueGoal(g.id, state.demo.virtualDay) : await api.continueGoal(g.id);
+      toast(`新しい30日目標「${newGoal.name}」を Day 1/30 で作りました`, 'ok');
+      await renderReport(root, newGoal.id);
+    } catch (err) {
+      toast(err.data?.error || `失敗: ${err.message}`, 'err');
+      contBtn.disabled = false;
+    }
+  });
+  endBtn.addEventListener('click', async () => {
+    const raw = window.prompt('終える理由（任意・空でも構いません）');
+    if (raw === null) return; // キャンセル。
+    endBtn.disabled = true;
+    try {
+      if (isDemo()) await api.demo.endGoal(g.id, raw.trim(), state.demo.virtualDay);
+      else await api.endGoal(g.id, raw.trim());
+      toast('目標を完走・終了としてアーカイブしました', 'ok');
+      await renderReport(root, g.id);
+    } catch (err) {
+      toast(err.data?.error || `失敗: ${err.message}`, 'err');
+      endBtn.disabled = false;
+    }
+  });
+  card.appendChild(h('div', { class: 'actions' }, endBtn, contBtn));
+  return card;
+}
+
 // ⑤ 沿革（spec: goal-chronicle）
 //
-// Plan を時系列に並べ、その下に Check を入れ子で置く。写真は画像、質問は Q&A のペア。
-// 取り下げは理由つきで残す（消さない＝逃げた事実そのものが歴史）。
+// ルール操作（追加・変更・削除）を時系列に並べる。写真ルールには画像、質問ルールには Q&A のペアが
+// ぶら下がる。削除は理由つきで残す（消さない＝逃げた事実そのものが歴史）。
 // **日記は載せない**（載る／載らないの線引きは「大きさ」ではなく「検証がぶら下がるか」）。
 // スコア・演出（紙吹雪・バッジ・合否の語）は出さず、素の時系列リストとして静かに提示する。
 function blockChronicle(rep, imgBase) {
   const card = grCard('⑤ 沿革');
-  const plans = (rep.chronicle && rep.chronicle.plans) || [];
-  if (!plans.length) {
-    card.appendChild(h('p', { class: 'gr-empty', text: 'まだ Plan はありません。振り返りタブで賭けを立てると、ここに積み上がります。' }));
+  const entries = (rep.chronicle && rep.chronicle.entries) || [];
+  if (!entries.length) {
+    card.appendChild(h('p', { class: 'gr-empty', text: 'まだルールの変更はありません。振り返りタブの目標コーナーでルールを足すと、ここに積み上がります。' }));
     return card;
   }
   const list = h('div', { class: 'gr-chr' });
-  for (const p of plans) list.appendChild(chroniclePlan(p, rep, imgBase));
+  for (const e of entries) list.appendChild(chronicleEntry(e, imgBase));
+  if (rep.chronicle.endedNote) {
+    list.appendChild(chronicleEndedNote(rep, rep.chronicle.endedNote));
+  }
   card.appendChild(list);
   return card;
 }
 
+/** update 操作の変更前後を短い一文へ（閾値・グループ差し替え・スケジュール変更）。 */
+function changeDiffText(change) {
+  if (change.op !== 'update' || !change.before || !change.after) return null;
+  const parts = [];
+  const b = change.before, a = change.after;
+  if ((b.thresholdSeconds ?? null) !== (a.thresholdSeconds ?? null) && (b.thresholdSeconds != null || a.thresholdSeconds != null)) {
+    parts.push(`${fmtHM(b.thresholdSeconds || 0)} → ${fmtHM(a.thresholdSeconds || 0)}`);
+  }
+  if ((b.groupIdentityId ?? null) !== (a.groupIdentityId ?? null) || (b.stableGroupId ?? null) !== (a.stableGroupId ?? null)) {
+    parts.push('グループを差し替え');
+  }
+  if (b.label !== a.label && a.label) parts.push(`${b.label || '?'} → ${a.label}`);
+  if (b.startDay !== a.startDay || b.endDay !== a.endDay) parts.push('スケジュールを変更');
+  return parts.join('・') || null;
+}
+
 /**
- * 沿革の Plan 1件を「社史・年表」の1エントリとして組む。
- * 左列＝日付（Day 番号を主役に）、右列＝賭けの一文（明朝）＋配下 Check。
- * 縦罫を貫く小さな菱形の節で時系列をつなぐ（色分け・絵文字は使わない）。
+ * 沿革のルール操作1件を「社史・年表」の1エントリとして組む。
+ * 左列＝日付（Day 番号を主役に）、右列＝操作＋理由（明朝）＋配下の答え合わせ（写真/質問ルールのみ）。
  */
-function chroniclePlan(plan, rep, imgBase) {
-  const withdrawn = plan.status === 'withdrawn';
-  const dayNum = dayNumberOf(rep, plan.dayKey);
+function chronicleEntry(entry, imgBase) {
+  const removed = entry.change.op === 'remove';
+  const opLabel = entry.change.op === 'add' ? '＋追加' : entry.change.op === 'remove' ? '−削除' : '✎変更';
+  const dayNum = entry.change.dayNumber;
 
   const dateCol = h('div', { class: 'gr-chr-date' },
     h('div', { class: 'gr-chr-day-label', text: 'Day' }),
     h('div', { class: 'gr-chr-day-num', text: dayNum != null ? String(dayNum) : '—' }),
-    h('div', { class: 'gr-chr-date-sub', text: shortDay(plan.dayKey) }),
-    // 取り下げは貶めず、社史が終了事業を淡々と載せるのと同じ扱い（日付脇の小さな標）。
-    withdrawn ? h('span', { class: 'gr-chr-flag', text: '取り下げ' }) : null,
+    h('div', { class: 'gr-chr-date-sub', text: shortDay(entry.change.dayKey) }),
+    removed ? h('span', { class: 'gr-chr-flag', text: '削除' }) : null,
   );
 
-  const stmt = h('p', { class: 'gr-chr-stmt', text: plan.body });
-  if (withdrawn)
-    stmt.appendChild(h('span', { class: 'gr-chr-reason', text: plan.withdrawReason || '' }));
+  const diff = changeDiffText(entry.change);
+  const stmt = h('p', { class: 'gr-chr-stmt', text: `${opLabel} ${ruleKindIcon(entry.target)} ${entry.label}${diff ? `（${diff}）` : ''}` });
+  if (entry.change.reason) stmt.appendChild(h('span', { class: 'gr-chr-reason', text: entry.change.reason }));
 
   const main = h('div', { class: 'gr-chr-main' }, stmt);
-  for (const c of plan.checks) main.appendChild(chronicleCheck(c, imgBase, withdrawn));
+  if (entry.answers && entry.answers.length) main.appendChild(chronicleAnswers(entry, imgBase));
 
-  return h('article', { class: `gr-chr-entry${withdrawn ? ' off' : ''}` }, dateCol, main);
+  return h('article', { class: `gr-chr-entry${removed ? ' off' : ''}` }, dateCol, main);
 }
 
-/** 沿革の Check 1件。種別は色でなく「形」で分ける（写真＝図版プレート／問い＝Q&A の文）。 */
-function chronicleCheck(check, imgBase, planWithdrawn) {
-  const cancelled = check.status === 'cancelled';
-  const isPhoto = check.kind === 'photo';
-  const label = isPhoto ? check.caption : check.questionText;
-
-  const ev = h('div', { class: `gr-chr-ev${cancelled ? ' off' : ''}` },
-    h('div', { class: 'gr-chr-cap' },
-      h('span', { class: 'gr-chr-cap-kind', text: isPhoto ? '写真 ── ' : '問い ── ' }),
-      h('b', { text: label }),
-    ),
-  );
-
-  // Check 単体の取り下げのみ理由をここに出す。Plan ごとの取り下げは左列の標＋Plan の理由で示すため、
-  // 配下 Check に同じ理由を重ねて出さない（重複を避ける）。
-  if (cancelled && !planWithdrawn)
-    ev.appendChild(h('p', { class: 'gr-chr-quit', text: check.cancelReason || '' }));
-
-  if (isPhoto) {
-    // 提出画像を読み取り専用の図版として時系列に並べる。
-    const imgs = check.results.filter((r) => r.imageId != null);
-    if (imgs.length) {
-      const plates = h('div', { class: 'gr-chr-plates' });
-      for (const r of imgs) {
-        plates.appendChild(h('figure', { class: 'gr-chr-plate' },
-          h('img', { class: 'gr-chr-plate-img', src: `${imgBase}/images/${r.imageId}`, alt: label, loading: 'lazy' }),
-          h('figcaption', { text: shortDay(r.dayKey) }),
-        ));
-      }
-      ev.appendChild(plates);
+/** 写真ルールは画像を図版として、質問ルールは Q&A のペアとして時系列に並べる。 */
+function chronicleAnswers(entry, imgBase) {
+  const wrap = h('div', { class: 'gr-chr-ev' });
+  if (entry.target === 'PHOTO') {
+    const plates = h('div', { class: 'gr-chr-plates' });
+    for (const a of entry.answers.filter((x) => x.imageId != null)) {
+      plates.appendChild(h('figure', { class: 'gr-chr-plate' },
+        h('img', { class: 'gr-chr-plate-img', src: `${imgBase}/images/${a.imageId}`, alt: entry.label, loading: 'lazy' }),
+        h('figcaption', { text: shortDay(a.dayKey) }),
+      ));
     }
+    wrap.appendChild(plates);
   } else {
-    // 質問は Q&A（工夫→結果の記録そのもの）。
-    for (const r of check.results) {
-      ev.appendChild(h('div', { class: 'gr-chr-qa' },
-        h('time', { text: shortDay(r.dayKey) }),
-        h('p', { text: r.answerText || '' }),
+    for (const a of entry.answers) {
+      wrap.appendChild(h('div', { class: 'gr-chr-qa' },
+        h('time', { text: shortDay(a.dayKey) }),
+        h('p', { text: a.answerText || '' }),
       ));
     }
   }
-
-  // 範囲Check は事実の件数を静かに添える（未回答日を美化も負債化もしない）。
-  if (check.schedule === 'range')
-    ev.appendChild(h('div', { class: 'gr-chr-note', text: `${check.spanDays}日のうち${check.results.length}日。` }));
-
-  return ev;
+  return wrap;
 }
 
-/** rep.days から Plan の day_key の Day 番号を引く（期間外・不明は null）。 */
-function dayNumberOf(rep, dayKey) {
-  const d = (rep.days || []).find((x) => x.dayKey === dayKey);
-  return d ? d.dayNumber : null;
+/** 完走フォークで理由つきに「終える」を選んだときの最終エントリ（design D7）。 */
+function chronicleEndedNote(rep, note) {
+  const dateCol = h('div', { class: 'gr-chr-date' },
+    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
+    h('div', { class: 'gr-chr-day-num', text: String(note.dayNumber) }),
+  );
+  const stmt = h('p', { class: 'gr-chr-stmt', text: `${rep.goal.name} をここで終える` },
+    h('span', { class: 'gr-chr-reason', text: note.reason }));
+  return h('article', { class: 'gr-chr-entry' }, dateCol, h('div', { class: 'gr-chr-main' }, stmt));
 }
 
 function backLink(root) {
@@ -521,15 +523,17 @@ function blockCalendar(rep, rs) {
     grid.appendChild(head);
   }
 
-  // 実践ごとの行。未到来（future）は空白マスにする＝走行中プレビューで残りを黒星で埋めない。
-  for (const p of rep.practices) {
-    grid.appendChild(h('div', { class: 'gr-cal-label', text: niceLabel(p.target, p.conditionKey, p.label), title: p.label }));
+  // ルールごとの行。未到来（future）は空白マスにする＝走行中プレビューで残りを黒星で埋めない。
+  // 対象外（inactive・開始前／削除後）も同様に空白マスにする（design: goal-report）。
+  for (const p of rep.rules) {
+    grid.appendChild(h('div', { class: 'gr-cal-label', text: `${ruleKindIcon(p.target)} ${ruleNiceLabel(p.target, p.label)}`, title: p.label }));
     for (const cell of p.cells) {
-      const kind = cell.future ? 'future' : cell.met ? 'done' : 'miss';
+      const blank = cell.future || cell.inactive;
+      const kind = blank ? 'future' : cell.met ? 'done' : 'miss';
       const el = h('button', {
         class: `gr-cell ${kind}`,
         type: 'button',
-        title: `Day ${cell.dayNumber}: ${cell.future ? 'まだ来ていない' : cell.met ? 'やった' : 'やってない'}`,
+        title: `Day ${cell.dayNumber}: ${blank ? 'まだ来ていない／対象外' : cell.met ? 'やった' : 'やってない'}`,
       });
       el.addEventListener('click', () => rs.renderReader(cell.dayNumber));
       if (!rs.cellsByDay.has(cell.dayNumber)) rs.cellsByDay.set(cell.dayNumber, []);
@@ -543,20 +547,20 @@ function blockCalendar(rep, rs) {
     h('span', {}, h('span', { class: 'gr-cell done gr-legend-swatch' }), 'やった'),
     h('span', {}, h('span', { class: 'gr-cell miss gr-legend-swatch' }), 'やってない'),
   );
-  // 未到来が1マスでもある（＝進行中）ときだけ凡例に足す。完走レポートの凡例は従来どおり2値。
-  if (rep.practices.some((p) => p.cells.some((c) => c.future)))
-    legend.appendChild(h('span', {}, h('span', { class: 'gr-cell future gr-legend-swatch' }), 'まだ来ていない'));
+  // 未到来・対象外が1マスでもあるときだけ凡例に足す。完走レポートの凡例は従来どおり2値。
+  if (rep.rules.some((p) => p.cells.some((c) => c.future || c.inactive)))
+    legend.appendChild(h('span', {}, h('span', { class: 'gr-cell future gr-legend-swatch' }), 'まだ来ていない／対象外'));
   card.appendChild(legend);
   return card;
 }
 
-// ② 時間型実践の実測と閾値の推移（＋理由マーカー）
+// ② 時間型ルールの実測と閾値の推移（＋理由マーカー）
 function blockTimeSeries(rep) {
   const card = grCard('② 時間の推移');
-  const timePractices = rep.practices.filter((p) => p.isTimeType);
-  for (const p of timePractices) {
+  const timeRules = rep.rules.filter((p) => p.isTimeType);
+  for (const p of timeRules) {
     const sub = h('div', { class: 'gr-ts' });
-    sub.appendChild(h('div', { class: 'gr-ts-label', text: niceLabel(p.target, p.conditionKey, p.label) }));
+    sub.appendChild(h('div', { class: 'gr-ts-label', text: `${ruleKindIcon(p.target)} ${ruleNiceLabel(p.target, p.label)}` }));
     const canvas = h('canvas', {});
     sub.appendChild(h('div', { class: 'gr-chart-wrap' }, canvas));
 
@@ -586,11 +590,13 @@ function blockTimeSeries(rep) {
     }));
 
     // 閾値変更マーカー（「下げて、続けた」という事実。否定的な装飾はしない）。
-    const changes = rep.thresholdChanges.filter((t) => t.conditionKey === p.conditionKey);
+    const changes = rep.ruleChanges.filter((t) => t.ruleId === p.ruleId);
     for (const t of changes) {
+      const oldS = t.before && t.before.thresholdSeconds != null ? t.before.thresholdSeconds : null;
+      const newS = t.after && t.after.thresholdSeconds != null ? t.after.thresholdSeconds : null;
       sub.appendChild(h('div', { class: 'gr-marker' },
         h('span', { class: 'gr-marker-day', text: `Day ${t.dayNumber}` }),
-        h('span', { class: 'gr-marker-delta', text: `${t.oldSeconds == null ? '—' : fmtHM(t.oldSeconds)} → ${t.newSeconds == null ? '—' : fmtHM(t.newSeconds)}` }),
+        h('span', { class: 'gr-marker-delta', text: `${oldS == null ? '—' : fmtHM(oldS)} → ${newS == null ? '—' : fmtHM(newS)}` }),
         h('span', { class: 'gr-marker-reason', text: t.reason }),
       ));
     }

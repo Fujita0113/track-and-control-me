@@ -1,4 +1,4 @@
-// 共有: 条件ターゲットの語彙(値↔ラベル)。today.js(ゲート) / rules.js が同じ定義を使う。
+// 共有: 条件ターゲットの語彙(値↔ラベル)。today.js(ゲート) / rule-form.js / goals.js が同じ定義を使う。
 export const TARGETS = [
   { v: 'TOTAL_WORK', label: '総作業時間' },
   { v: 'GROUP', label: 'グループ作業' },
@@ -7,6 +7,8 @@ export const TARGETS = [
   // PLANNING は編集 UI ではフラット化(CONDITION_KINDS)して signal_key ごとに1項目へ展開する。
   // ここは targetLabel のフォールバック用(単体で表示されることは通常ない)。
   { v: 'PLANNING', label: '翌日計画' },
+  { v: 'PHOTO', label: '写真' },
+  { v: 'QUESTION', label: '質問' },
 ];
 
 /** ターゲット値 → 日本語ラベル。未知はそのまま返す。 */
@@ -35,6 +37,15 @@ export function planningSignalLabel(k) {
 export function conditionLabel(target, signalKey) {
   if (target === 'PLANNING') return planningSignalLabel(signalKey);
   return targetLabel(target);
+}
+
+/**
+ * ルールの表示ラベル。サーバーは PLANNING ルールの `label` に生の signal_key を返す
+ * （表示名の解決はクライアントの語彙を使うため）。それ以外の target はサーバーの label をそのまま使う。
+ */
+export function ruleNiceLabel(target, label) {
+  if (target === 'PLANNING') return planningSignalLabel(label);
+  return label;
 }
 
 // 共有: ルール編集の条件ドロップダウン(フラット)。

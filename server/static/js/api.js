@@ -49,12 +49,6 @@ export const api = {
   getSummary: (date) => req('GET', date ? `/api/summary?${q({ date })}` : '/api/summary'),
   getRange: (from, to) => req('GET', `/api/summary/range?${q({ from, to })}`),
 
-  // ルール
-  getRules: () => req('GET', '/api/rules'),
-  getRule: (date) => req('GET', `/api/rules/${date}`),
-  putRule: (date, b) => req('PUT', `/api/rules/${date}`, b),
-  deleteRule: (date) => req('DELETE', `/api/rules/${date}`),
-
   // 当日チェック
   getChecks: (date) => req('GET', `/api/checks/${date}`),
   putCheck: (date, conditionKey, checked) =>
@@ -86,16 +80,29 @@ export const api = {
   deleteTask: (id) => req('DELETE', `/api/tasks/${id}`),
   getPlanning: (date) => req('GET', `/api/planning/${date}`),
 
-  // 30日チャレンジ（目標）
+  // 30日チャレンジ（目標）。ルールは目標作成時／振り返りタブの目標コーナーでのみ追加できる
+  // （「採用」は廃止・今日タブに書き込み動線は無い・spec: editable-rule-registry）。
   getGoals: () => req('GET', '/api/goals'),
-  // start = 'today' | 'tomorrow'（開始日の実効ルールから候補を出す・既定 today）
-  getGoalCandidates: (start) =>
-    req('GET', start ? `/api/goals/candidates?${q({ start })}` : '/api/goals/candidates'),
+  getGoal: (id) => req('GET', `/api/goals/${id}`),
+  // b = { name, purpose?, start?, rules: [{ target, ...contentFields, startDay?, endDay?, reason }] }
   createGoal: (b) => req('POST', '/api/goals', b),
   deleteGoal: (id) => req('DELETE', `/api/goals/${id}`),
   getGoalReport: (id) => req('GET', `/api/goals/${id}/report`),
   getGoalJournal: (id, date) => req('GET', `/api/goals/${id}/journal/${date}`),
   putGoalJournal: (id, date, content) => req('PUT', `/api/goals/${id}/journal/${date}`, { content }),
+
+  // 目標コーナーのルール CRUD（全操作 reason 必須・design D4）。extend は延長フォークの回答
+  // （'extend'|'truncate'、409 extensionRequired を受けての再送のみ使う）。
+  addGoalRule: (goalId, input) => req('POST', `/api/goals/${goalId}/rules`, input),
+  updateGoalRule: (goalId, ruleId, input) => req('PATCH', `/api/goals/${goalId}/rules/${ruleId}`, input),
+  removeGoalRule: (goalId, ruleId, reason) => req('DELETE', `/api/goals/${goalId}/rules/${ruleId}`, { reason }),
+
+  // 完走フォーク（続ける／終える・spec: goal-lifecycle-fork）
+  continueGoal: (goalId) => req('POST', `/api/goals/${goalId}/continue`),
+  endGoal: (goalId, reason) => req('POST', `/api/goals/${goalId}/end`, { reason }),
+
+  // ⑤沿革（ルール操作の年表。日記は含まない）
+  getGoalChronicle: (id) => req('GET', `/api/goals/${id}/chronicle`),
 
   // 目標日記の画像添付（バイナリ表示は URL 直指定: /api/goals/:id/journal/images/:imageId）
   listGoalJournalImages: (id, date) => req('GET', `/api/goals/${id}/journal/${date}/images`),
@@ -105,29 +112,31 @@ export const api = {
     req('PATCH', `/api/goals/${id}/journal/images/${imageId}`, { caption }),
   deleteGoalJournalImage: (id, imageId) => req('DELETE', `/api/goals/${id}/journal/images/${imageId}`),
 
-  // Plan（賭け）/ Check（答え合わせ）。Check は 種類（photo|question）× いつ（single|range）の独立2軸。
-  getGoalPlans: (id) => req('GET', `/api/goals/${id}/plans`),
-  createGoalPlan: (id, body) => req('POST', `/api/goals/${id}/plans`, { body }),
-  getGoalChronicle: (id) => req('GET', `/api/goals/${id}/chronicle`),
-  // check = { kind, caption|questionText, schedule, startDayKey|startInDays, spanDays?, placeNote?, timeNote? }
-  createGoalCheck: (planId, check) => req('POST', `/api/goals/plans/${planId}/checks`, check),
-  withdrawGoalPlan: (planId, reason) => req('POST', `/api/goals/plans/${planId}/withdraw`, { reason }),
-  // その日に回答すべき Check（今日タブの不足条件・初回トースト）
-  getDueChecks: (date) => req('GET', `/api/goal-checks/due/${date}`),
-  // 写真提出（キャプションは先指定のため送らない）
-  submitCheckPhoto: (checkId, { dataUrl, date, width, height }) =>
-    req('POST', `/api/goal-checks/${checkId}/photo`, { dataUrl, date, width, height }),
-  answerCheck: (checkId, answerText, date) =>
-    req('POST', `/api/goal-checks/${checkId}/answer`, { answerText, date }),
-  cancelCheck: (checkId, reason) => req('POST', `/api/goal-checks/${checkId}/cancel`, { reason }),
+  // 写真/質問ルールへの回答（今日タブの不足条件・初回トースト・spec: goal-check-gate）
+  getDueRules: (date) => req('GET', `/api/due-rules/${date}`),
+  submitRulePhoto: (ruleId, { dataUrl, date, width, height }) =>
+    req('POST', `/api/rules/${ruleId}/photo`, { dataUrl, date, width, height }),
+  answerRuleQuestion: (ruleId, answerText, date) =>
+    req('POST', `/api/rules/${ruleId}/answer`, { answerText, date }),
 
-  // お試し（デモ）モード（読み取り専用・本番ゲート非到達）。now=仮想 day_key。
+  // お試し（デモ）モード。閲覧は読み取り専用・本番ゲート非到達。now=仮想 day_key。
+  // チュートリアル2動線（単発ルール通知・完走フォーク）だけはデモ DB への書き込みを許す
+  // （spec: demo-rule-tutorial。実サーバー経路・デモ DB 限定・本番 DB には一切触れない）。
   demo: {
     reset: () => req('POST', '/api/demo/reset'),
     goals: (now) => req('GET', `/api/demo/goals?${q({ now })}`),
+    goal: (id, now) => req('GET', `/api/demo/goals/${id}?${q({ now })}`),
     report: (id, now) => req('GET', `/api/demo/goals/${id}/report?${q({ now })}`),
     journal: (id, date) => req('GET', `/api/demo/goals/${id}/journal/${date}`),
     today: (now) => req('GET', `/api/demo/today?${q({ now })}`),
     allocation: (date) => req('GET', `/api/demo/timeline/${date}/allocation`),
+    dueRules: (now) => req('GET', `/api/demo/due-rules?${q({ now })}`),
+    chronicle: (id) => req('GET', `/api/demo/goals/${id}/chronicle`),
+    // now = 呼び出し側が渡す state.demo.virtualDay（api.js は state.js を import しない設計のため明示で受け取る）。
+    addGoalRule: (goalId, input, now) => req('POST', `/api/demo/goals/${goalId}/rules`, { ...input, now }),
+    updateGoalRule: (goalId, ruleId, input, now) => req('PATCH', `/api/demo/goals/${goalId}/rules/${ruleId}`, { ...input, now }),
+    removeGoalRule: (goalId, ruleId, reason, now) => req('DELETE', `/api/demo/goals/${goalId}/rules/${ruleId}`, { reason, now }),
+    continueGoal: (goalId, now) => req('POST', `/api/demo/goals/${goalId}/continue`, { now }),
+    endGoal: (goalId, reason, now) => req('POST', `/api/demo/goals/${goalId}/end`, { reason, now }),
   },
 };

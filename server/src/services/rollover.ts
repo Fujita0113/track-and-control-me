@@ -2,12 +2,13 @@ import { Cron } from 'croner';
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { dayKeyFor, prevDayKey } from '../aggregation/index.js';
-import { markPast, ensureFrozenIfDue } from '../rules/rules.js';
 import { runPipeline } from './pipeline.js';
 
 /**
- * 日次ロールオーバー（design.md D7 / task 7.1）。
- * day_boundary(04:00) に前日を不変スナップショット化し is_final を刻む。
+ * 日次ロールオーバー（design.md D3 / task 4.4）。
+ * day_boundary(04:00) に前日を不変スナップショットとして確定する（is_final=1）。
+ * ルール（`rule` 行）は凍結モデルを持たない＝いつでも追加・変更・削除でき当日から効くため、
+ * ここでは過去日の集計・評価を確定するだけでよい（旧 daily_rule_set の凍結・PAST 化は撤去済み）。
  */
 
 export function runRollover(db: DB, nowMs = Date.now(), log?: (m: string) => void): void {
@@ -25,18 +26,10 @@ export function runRollover(db: DB, nowMs = Date.now(), log?: (m: string) => voi
     db.prepare(
       "UPDATE unlock_evaluation SET is_final = 1 WHERE day_key = ?",
     ).run(yesterday);
-    // 過去に残った DRAFT（初期ブートストラップの当日ルール・当日追加の DRAFT_TODAY 等）を
-    // 凍結してから PAST 化する。同日中は編集可としていた当日ルールも、翌日以降はここで確実に凍結される。
-    db.prepare(
-      "UPDATE daily_rule_set SET status = 'FROZEN_ACTIVE', frozen_at = ? WHERE status IN ('DRAFT_FUTURE', 'DRAFT_TODAY') AND effective_date < ?",
-    ).run(nowMs, today);
-    // 当日ルールを凍結、それ以前の凍結ルールを PAST へ。
-    ensureFrozenIfDue(db, today, nowMs);
-    markPast(db, today);
   });
   tx();
 
-  log?.(`rollover: ${yesterday} を確定・${today} を凍結`);
+  log?.(`rollover: ${yesterday} を確定`);
 }
 
 /** croner で毎日 day_boundary に runRollover を発火。stop 関数を返す。 */

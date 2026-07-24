@@ -10,7 +10,7 @@ import { createMarkdownEditor } from './md-editor.js';
 import { setTomorrowMode } from './kanban.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
-import { buildPlanCheckBlock } from './plan-check.js';
+import { buildGoalRulesBlock } from './rule-form.js';
 import { shrinkImage, isImageFile } from './images.js';
 
 /** b − a の日数差（UTC 計算）。 */
@@ -93,6 +93,16 @@ async function showDemo(root) {
   wrap.appendChild(h('p', { class: 'muted', text: inPeriod
     ? 'デモでは閲覧のみです。上部バーで日付を進めると、各日の日記を読み進められます。完走レポートの「毎日の日記」も同じ内容です。'
     : 'この仮想日付は目標期間外のため、記録コーナーの見え方を代表日のサンプルでプレビューしています。上部バーで進行中（開始〜完走の間）に進めると、その日の記録を閲覧できます。' }));
+
+  // チュートリアル: 単発ルールの当日通知（spec: demo-rule-tutorial）。目標コーナーは唯一デモでも
+  // 書き込みを許す場所＝実際にルールを1つ作って「1日後」を押すと通知が出るのを体験できる。
+  wrap.appendChild(h('div', { class: 'card' },
+    h('div', { class: 'card-title', text: 'チュートリアル: 単発ルールの通知を試す' }),
+    h('p', { class: 'muted', text: '下の「＋ 追加」から、種類は何でもよいので「単発」で明日開始のルールを1つ作ってみましょう（理由も忘れずに）。作ったら上部バーの「＋1日」を押すと、その日はじめてダッシュボードを開いた扱いでトーストが出ます。' }),
+  ));
+  let fullGoal = g;
+  try { fullGoal = await api.demo.goal(g.id, vd); } catch { /* noop: 取得失敗時はメタのみで続行 */ }
+  wrap.appendChild(buildGoalRulesBlock(fullGoal, vd, null));
 }
 
 export async function show(root) {
@@ -257,11 +267,11 @@ function journalCorner(goal, content, date) {
       h('span', { class: 'rf-journal-tag', text: `Day ${goal.dayNumber}/${goal.dayCount}` }),
     ),
   );
-  // Plan / Check（賭けと答え合わせ）を日記の**上**に置く。Plan/Check はこのブロック内で即時保存し、
-  // 日記本文の dirty/flush には相乗りしない（spec: 日記は Plan/Check とは独立に保存する）。
-  // 対象日が今日のときだけ出す（過去日を遡って賭けを立てることはできない）。
+  // ルール一覧＋追加・変更・削除を日記の**上**に置く。ルール操作はこのブロック内で即時保存し、
+  // 日記本文の dirty/flush には相乗りしない（spec: editable-rule-registry）。
+  // 対象日が今日のときだけ出す（過去日を遡ってルールを足すことはできない）。
   // デモは閲覧専用なので作成導線を出さない（spec: demo-mode）。
-  if (date === state.today && !isDemo()) corner.appendChild(buildPlanCheckBlock(goal, date));
+  if (date === state.today && !isDemo()) corner.appendChild(buildGoalRulesBlock(goal, date, null));
   // 日記エディタは今までどおりその下に。
   corner.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, editor.el));
   // 画像ゾーン（追加導線＋サムネイル一覧）。画像操作は本文の dirty/flush と独立（reflection_done 非汚染）。

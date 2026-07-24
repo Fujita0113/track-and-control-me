@@ -1,15 +1,15 @@
-// 「今日」ハブ: 旧 dashboard(概況) + gate(解錠状態/条件進捗) + checks(手動チェック) を集約.
+// 「今日」ハブ: 旧 dashboard(概況) + gate(解錠状態/条件進捗) を集約.
 // 上から (1) 作業概況(総作業/グループ別ドーナツ/7日棒, 除外内訳は非表示),
-//        (2) 解錠状態ヒーロー + 条件進捗(MANUAL_CHECK は行内チェックボックス),
-//        (3) パスワード解錠, (4) 翌日ルール編集(rules.js 再利用).
+//        (2) 解錠状態ヒーロー + 条件進捗(MANUAL_CHECK は行内チェックボックス・写真/質問ルールは行内で回答),
+//        (3) パスワード解錠。
+// ルールの作成・編集・削除の動線は無い（振り返りタブの目標コーナーに一本化・spec: editable-rule-registry）。
 // 30秒リフレッシュはゲート領域(ヒーロー/条件/reveal)のみ。モーダルが開いている間はスキップ。
 import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, fmtDur, fmtHM, colorHex, copyText, toast, emptyState } from './util.js';
 import { targetLabel, planningSignalLabel } from './targets.js';
-import { renderRuleEditing } from './rules.js';
 import { isDemo } from './demo.js';
-import { promptReason, shortDay } from './plan-check.js';
+import { shortDay } from './rule-form.js';
 
 let charts = [];
 let timer = null;
@@ -40,13 +40,11 @@ export async function show(root) {
   // 本物の reveal / ルール編集（本番書き込み）は動かさない。
   if (isDemo()) { await showDemo(root); return; }
 
-  // 3 領域を用意し、それぞれ独立に描画・更新する。
+  // 2 領域を用意し、それぞれ独立に描画・更新する。
   const overviewRegion = h('div', { class: 'stack' });
   const gateRegion = h('div', { class: 'stack', style: { marginTop: '18px' } });
-  const rulesRegion = h('div', { class: 'stack', style: { marginTop: '24px' } });
   root.appendChild(overviewRegion);
   root.appendChild(gateRegion);
-  root.appendChild(rulesRegion);
 
   // 概況(重い / チャート)は初回のみ描画。
   await renderOverview(overviewRegion).catch((e) => toast(`概況の読み込み失敗: ${e.message}`, 'err'));
@@ -58,9 +56,6 @@ export async function show(root) {
   };
   await refreshGate();
   timer = setInterval(refreshGate, 30000);
-
-  // 翌日ルール編集(rules.js)。ゲートの定期更新とは独立に再描画。
-  await renderRuleEditing(rulesRegion);
 }
 
 // --- (1) 作業概況 --------------------------------------------------------
@@ -151,9 +146,9 @@ async function renderGate(region) {
 function condRow(c, planning, date) {
   const met = !!c.met;
 
-  // 目標の Check（合成条件）は、その場で答える／やめる導線を行内に持つ（spec: goal-check-gate）。
+  // 写真/質問ルールは、その場で答える／やめる導線を行内に持つ（spec: goal-check-gate）。
   // ゲートで足止めされている場所で解決できるようにするため、別タブへ飛ばさない。
-  if (c.target === 'CHECK') return checkCondRow(c, date);
+  if (c.target === 'PHOTO' || c.target === 'QUESTION') return ruleAnswerRow(c, date);
 
   // MANUAL_CHECK は行内チェックボックスでトグル(旧 checks.js を吸収)。
   if (c.target === 'MANUAL_CHECK') {
@@ -242,30 +237,28 @@ function condRow(c, planning, date) {
 }
 
 /**
- * 目標 Check の不足条件行（spec: goal-check-gate「今日タブから直接 Check に答える」）。
+ * 写真/質問ルールの不足条件行（spec: goal-check-gate「今日タブから直接ルールに答える」）。
  *   📷 写真 … 貼付／ファイル選択で提出。**キャプションは先指定なので聞かない**。
  *   💬 質問 … 質問文を提示し、答え（非空）を書いて保存。
- * どちらの行にも「やめる」（理由必須）を置く＝唯一の脱出弁をその場に用意する。
- * 由来の Plan を副題に出し、「何のための答え合わせか」を思い出せるようにする。
+ * ルールの編集・削除はここには置かない（振り返りタブの目標コーナーに一本化・spec: editable-rule-registry）。
  */
-function checkCondRow(c, date) {
+function ruleAnswerRow(c, date) {
   const met = !!c.met;
-  const icon = c.checkKind === 'photo' ? '📷' : '💬';
+  const icon = c.target === 'PHOTO' ? '📷' : '💬';
   const row = h('div', { class: `cond cond-check ${met ? 'met' : ''}` });
 
-  // 状態の一言。範囲Check は「7/18〜7/24 の1日目」と、その日が期間の何日目かまで出す
+  // 状態の一言。範囲ルールは「7/18〜7/24 の1日目」と、その日が期間の何日目かまで出す
   // （各日が独立して要求される仕様なので、「何日目の分か」が分からないと意味が取れない）。
-  const status = met ? (c.checkKind === 'photo' ? '提出済み' : '回答済み') : c.checkKind === 'photo' ? '写真がまだ' : '未回答';
+  const status = met ? (c.target === 'PHOTO' ? '提出済み' : '回答済み') : c.target === 'PHOTO' ? '写真がまだ' : '未回答';
   let when = '';
-  if (c.checkSchedule === 'range' && c.rangeDayNumber) {
-    const end = addDaysLocal(c.startDayKey, (c.spanDays || 1) - 1);
-    when = `（${shortDay(c.startDayKey)}〜${shortDay(end)} の${c.rangeDayNumber}日目）`;
+  if (c.schedule === 'range' && c.rangeDayNumber) {
+    when = `（${shortDay(c.startDay)}〜${shortDay(c.endDay)} の${c.rangeDayNumber}日目）`;
   }
 
   const main = h('div', { class: 'cond-main' },
-    h('div', { class: 'cond-title', text: `${icon} ${c.label || 'Check'}` }),
+    h('div', { class: 'cond-title', text: `${icon} ${c.label || ''}` }),
     h('div', { class: 'cond-sub', text: `${status}${when}` }),
-    c.planBody ? h('div', { class: 'cond-sub cond-plan', text: `└ Plan: ${c.planBody}` }) : null,
+    c.goalName ? h('div', { class: 'cond-sub cond-plan', text: `└ ${c.goalName}` }) : null,
   );
   row.appendChild(main);
   row.appendChild(h('span', { class: `mark ${met ? 'yes' : 'no'}`, text: met ? '✓' : '✗' }));
@@ -276,7 +269,7 @@ function checkCondRow(c, date) {
   const fail = (err, fallback) => toast((err.data && err.data.error) || fallback, 'err');
   const done = (msg) => { toast(msg, 'ok'); refreshGate(); };
 
-  if (c.checkKind === 'photo') {
+  if (c.target === 'PHOTO') {
     // 写真: ファイル選択／貼り付け。キャプション入力欄は出さない（先指定済み）。
     const fileInput = h('input', { type: 'file', accept: 'image/*', class: 'cond-file' });
     const label = h('label', { class: 'btn btn-ghost cond-btn' }, '写真を出す', fileInput);
@@ -286,7 +279,7 @@ function checkCondRow(c, date) {
       if (!file) return;
       try {
         const dataUrl = await fileToDataUrl(file);
-        await api.submitCheckPhoto(c.checkId, { dataUrl, date });
+        await api.submitRulePhoto(c.ruleId, { dataUrl, date });
         done(`「${c.label}」を提出しました`);
       } catch (err) {
         fail(err, '写真を提出できませんでした');
@@ -302,7 +295,7 @@ function checkCondRow(c, date) {
       if (!input.value.trim()) { toast('答えを入力してください', 'err'); return; }
       send.disabled = true;
       try {
-        await api.answerCheck(c.checkId, input.value.trim(), date);
+        await api.answerRuleQuestion(c.ruleId, input.value.trim(), date);
         done('答えを記録しました');
       } catch (err) {
         fail(err, '答えを保存できませんでした');
@@ -315,19 +308,6 @@ function checkCondRow(c, date) {
     actionHost.appendChild(send);
   }
 
-  // やめる（理由必須）。取り下げた事実は沿革に残る。
-  const quit = h('button', { type: 'button', class: 'btn btn-ghost cond-btn', text: 'やめる' });
-  quit.addEventListener('click', async () => {
-    const reason = promptReason(`「${c.label}」をやめる理由（必須）`);
-    if (!reason) return;
-    try {
-      await api.cancelCheck(c.checkId, reason);
-      done('取り下げました（沿革には残ります）');
-    } catch (err) {
-      fail(err, '取り下げできませんでした');
-    }
-  });
-  actionHost.appendChild(quit);
   return row;
 }
 

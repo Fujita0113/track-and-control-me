@@ -215,137 +215,33 @@ export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export const UNGROUPED_KEY = 'ungrouped';
 
 // ---------------------------------------------------------------------------
-// Plan / Check（spec: goal-plan-check / goal-check-gate / goal-chronicle）
+// 解錠ルール（spec: editable-rule-registry / goal-check-gate / goal-chronicle /
+// goal-lifecycle-fork）。Plan / Check の語彙・モデルは撤去済み（goal-plan-check REMOVED）。
 // ---------------------------------------------------------------------------
 
 /** day_key の形（'YYYY-MM-DD'）。 */
 const DayKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'day_key は YYYY-MM-DD 形式');
 
-/** 非空テキスト（trim 後に1文字以上）。本文・理由・答え・キャプション・質問文が共有する。 */
+/** 非空テキスト（trim 後に1文字以上）。理由・答え・キャプション・質問文が共有する。 */
 const NonEmptyText = z.string().transform((s) => s.trim()).pipe(z.string().min(1));
 
-/**
- * Check の**種類**（軸1）。「いつ」（schedule）とは独立で、種類が「いつ」を決めることはない。
- * photo=📷 写真を投稿する / question=💬 質問に答える。
- */
-export const CheckKindSchema = z.enum(['photo', 'question']);
-export type CheckKind = z.infer<typeof CheckKindSchema>;
+/** ルールの種類（軸1）。写真(📷)・質問(💬) は「いつ」（軸2）とは独立。 */
+export const RuleTargetSchema = z.enum(['TOTAL_WORK', 'GROUP', 'TIMELINE', 'MANUAL_CHECK', 'PLANNING', 'PHOTO', 'QUESTION']);
+export type RuleTarget = z.infer<typeof RuleTargetSchema>;
 
-/**
- * Check の**いつ**（軸2）。「種類」（kind）とは独立。
- * single=単発（達成するまでロックを繰り越す）/ range=範囲（その日限り・繰り越さない）。
- */
-export const CheckScheduleSchema = z.enum(['single', 'range']);
-export type CheckSchedule = z.infer<typeof CheckScheduleSchema>;
+/** ルールの「いつ」（軸2）。permanent=永続(end_day=null) / single=単発(start=end) / range=範囲(start<end)。 */
+export const RuleScheduleSchema = z.enum(['permanent', 'single', 'range']);
+export type RuleSchedule = z.infer<typeof RuleScheduleSchema>;
 
-/** Plan の状態。withdrawn は終端（理由つきで沿革に残す）。 */
-export const PlanStatusSchema = z.enum(['active', 'withdrawn']);
-export type PlanStatus = z.infer<typeof PlanStatusSchema>;
+/** ルール操作の種別。追加・変更・削除はどれも理由必須（design D4）。 */
+export const RuleOpSchema = z.enum(['add', 'update', 'remove']);
+export type RuleOp = z.infer<typeof RuleOpSchema>;
 
-/**
- * Check の永続状態。達成（satisfied）は**永続化しない**＝対象日から遅延導出する（design D2）。
- * ここに載るのは終端の cancelled と既定の active のみ。
- */
-export const CheckStatusSchema = z.enum(['active', 'cancelled']);
-export type CheckStatus = z.infer<typeof CheckStatusSchema>;
+/** ルール操作の理由（追加・変更・削除で共通・design D4）。 */
+export const RuleReasonInputSchema = z.object({ reason: NonEmptyText });
+export type RuleReasonInput = z.infer<typeof RuleReasonInputSchema>;
 
-/** Check への回答1件（写真なら imageId、質問なら answerText）。 */
-export const GoalCheckResultSchema = z.object({
-  id: z.number().int(),
-  checkId: z.number().int(),
-  dayKey: DayKeySchema,
-  imageId: z.number().int().nullable(),
-  answerText: z.string().nullable(),
-  createdAt: z.number().int(),
-});
-export type GoalCheckResult = z.infer<typeof GoalCheckResultSchema>;
-
-/**
- * Check（答え合わせ）。種類×いつ の2軸は独立し、全4通りが表現できる。
- * placeNote / timeNote は説明メタデータのみで判定には一切用いない（design D8）。
- */
-export const GoalCheckSchema = z.object({
-  id: z.number().int(),
-  planId: z.number().int(),
-  kind: CheckKindSchema,
-  /** kind=photo のとき非空（先指定・変更不可）。question のときは空文字。 */
-  caption: z.string(),
-  /** kind=question のとき非空。photo のときは空文字。 */
-  questionText: z.string(),
-  schedule: CheckScheduleSchema,
-  startDayKey: DayKeySchema,
-  /** schedule=range のとき 2 以上。single は null。 */
-  spanDays: z.number().int().min(2).nullable(),
-  placeNote: z.string().nullable(),
-  timeNote: z.string().nullable(),
-  status: CheckStatusSchema,
-  cancelReason: z.string().nullable(),
-  createdAt: z.number().int(),
-  results: z.array(GoalCheckResultSchema),
-});
-export type GoalCheck = z.infer<typeof GoalCheckSchema>;
-
-/** Plan（賭け）。種別カラムは持たない（本文を読めば分かる）。Check は0個以上。 */
-export const GoalPlanSchema = z.object({
-  id: z.number().int(),
-  goalId: z.number().int(),
-  dayKey: DayKeySchema,
-  body: z.string(),
-  status: PlanStatusSchema,
-  withdrawReason: z.string().nullable(),
-  createdAt: z.number().int(),
-  checks: z.array(GoalCheckSchema),
-});
-export type GoalPlan = z.infer<typeof GoalPlanSchema>;
-
-// --- 入力（作成・回答・取り下げ）------------------------------------------
-
-/** Plan 作成入力。本文のみ（種別は無い）。 */
-export const CreatePlanInputSchema = z.object({
-  body: NonEmptyText,
-});
-export type CreatePlanInput = z.infer<typeof CreatePlanInputSchema>;
-
-/**
- * Check 作成入力。種類×いつ の2軸を型で担保する判別 union。
- * 「いつ」は `startDayKey`（絶対）または `startInDays`（相対「3日後」）のどちらでも入力でき、
- * サーバー側で固定 `startDayKey` へ解決する。
- */
-const WhenSchema = z.union([
-  z.object({ schedule: z.literal('single'), startDayKey: DayKeySchema, startInDays: z.undefined().optional() }),
-  z.object({ schedule: z.literal('single'), startInDays: z.number().int().nonnegative(), startDayKey: z.undefined().optional() }),
-  z.object({
-    schedule: z.literal('range'),
-    startDayKey: DayKeySchema,
-    startInDays: z.undefined().optional(),
-    spanDays: z.number().int().min(2),
-  }),
-  z.object({
-    schedule: z.literal('range'),
-    startInDays: z.number().int().nonnegative(),
-    startDayKey: z.undefined().optional(),
-    spanDays: z.number().int().min(2),
-  }),
-]);
-
-const KindSchema = z.union([
-  z.object({ kind: z.literal('photo'), caption: NonEmptyText }),
-  z.object({ kind: z.literal('question'), questionText: NonEmptyText }),
-]);
-
-const NotesSchema = z.object({
-  placeNote: z.string().trim().optional(),
-  timeNote: z.string().trim().optional(),
-});
-
-/**
- * Check 作成入力＝ 種類 × いつ × メモ の交差。2軸が独立していることを型で担保する
- * （photo×range・question×single を含む全4通りが等しく組める）。
- */
-export const CreateCheckInputSchema = z.intersection(z.intersection(KindSchema, WhenSchema), NotesSchema);
-export type CreateCheckInput = z.infer<typeof CreateCheckInputSchema>;
-
-/** 写真Check への提出（キャプションは先指定のため受け取らない）。 */
+/** 写真ルールへの提出（キャプションは先指定のため受け取らない）。 */
 export const SubmitPhotoInputSchema = z.object({
   dataUrl: z.string().min(1),
   width: z.number().int().positive().nullish(),
@@ -353,57 +249,90 @@ export const SubmitPhotoInputSchema = z.object({
 });
 export type SubmitPhotoInput = z.infer<typeof SubmitPhotoInputSchema>;
 
-/** 質問Check への回答（空回答は拒否）。 */
+/** 質問ルールへの回答（空回答は拒否）。 */
 export const AnswerQuestionInputSchema = z.object({
   answerText: NonEmptyText,
 });
 export type AnswerQuestionInput = z.infer<typeof AnswerQuestionInputSchema>;
 
-/** 取り下げ入力（Plan / Check 共通）。理由は非空必須＝唯一の脱出弁の代償（design D9）。 */
-export const WithdrawInputSchema = z.object({
-  reason: NonEmptyText,
+// --- 沿革（⑤）--------------------------------------------------------------
+
+/** ルール操作1件（`rule_change` 由来）。 */
+export const RuleChangeSchema = z.object({
+  id: z.number().int(),
+  ruleId: z.number().int(),
+  dayKey: DayKeySchema,
+  /** 目標の Day 番号（沿革表示用）。目標に紐づかない文脈では null。 */
+  dayNumber: z.number().int().nullable(),
+  op: RuleOpSchema,
+  before: z.record(z.string(), z.unknown()).nullable(),
+  after: z.record(z.string(), z.unknown()).nullable(),
+  reason: z.string(),
+  createdAt: z.number().int(),
 });
-export type WithdrawInput = z.infer<typeof WithdrawInputSchema>;
+export type RuleChangeEntry = z.infer<typeof RuleChangeSchema>;
 
-// --- 沿革・今日の Check（出力）---------------------------------------------
+/** ルールへの回答1件（写真なら imageId、質問なら answerText）。 */
+export const RuleAnswerSchema = z.object({
+  id: z.number().int(),
+  ruleId: z.number().int(),
+  dayKey: DayKeySchema,
+  dayNumber: z.number().int().nullable(),
+  imageId: z.number().int().nullable(),
+  answerText: z.string().nullable(),
+  createdAt: z.number().int(),
+});
+export type RuleAnswer = z.infer<typeof RuleAnswerSchema>;
 
-/** 沿革（⑤）＝ Plan を day_key 昇順・同日内は記録順で並べ、Check を入れ子に持つ。日記は含めない。 */
+/**
+ * 沿革1件＝ルール操作とその理由。写真ルール・質問ルールの `op='add'` エントリには、
+ * そのルールの答え合わせ全件がぶら下がる（design: goal-chronicle）。
+ */
+export const ChronicleEntrySchema = z.object({
+  ruleId: z.number().int(),
+  target: RuleTargetSchema,
+  label: z.string(),
+  change: RuleChangeSchema,
+  answers: z.array(RuleAnswerSchema),
+});
+export type ChronicleEntry = z.infer<typeof ChronicleEntrySchema>;
+
+/** 完走フォークで理由つきに「終える」を選んだときの最終エントリ（design D7）。 */
+export const ChronicleEndedNoteSchema = z.object({
+  reason: z.string(),
+  dayNumber: z.number().int(),
+});
+
+/** 沿革（⑤）＝ルール操作の年表（`day_key` 昇順・同日内は記録順）。日記は含めない。 */
 export const ChronicleSchema = z.object({
   goalId: z.number().int(),
-  plans: z.array(GoalPlanSchema),
+  entries: z.array(ChronicleEntrySchema),
+  endedNote: ChronicleEndedNoteSchema.nullable(),
 });
 export type Chronicle = z.infer<typeof ChronicleSchema>;
 
-/** その日に回答すべき Check 1件（今日タブの不足条件行・初回トーストが使う）。 */
-export const DueCheckSchema = z.object({
-  checkId: z.number().int(),
-  planId: z.number().int(),
-  goalId: z.number().int(),
-  goalName: z.string(),
-  planBody: z.string(),
-  kind: CheckKindSchema,
-  schedule: CheckScheduleSchema,
+// --- 今日の不足ルール（今日タブ・初回トースト）------------------------------
+
+/** その日に回答すべき写真/質問ルール1件（今日タブの不足条件行・初回トーストが使う）。 */
+export const DueRuleSchema = z.object({
+  ruleId: z.number().int(),
+  goalId: z.number().int().nullable(),
+  goalName: z.string().nullable(),
+  target: z.enum(['PHOTO', 'QUESTION']),
   /** 表示ラベル＝写真はキャプション／質問は質問文。 */
   label: z.string(),
-  caption: z.string(),
-  questionText: z.string(),
-  placeNote: z.string().nullable(),
-  timeNote: z.string().nullable(),
-  startDayKey: DayKeySchema,
-  /** 範囲Check のとき「N日中の何日目か」（1 始まり）。単発は null。 */
+  schedule: RuleScheduleSchema,
+  startDay: DayKeySchema,
+  endDay: DayKeySchema.nullable(),
+  /** 範囲ルールのとき「N日中の何日目か」（1 始まり）。単発・永続は null。 */
   rangeDayNumber: z.number().int().nullable(),
   spanDays: z.number().int().nullable(),
 });
-export type DueCheck = z.infer<typeof DueCheckSchema>;
+export type DueRule = z.infer<typeof DueRuleSchema>;
 
-/** 「その日に回答すべき Check があるか」（トースト用エンドポイントの応答）。 */
-export const DueChecksResponseSchema = z.object({
+/** 「その日に回答すべきルールがあるか」（トースト用エンドポイントの応答）。 */
+export const DueRulesResponseSchema = z.object({
   dayKey: DayKeySchema,
-  checks: z.array(DueCheckSchema),
+  rules: z.array(DueRuleSchema),
 });
-export type DueChecksResponse = z.infer<typeof DueChecksResponseSchema>;
-
-/** 合成条件の condition_key 名前空間（既存の total_work/group:/timeline:/manual:/planning: と衝突しない）。 */
-export const CHECK_CONDITION_PREFIX = 'check:';
-/** Check の合成条件 target（既存 RuleTarget とは別枠）。 */
-export const CHECK_TARGET = 'CHECK';
+export type DueRulesResponse = z.infer<typeof DueRulesResponseSchema>;

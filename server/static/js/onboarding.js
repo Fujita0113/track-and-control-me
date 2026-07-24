@@ -1,71 +1,40 @@
-// 初回オンボーディング(spec: onboarding-initial-rules).
-// 当日ルール無し かつ 未来ルール無し のとき、初期ルール作成を促すダイアログを表示し、
-// 翌日(未来日)ルール作成フローへ誘導する。当日ルールの自動生成は行わない(凍結ポリシー維持)。
+// 初回オンボーディング。ルールを足せる入口は目標作成時と振り返りタブの目標コーナーの2つだけ
+// （spec: editable-rule-registry）。目標が1つも無ければ、まず目標タブへ誘導する。
 import { api } from './api.js';
-import { state } from './state.js';
-import { h, openModal, closeModal, toast } from './util.js';
-import { openRuleEditor } from './rules.js';
+import { h, openModal, closeModal } from './util.js';
 
-/** 未来ルール = DRAFT_FUTURE 状態のルールセット(編集可能な未来日)。 */
-function hasFutureRule(rulesets) {
-  return (rulesets || []).some(
-    (rs) => rs && rs.ruleSet && rs.ruleSet.status === 'DRAFT_FUTURE',
-  );
-}
-
-/** 条件成立(当日ルール無し かつ 未来ルール無し)ならダイアログを表示する。 */
+/** 目標が1つも無ければ誘導ダイアログを表示する。 */
 export async function maybeShowOnboarding() {
-  let unlock;
-  let rulesets;
+  let goals;
   try {
-    [unlock, rulesets] = await Promise.all([
-      api.getUnlock(state.today),
-      api.getRules(),
-    ]);
+    goals = await api.getGoals();
   } catch {
     return; // 取得失敗時は黙って何もしない(通常フローを妨げない)。
   }
-
-  const noTodayRule = !unlock.hasRuleSet;
-  const noFutureRule = !hasFutureRule(rulesets);
-  if (!(noTodayRule && noFutureRule)) return; // どちらか有ればダイアログを出さない。
-
+  if (goals && goals.length) return;
   showDialog();
 }
 
 function showDialog() {
-  // 初期状態(実効ルール皆無)では、当日から使えるよう「今日」のルールを作成する。
-  // このブートストラップ当日ルールは今日中は何度でも編集でき、明日以降は凍結される。
-  const target = state.today;
   const body = h('div', { class: 'modal-body' },
-    h('p', {}, 'まだ解錠ルールが設定されていません。'),
-    h('p', { class: 'muted', text: `今日 (${target}) のルールを作成すると、ゲートの解錠条件が今日から有効になります。初回に作成した当日ルールは今日中は何度でも編集でき（タイポや達成不能のやり直しに対応）、明日以降は凍結されます。` }),
+    h('p', {}, 'まだ目標がありません。'),
+    h('p', { class: 'muted', text: '目標タブの「＋ 新しい目標」から、名前と一緒にその場でルール（守ること）を作れます。ルールを足せる場所は目標作成時と、振り返りタブの目標コーナーの2つだけです。' }),
   );
-  const createBtn = h('button', { class: 'btn primary', text: '今日のルールを作成', type: 'button' });
-  createBtn.addEventListener('click', async () => {
+  const goBtn = h('button', { class: 'btn primary', text: '目標タブを開く', type: 'button' });
+  goBtn.addEventListener('click', () => {
     closeModal();
-    try {
-      const groups = await api.getGroups().catch(() => []);
-      const existing = await api.getRule(target).catch(() => null);
-      // 作成後は onDone で特別な処理は不要(ゲート/ルール領域は各画面で再描画される)。
-      openRuleEditor(target, existing && existing.ruleSet ? existing.conditions : [], groups, () => {
-        toast('初期ルールを作成しました', 'ok');
-      });
-    } catch (err) {
-      toast(`ルール作成を開けませんでした: ${err.message}`, 'err');
-    }
+    const tab = document.querySelector('.tab[data-target="goals"]');
+    if (tab) tab.click();
   });
   body.appendChild(h('div', { class: 'actions' },
     h('button', { class: 'btn', text: 'あとで', type: 'button', onclick: closeModal }),
-    createBtn,
+    goBtn,
   ));
-  // Enter で主要ボタン（作成）を実行、Escape で「あとで」相当（閉じる）。副ボタンには割り当てない。
   body.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); createBtn.click(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); goBtn.click(); }
     else if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
   });
-  openModal(body, '初期ルールを作成してください');
-  // 主要ボタンへ初期フォーカス（ネイティブ button の Enter/Space 既定挙動も活用）。
-  createBtn.focus();
+  openModal(body, '最初の目標を作りましょう');
+  goBtn.focus();
 }

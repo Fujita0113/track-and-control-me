@@ -31,8 +31,6 @@ export const DEMO_GOAL2_START_DAY = '2026-05-01'; // Day1
 export const DEMO_GOAL2_END_DAY = addDaysKey(DEMO_GOAL2_START_DAY, GOAL_DAYS - 1); // 2026-05-30
 const GOAL2_NAME = '朝の散歩を習慣にする';
 const GOAL2_PURPOSE = '時間では測らない「やった／やってない」だけの一点突破チャレンジ。';
-const KEY_WALK = 'manual:朝散歩';
-const KEY_STRETCH = 'manual:ストレッチ';
 // 手動チェックを飛ばした日（1始まり Day 番号）。両方達成の日＝達成日数 24/30。
 const WALK_MISS_DAYS = new Set<number>([5, 12, 20]); // 朝散歩 met 27/30
 const STRETCH_MISS_DAYS = new Set<number>([8, 12, 15, 22]); // ストレッチ met 26/30
@@ -60,12 +58,18 @@ export const DEMO_ALLOC_DAY = addDaysKey(DEMO_START_DAY, 14); // Day15 = 2026-06
 // 2026-06-25 の JST 時刻 → epoch ms（Date.now 非依存。JST = UTC+9、対象時刻は全て 09:00 以降）。
 const allocMs = (h: number, mi: number): number => Date.UTC(2026, 5, 25, h - 9, mi, 0);
 
-// 実践の condition_key（既存の採用モデルと同じ命名）。
-const KEY_TOTAL = 'total_work';
-const KEY_REFLECTION = 'planning:reflection_done';
-const KEY_TOMORROW = 'planning:tomorrow_tasks_registered';
-// 手動チェック実践（非時間型）。安定キー manual:<ラベル>（goal-adopt-manual-check）。
-const KEY_KIN = 'manual:筋トレ';
+// ルールの id（安定キー rule:<id>・design D1）。空 DB への挿入順で固定する（DEMO_GOAL_ID と同じ流儀）。
+export const RULE_TOTAL_ID = 1;
+export const RULE_REFLECTION_ID = 2;
+export const RULE_TOMORROW_ID = 3;
+export const RULE_KIN_ID = 4; // 手動チェック（非時間型）。完走レポート①に乗る。
+export const RULE_WALK_ID = 5; // 2つ目のデモ目標（手動チェックのみ）。
+export const RULE_STRETCH_ID = 6;
+// ⑤沿革サンプル（写真/質問ルール・design: goal-chronicle）。
+export const RULE_PHOTO_MORNING_ID = 7;
+export const RULE_QUESTION_FOCUS_ID = 8;
+export const RULE_PHOTO_SKY_ID = 9;
+export const RULE_QUESTION_PHONE_ID = 10;
 
 // 筋トレ（手動チェック）を飛ばした日（1始まりの Day 番号）。
 // いずれも既存の谷（Day 11,12,13,15,16,20）に含まれる日のみ選ぶ＝達成日数 24/30 を変えない。
@@ -79,6 +83,8 @@ const KIN_MISS_DAYS = new Set<number>([11, 12, 16]);
 //
 // 📷×単発・📷×範囲・💬×単発・取り下げ済み を1つずつ揃える。
 const D = (n: number): string => addDaysKey(DEMO_START_DAY, n - 1); // Day 番号 → day_key。
+/** ルール id → 安定キー 'rule:<id>'（design D1）。 */
+const rk = (ruleId: number): string => `rule:${ruleId}`;
 
 /**
  * 30日ぶんの筋書き（達成 24/30・中盤に谷→後半持ち直し）。
@@ -209,89 +215,73 @@ const IMG_DESK = solidPng([196, 172, 140]); // 木目（単発Check の「朝の
 
 /**
  * ⑤沿革のサンプル（Plan / Check / 回答 / 取り下げ）を焼き込む。
- * すべて固定 day_key・固定タイムスタンプ（`Date.now()` 非依存）。
+ * すべて固定 day_key・固定タイムスタンプ（`Date.now()` 非依存）。写真ルール・質問ルールは
+ * 第一級 `rule` 行（旧 Plan/Check は撤去済み・design: goal-chronicle）。関連するルールは
+ * 同じ理由テキストを持たせて緩く束ねる（構造的な親子は持たない・spec: goal-plan-check REMOVED）。
  *
  * 筋書き（既存の谷に寄せる）:
- *   Day11 谷で崩れる → Day11 に「朝へ前倒し」の賭け（📷×単発・💬×単発 で答え合わせ）
- *   Day13 閾値を 3h へ下げた判断を Plan として残す（📷×範囲 で7日中5日の記録）
- *   Day20 取りこぼしから「寝る前のスマホ」の賭け → 続かず**理由つきで取り下げ**（沿革には残る）
+ *   Day11 谷で崩れる → 「朝へ前倒し」の理由で📷×単発・💬×単発を追加
+ *   Day13 閾値を 3h へ下げた判断と同じ理由で📷×範囲を追加（7日中5日の記録）
+ *   Day20 取りこぼしから💬×範囲を追加 → 続かず**理由つきで削除**（沿革には残る）
  */
-function seedPlansAndChecks(db: DB): void {
-  const insPlan = db.prepare(
-    `INSERT INTO goal_plan (id, goal_id, day_key, body, status, withdraw_reason, created_at)
-     VALUES (@id, @goal, @day, @body, @status, @reason, @now)`,
+function seedRuleChronicle(db: DB): void {
+  const insRule = db.prepare(
+    `INSERT INTO rule (id, target, comparator, threshold_seconds, label, signal_key, caption, question_text, start_day, end_day, status, created_at)
+     VALUES (@id, @target, 'GTE', NULL, NULL, NULL, @caption, @question, @start, @end, @status, @now)`,
   );
-  const insCheck = db.prepare(
-    `INSERT INTO goal_check
-       (id, plan_id, kind, caption, question_text, schedule, start_day_key, span_days, place_note, time_note, status, cancel_reason, created_at)
-     VALUES (@id, @plan, @kind, @caption, @question, @schedule, @start, @span, @place, @time, @status, @cancel, @now)`,
+  const insGoalRule = db.prepare('INSERT INTO goal_rule (goal_id, rule_id) VALUES (?, ?)');
+  const insChange = db.prepare(
+    `INSERT INTO rule_change (rule_id, day_key, op, before, after, reason, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
-  const insResult = db.prepare(
-    `INSERT INTO goal_check_result (check_id, day_key, image_id, answer_text, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
+  const insAnswer = db.prepare(
+    `INSERT INTO rule_answer (rule_id, day_key, image_id, answer_text, created_at) VALUES (?, ?, ?, ?, ?)`,
   );
   const insImg = db.prepare(
     `INSERT INTO goal_journal_image (goal_id, day_key, caption, mime, bytes, width, height, sort_order, created_at)
      VALUES (?, ?, ?, 'image/png', ?, 480, 360, ?, ?)`,
   );
-  /** 写真Check の提出＝先指定キャプションで画像を保存し、その image_id を回答に持つ（design D5）。 */
-  const submitPhoto = (checkId: number, dayKey: string, caption: string, bytes: Buffer, sort: number): void => {
+  /** 写真ルールへの提出＝先指定キャプションで画像を保存し、その image_id を回答に持つ（design D5）。 */
+  const submitPhoto = (ruleId: number, dayKey: string, caption: string, bytes: Buffer, sort: number): void => {
     const imageId = insImg.run(DEMO_GOAL_ID, dayKey, caption, bytes, sort, SEED_TS).lastInsertRowid as number;
-    insResult.run(checkId, dayKey, imageId, null, SEED_TS);
+    insAnswer.run(ruleId, dayKey, imageId, null, SEED_TS);
   };
 
-  // --- Plan A（Day11 の谷で立てた賭け）------------------------------------
-  // 文面は社史調の言い切り（飾らない）。Plan→Check が素直につながる筋にする。
-  insPlan.run({
-    id: 1, goal: DEMO_GOAL_ID, day: D(11),
-    body: '作業を朝いちに前倒しする。夜に回すと崩れるため。',
-    status: 'active', reason: null, now: SEED_TS,
-  });
-  // A1: 📷×単発 — Day14 に「朝の机」を1枚。提出済み。
-  insCheck.run({
-    id: 1, plan: 1, kind: 'photo', caption: '朝の机', question: '',
-    schedule: 'single', start: D(14), span: null, place: '自室', time: '朝',
-    status: 'active', cancel: null, now: SEED_TS,
-  });
-  submitPhoto(1, D(14), '朝の机', IMG_DESK, 0);
-  // A2: 💬×単発 — Day15 に一度だけ答える。
-  insCheck.run({
-    id: 2, plan: 1, kind: 'question', caption: '', question: '前倒しで集中は変わったか',
-    schedule: 'single', start: D(15), span: null, place: null, time: null,
-    status: 'active', cancel: null, now: SEED_TS,
-  });
-  insResult.run(2, D(15), null, '朝は入りが速い。前夜に眠れないと崩れる。', SEED_TS);
+  // --- Day11 の谷で立てた理由（📷×単発・💬×単発）---------------------------
+  const REASON_A = '作業を朝いちに前倒しする。夜に回すと崩れるため。';
+  insRule.run({ id: RULE_PHOTO_MORNING_ID, target: 'PHOTO', caption: '朝の机', question: null, start: D(14), end: D(14), status: 'active', now: SEED_TS });
+  insGoalRule.run(DEMO_GOAL_ID, RULE_PHOTO_MORNING_ID);
+  insChange.run(RULE_PHOTO_MORNING_ID, D(11), 'add', null, JSON.stringify({ target: 'PHOTO', caption: '朝の机' }), REASON_A, SEED_TS);
+  submitPhoto(RULE_PHOTO_MORNING_ID, D(14), '朝の机', IMG_DESK, 0);
 
-  // --- Plan B（Day13 の閾値引き下げの判断そのものを残す）-------------------
-  insPlan.run({
-    id: 2, goal: DEMO_GOAL_ID, day: D(13),
-    body: '総作業の基準を4時間から3時間へ下げる。ゼロの日を作らないため。',
-    status: 'active', reason: null, now: SEED_TS,
-  });
-  // B1: 📷×範囲 — Day14〜Day20 の7日間、毎日「その日の空」を撮る。7日中5日提出（Day16・Day19 はサボり）。
-  // サボった日は繰り越さず、期間を過ぎたら消える＝沿革には「7日中5日提出」と事実どおり残る。
-  insCheck.run({
-    id: 3, plan: 2, kind: 'photo', caption: 'その日の空', question: '',
-    schedule: 'range', start: D(14), span: 7, place: null, time: '朝',
-    status: 'active', cancel: null, now: SEED_TS,
-  });
-  for (const [i, day] of [14, 15, 17, 18, 20].entries()) submitPhoto(3, D(day), 'その日の空', IMG_SKY, i);
+  insRule.run({ id: RULE_QUESTION_FOCUS_ID, target: 'QUESTION', caption: null, question: '前倒しで集中は変わったか', start: D(15), end: D(15), status: 'active', now: SEED_TS });
+  insGoalRule.run(DEMO_GOAL_ID, RULE_QUESTION_FOCUS_ID);
+  insChange.run(RULE_QUESTION_FOCUS_ID, D(11), 'add', null, JSON.stringify({ target: 'QUESTION', questionText: '前倒しで集中は変わったか' }), REASON_A, SEED_TS);
+  insAnswer.run(RULE_QUESTION_FOCUS_ID, D(15), null, '朝は入りが速い。前夜に眠れないと崩れる。', SEED_TS);
 
-  // --- Plan C（Day20 の取りこぼしから立て、続かず取り下げた）---------------
-  // 取り下げた事実と理由は沿革に残す＝「逃げた事実そのものが歴史に残る」（design D9）。
-  insPlan.run({
-    id: 3, goal: DEMO_GOAL_ID, day: D(20),
-    body: '就寝前のスマホをやめる。',
-    status: 'withdrawn', reason: '続かず。意志ではなく置き場所から変える。', now: SEED_TS,
-  });
-  // C1: 💬×範囲 — Day21〜Day25 の5日間。2日答えたところで Plan ごと取り下げ（未達なので cancelled）。
-  insCheck.run({
-    id: 4, plan: 3, kind: 'question', caption: '', question: 'スマホを見ずに寝られたか',
-    schedule: 'range', start: D(21), span: 5, place: null, time: '夜',
-    status: 'cancelled', cancel: '続かず。意志ではなく置き場所から変える。', now: SEED_TS,
-  });
-  insResult.run(4, D(21), null, '見ずに寝られた。朝の目覚めは軽い。', SEED_TS);
-  insResult.run(4, D(22), null, 'ベッドで30分見てしまった。手の届く場所にあるのが因。', SEED_TS);
+  // --- Day13 の閾値引き下げと同じ理由（📷×範囲）-----------------------------
+  // Day14〜Day20 の7日間、毎日「その日の空」を撮る。7日中5日提出（サボりは既存の谷日 Day16・Day20 に
+  // 寄せる＝①カレンダーの達成日数 24/30 を壊さない・プロジェクト必須ルール）。
+  const REASON_B = '総作業の基準を4時間から3時間へ下げる。ゼロの日を作らないため。';
+  insRule.run({ id: RULE_PHOTO_SKY_ID, target: 'PHOTO', caption: 'その日の空', question: null, start: D(14), end: D(20), status: 'active', now: SEED_TS });
+  insGoalRule.run(DEMO_GOAL_ID, RULE_PHOTO_SKY_ID);
+  insChange.run(RULE_PHOTO_SKY_ID, D(13), 'add', null, JSON.stringify({ target: 'PHOTO', caption: 'その日の空' }), REASON_B, SEED_TS);
+  for (const [i, day] of [14, 15, 17, 18, 19].entries()) submitPhoto(RULE_PHOTO_SKY_ID, D(day), 'その日の空', IMG_SKY, i);
+
+  // --- Day20 の取りこぼしから足し、続かず削除した（💬×範囲）------------------
+  // 削除した事実と理由は沿革に残す＝「逃げた事実そのものが歴史に残る」（design D4）。
+  const REASON_C_ADD = '就寝前のスマホをやめる。';
+  const REASON_C_REMOVE = '続かず。意志ではなく置き場所から変える。';
+  insRule.run({ id: RULE_QUESTION_PHONE_ID, target: 'QUESTION', caption: null, question: 'スマホを見ずに寝られたか', start: D(21), end: D(25), status: 'removed', now: SEED_TS });
+  insGoalRule.run(DEMO_GOAL_ID, RULE_QUESTION_PHONE_ID);
+  insChange.run(RULE_QUESTION_PHONE_ID, D(20), 'add', null, JSON.stringify({ target: 'QUESTION', questionText: 'スマホを見ずに寝られたか' }), REASON_C_ADD, SEED_TS);
+  insAnswer.run(RULE_QUESTION_PHONE_ID, D(21), null, '見ずに寝られた。朝の目覚めは軽い。', SEED_TS);
+  insAnswer.run(RULE_QUESTION_PHONE_ID, D(22), null, 'ベッドで30分見てしまった。手の届く場所にあるのが因。', SEED_TS);
+  insChange.run(
+    RULE_QUESTION_PHONE_ID, D(23), 'remove',
+    JSON.stringify({ target: 'QUESTION', questionText: 'スマホを見ずに寝られたか' }), null,
+    REASON_C_REMOVE, SEED_TS,
+  );
 }
 
 /** デモ用サンプルを空の（マイグレーション済み）DB へ seed する。 */
@@ -302,23 +292,34 @@ export function seedDemo(db: DB): void {
       'INSERT INTO goal (id, name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(DEMO_GOAL_ID, GOAL_NAME, GOAL_PURPOSE, DEMO_START_DAY, DEMO_END_DAY, SEED_TS);
 
-    // 採用実践3つ（作業4時間 / 振り返りを書く / 明日のタスク登録）。
-    const insPractice = db.prepare(
-      `INSERT INTO goal_practice (goal_id, condition_key, target, label_snapshot, stable_group_id, signal_key, sort_order)
-       VALUES (@goal, @key, @target, @label, @group, @signal, @sort)`,
+    // ルール4つ（作業4時間 / 振り返りを書く / 明日のタスク登録 / 筋トレ手動チェック）。すべて永続
+    // （end_day=null）で目標の全期間を通して効く。「採用」は廃止済み＝goal_rule で自動紐づけする。
+    const insRule = db.prepare(
+      `INSERT INTO rule (id, target, comparator, threshold_seconds, label, signal_key, start_day, end_day, status, created_at)
+       VALUES (@id, @target, 'GTE', @threshold, @label, @signal, @startDay, NULL, 'active', @now)`,
     );
-    insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_TOTAL, target: 'TOTAL_WORK', label: '総作業時間', group: null, signal: null, sort: 0 });
-    insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_REFLECTION, target: 'PLANNING', label: '今日の振り返り', group: null, signal: 'reflection_done', sort: 1 });
-    insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_TOMORROW, target: 'PLANNING', label: '明日のタスク登録', group: null, signal: 'tomorrow_tasks_registered', sort: 2 });
-    // 手動チェック実践「筋トレ」（非時間型・閾値なし）。完走レポート①に手動チェック行として乗る。
-    insPractice.run({ goal: DEMO_GOAL_ID, key: KEY_KIN, target: 'MANUAL_CHECK', label: '筋トレ', group: null, signal: null, sort: 3 });
+    const insGoalRule = db.prepare('INSERT INTO goal_rule (goal_id, rule_id) VALUES (?, ?)');
+    insRule.run({ id: RULE_TOTAL_ID, target: 'TOTAL_WORK', threshold: THRESH_HIGH, label: '総作業時間', signal: null, startDay: DEMO_START_DAY, now: SEED_TS });
+    insRule.run({ id: RULE_REFLECTION_ID, target: 'PLANNING', threshold: null, label: '今日の振り返り', signal: 'reflection_done', startDay: DEMO_START_DAY, now: SEED_TS });
+    insRule.run({ id: RULE_TOMORROW_ID, target: 'PLANNING', threshold: null, label: '明日のタスク登録', signal: 'tomorrow_tasks_registered', startDay: DEMO_START_DAY, now: SEED_TS });
+    // 手動チェックルール「筋トレ」（非時間型・閾値なし）。完走レポート①に手動チェック行として乗る。
+    insRule.run({ id: RULE_KIN_ID, target: 'MANUAL_CHECK', threshold: null, label: '筋トレ', signal: null, startDay: DEMO_START_DAY, now: SEED_TS });
+    for (const id of [RULE_TOTAL_ID, RULE_REFLECTION_ID, RULE_TOMORROW_ID, RULE_KIN_ID]) insGoalRule.run(DEMO_GOAL_ID, id);
 
-    // 閾値変更ログ（Day13 に 4h→3h、理由必須）。
+    // 閾値変更ログ（Day13 に 4h→3h、理由必須・design D4）。
     const changeDate = addDaysKey(DEMO_START_DAY, THRESH_CHANGE_DAY - 1);
     db.prepare(
-      `INSERT INTO practice_threshold_change (condition_key, effective_date, old_seconds, new_seconds, reason, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(KEY_TOTAL, changeDate, THRESH_HIGH, THRESH_LOW, '課題週間。ゼロにはしない', SEED_TS);
+      `INSERT INTO rule_change (rule_id, day_key, op, before, after, reason, created_at)
+       VALUES (?, ?, 'update', ?, ?, ?, ?)`,
+    ).run(
+      RULE_TOTAL_ID,
+      changeDate,
+      JSON.stringify({ thresholdSeconds: THRESH_HIGH }),
+      JSON.stringify({ thresholdSeconds: THRESH_LOW }),
+      '課題週間。ゼロにはしない',
+      SEED_TS,
+    );
+    db.prepare('UPDATE rule SET threshold_seconds = ? WHERE id = ?').run(THRESH_LOW, RULE_TOTAL_ID);
 
     // タブグループ（today ビューのドーナツ/名称用）。
     const insGroup = db.prepare(
@@ -353,12 +354,21 @@ export function seedDemo(db: DB): void {
 
       // per_condition_results（レポート①②と today の条件進捗が読む焼き込み列）。
       // 手動チェックは非時間型なので actualSeconds/thresholdSeconds を持たない。
-      const per = [
-        { conditionKey: KEY_TOTAL, target: 'TOTAL_WORK', met: metTotal, actualSeconds: workSec, thresholdSeconds: threshold, label: '総作業時間' },
-        { conditionKey: KEY_REFLECTION, target: 'PLANNING', met: plan.refl, signalKey: 'reflection_done', label: '今日の振り返り' },
-        { conditionKey: KEY_TOMORROW, target: 'PLANNING', met: plan.tmr, signalKey: 'tomorrow_tasks_registered', label: '明日のタスク登録' },
-        { conditionKey: KEY_KIN, target: 'MANUAL_CHECK', met: kinMet, label: '筋トレ' },
+      const per: Record<string, unknown>[] = [
+        { conditionKey: rk(RULE_TOTAL_ID), target: 'TOTAL_WORK', met: metTotal, actualSeconds: workSec, thresholdSeconds: threshold, label: '総作業時間' },
+        { conditionKey: rk(RULE_REFLECTION_ID), target: 'PLANNING', met: plan.refl, signalKey: 'reflection_done', label: '今日の振り返り' },
+        { conditionKey: rk(RULE_TOMORROW_ID), target: 'PLANNING', met: plan.tmr, signalKey: 'tomorrow_tasks_registered', label: '明日のタスク登録' },
+        { conditionKey: rk(RULE_KIN_ID), target: 'MANUAL_CHECK', met: kinMet, label: '筋トレ' },
       ];
+      // ⑤沿革サンプルの写真/質問ルール（Day14〜 に発効）も、有効な日は per_condition_results へ
+      // 焼き込む（レポート①が欠測=未達成として誤判定しないよう・resolveByStableOrLegacy が読む列）。
+      const dayNum = i + 1;
+      if (dayNum >= 14) per.push({ conditionKey: rk(RULE_PHOTO_MORNING_ID), target: 'PHOTO', met: true, label: '朝の机' }); // 単発・D14 提出以降ずっと met
+      if (dayNum >= 15) per.push({ conditionKey: rk(RULE_QUESTION_FOCUS_ID), target: 'QUESTION', met: true, label: '前倒しで集中は変わったか' }); // 単発・D15 提出以降ずっと met
+      if (dayNum >= 14 && dayNum <= 20)
+        per.push({ conditionKey: rk(RULE_PHOTO_SKY_ID), target: 'PHOTO', met: ![16, 20].includes(dayNum), label: 'その日の空' }); // 範囲・サボりは既存の谷日のみ
+      if (dayNum >= 21 && dayNum <= 22)
+        per.push({ conditionKey: rk(RULE_QUESTION_PHONE_ID), target: 'QUESTION', met: true, label: 'スマホを見ずに寝られたか' }); // 削除(D23)前の2日は met
       insEval.run({
         day: dayKey,
         status: allMet ? 'UNLOCKED' : 'LOCKED',
@@ -393,16 +403,18 @@ export function seedDemo(db: DB): void {
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '植物', IMG_AFTER, 1, SEED_TS);
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '記念', IMG_AFTER, 2, SEED_TS);
 
-    seedPlansAndChecks(db);
+    seedRuleChronicle(db);
 
-    // --- 2つ目のデモ目標: 手動チェックのみ（非時間型）を採用した完走目標 -----------
-    // 時間型実践が無いため、完走レポートは①達成カレンダーのみ・②時間の推移は出ない。
+    // --- 2つ目のデモ目標: 手動チェックのみ（非時間型）を追った完走目標 -----------
+    // 時間型ルールが無いため、完走レポートは①達成カレンダーのみ・②時間の推移は出ない。
     db.prepare(
       'INSERT INTO goal (id, name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(DEMO_GOAL2_ID, GOAL2_NAME, GOAL2_PURPOSE, DEMO_GOAL2_START_DAY, DEMO_GOAL2_END_DAY, SEED_TS);
-    // 採用実践は手動チェック2つ（朝散歩 / ストレッチ）。閾値なし・非時間型。
-    insPractice.run({ goal: DEMO_GOAL2_ID, key: KEY_WALK, target: 'MANUAL_CHECK', label: '朝散歩', group: null, signal: null, sort: 0 });
-    insPractice.run({ goal: DEMO_GOAL2_ID, key: KEY_STRETCH, target: 'MANUAL_CHECK', label: 'ストレッチ', group: null, signal: null, sort: 1 });
+    // ルールは手動チェック2つ（朝散歩 / ストレッチ）。閾値なし・非時間型・永続。
+    insRule.run({ id: RULE_WALK_ID, target: 'MANUAL_CHECK', threshold: null, label: '朝散歩', signal: null, startDay: DEMO_GOAL2_START_DAY, now: SEED_TS });
+    insRule.run({ id: RULE_STRETCH_ID, target: 'MANUAL_CHECK', threshold: null, label: 'ストレッチ', signal: null, startDay: DEMO_GOAL2_START_DAY, now: SEED_TS });
+    insGoalRule.run(DEMO_GOAL2_ID, RULE_WALK_ID);
+    insGoalRule.run(DEMO_GOAL2_ID, RULE_STRETCH_ID);
 
     for (let i = 0; i < GOAL_DAYS; i++) {
       const dayKey = addDaysKey(DEMO_GOAL2_START_DAY, i);
@@ -411,8 +423,8 @@ export function seedDemo(db: DB): void {
       const allMet = walkMet && stretchMet;
       // per_condition_results は手動チェックのみ（actualSeconds/thresholdSeconds なし＝非時間型）。
       const per = [
-        { conditionKey: KEY_WALK, target: 'MANUAL_CHECK', met: walkMet, label: '朝散歩' },
-        { conditionKey: KEY_STRETCH, target: 'MANUAL_CHECK', met: stretchMet, label: 'ストレッチ' },
+        { conditionKey: rk(RULE_WALK_ID), target: 'MANUAL_CHECK', met: walkMet, label: '朝散歩' },
+        { conditionKey: rk(RULE_STRETCH_ID), target: 'MANUAL_CHECK', met: stretchMet, label: 'ストレッチ' },
       ];
       insEval.run({
         day: dayKey,

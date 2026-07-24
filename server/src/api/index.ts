@@ -2,21 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import type { DB } from '../db/index.js';
 import { getConfig, updateConfig, type AppConfigRow } from '../db/index.js';
 import { daySummary, rangeSummary, listGroups, todayKey } from '../services/summary.js';
-import { listRecentGroupIdentities, resolveGroupDisplay } from '../services/group-identity.js';
+import { listRecentGroupIdentities } from '../services/group-identity.js';
 import { isExtensionOutdated, MIN_EXTENSION_VERSION } from '../services/ext-version.js';
-import {
-  listRuleSets,
-  getRuleSet,
-  upsertFutureRuleSet,
-  deleteRuleSet,
-  FrozenRuleError,
-  BaselineViolationError,
-  GoalLockError,
-  ThresholdReasonRequiredError,
-  RuleConditionError,
-  type ConditionInput,
-  type RuleSetWithConditions,
-} from '../rules/rules.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { listChecks, setCheck } from '../rules/checks.js';
 import { revealPasswords } from '../password/reveal.js';
@@ -28,21 +15,6 @@ import { registerDemoRoutes } from './demo.js';
 import type { ApiDeps } from './types.js';
 
 export type { ApiDeps };
-
-/**
- * GROUP 条件へ表示名を添える（spec: group-rule-identity）。UI が UUID/identity ID を
- * 直接解決しなくて済むよう、`group_name`/`group_color`/`group_needs_reset` をここで埋め込む。
- */
-function decorateRuleSet(db: DB, rs: RuleSetWithConditions) {
-  return {
-    ...rs,
-    conditions: rs.conditions.map((c) => {
-      if (c.target !== 'GROUP') return c;
-      const gd = resolveGroupDisplay(db, c);
-      return { ...c, group_name: gd.name, group_color: gd.color, group_needs_reset: gd.needsReset };
-    }),
-  };
-}
 
 /** app_config を API 表示用に整形（salt は伏せる）。拡張ビルドの警告フラグも添える（design D7-4）。 */
 function publicConfig(
@@ -121,77 +93,8 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
     return rangeSummary(db, q.from, q.to);
   });
 
-  // --- ルール -------------------------------------------------------------
-  app.get('/api/rules', async () => listRuleSets(db).map((rs) => decorateRuleSet(db, rs)));
-
-  app.get('/api/rules/:date', async (req) => {
-    const { date } = req.params as { date: string };
-    const rs = getRuleSet(db, date);
-    return rs ? decorateRuleSet(db, rs) : { ruleSet: null, conditions: [] };
-  });
-
-  app.put('/api/rules/:date', async (req, reply) => {
-    const { date } = req.params as { date: string };
-    const b = req.body as {
-      combinator?: 'ALL';
-      conditions: ConditionInput[];
-      threshold_change_reason?: string | null;
-    };
-    try {
-      return upsertFutureRuleSet(
-        db,
-        date,
-        { combinator: b.combinator, conditions: b.conditions ?? [] },
-        undefined,
-        { thresholdChangeReason: b.threshold_change_reason },
-      );
-    } catch (err) {
-      if (err instanceof ThresholdReasonRequiredError) {
-        reply.code(400);
-        return { error: err.message, reasonRequired: true };
-      }
-      // 手動チェックのラベル必須・重複などの入力検証違反は 400。
-      if (err instanceof RuleConditionError) {
-        reply.code(400);
-        return { error: err.message, invalidCondition: true };
-      }
-      // 当日の baseline 違反（既存凍結条件の緩和）は 400。FrozenRuleError の派生なので先に判定する。
-      if (err instanceof BaselineViolationError) {
-        reply.code(400);
-        return { error: err.message, baselineViolation: true };
-      }
-      if (err instanceof GoalLockError) {
-        reply.code(409);
-        return { error: err.message, goalLocked: true };
-      }
-      if (err instanceof FrozenRuleError) {
-        reply.code(409);
-        return { error: err.message, frozen: true };
-      }
-      throw err;
-    }
-  });
-
-  app.delete('/api/rules/:date', async (req, reply) => {
-    const { date } = req.params as { date: string };
-    try {
-      return { deleted: deleteRuleSet(db, date) };
-    } catch (err) {
-      if (err instanceof BaselineViolationError) {
-        reply.code(400);
-        return { error: err.message, baselineViolation: true };
-      }
-      if (err instanceof GoalLockError) {
-        reply.code(409);
-        return { error: err.message, goalLocked: true };
-      }
-      if (err instanceof FrozenRuleError) {
-        reply.code(409);
-        return { error: err.message, frozen: true };
-      }
-      throw err;
-    }
-  });
+  // --- ルール（第一級 rule の CRUD は目標コーナー経由・goals.ts / spec: editable-rule-registry）---
+  // 今日タブからのルール作成・編集・削除の書き込みエンドポイントは提供しない（spec: editable-rule-registry）。
 
   // --- 当日チェック（MANUAL_CHECK）--------------------------------------
   app.get('/api/checks/:date', async (req) => {

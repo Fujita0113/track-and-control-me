@@ -117,252 +117,180 @@ describe('画像 API の一巡（進行中）', () => {
   });
 });
 
-describe('Plan / Check API（spec: goal-plan-check / goal-check-gate / goal-chronicle）', () => {
-  const PLAN_BODY = 'ボリュームアップシャンプーを使えば髪質が良くなるのではないだろうか';
-
-  /** 進行中（今日が Day1）の目標を作る。 */
-  function activeGoal(): number {
-    const today = todayKey(db, Date.now());
-    return insertGoal(today, addDaysKey(today, 29));
+describe('目標・ルール API（spec: editable-rule-registry / goal-lifecycle-fork）', () => {
+  /** 進行中（今日が Day1）の目標を作る（1つ以上のルールを添えて作成）。 */
+  async function createActiveGoal(rules: Record<string, unknown>[]): Promise<{ id: number; ruleId: number }> {
+    const res = await app.inject({ method: 'POST', url: '/api/goals', payload: { name: '目標', rules } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    return { id: body.id, ruleId: body.rules[0].ruleId };
   }
 
-  /** Plan を1件作って id を返す。 */
-  async function makePlan(goalId: number): Promise<number> {
-    const res = await app.inject({
+  it('6.1 目標作成: ルール1件以上必須・理由必須（reason 空は400）', async () => {
+    const noRules = await app.inject({ method: 'POST', url: '/api/goals', payload: { name: 'x', rules: [] } });
+    expect(noRules.statusCode).toBe(400);
+
+    const noReason = await app.inject({
       method: 'POST',
-      url: `/api/goals/${goalId}/plans`,
-      payload: { body: PLAN_BODY },
+      url: '/api/goals',
+      payload: { name: 'x', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: '' }] },
     });
-    expect(res.statusCode).toBe(200);
-    return res.json().id;
-  }
-
-  /** Plan へ Check を1つ足して id を返す。 */
-  async function makeCheck(planId: number, payload: Record<string, unknown>): Promise<number> {
-    const res = await app.inject({ method: 'POST', url: `/api/goals/plans/${planId}/checks`, payload });
-    expect(res.statusCode).toBe(200);
-    return res.json().id;
-  }
-
-  const photoToday = { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 0 };
-
-  it('8.1 Plan の作成・一覧', async () => {
-    const goalId = activeGoal();
-    const planId = await makePlan(goalId);
-
-    const list = await app.inject({ method: 'GET', url: `/api/goals/${goalId}/plans` });
-    expect(list.statusCode).toBe(200);
-    expect(list.json()).toHaveLength(1);
-    expect(list.json()[0]).toMatchObject({ id: planId, body: PLAN_BODY, status: 'active', checks: [] });
+    expect(noReason.statusCode).toBe(400);
   });
 
-  it('8.1 本文が空の Plan は 400 / 存在しない目標は 404', async () => {
-    const goalId = activeGoal();
-    const bad = await app.inject({ method: 'POST', url: `/api/goals/${goalId}/plans`, payload: { body: '  ' } });
-    expect(bad.statusCode).toBe(400);
+  it('6.1 目標コーナーでルールを追加・変更・削除できる（理由必須）', async () => {
+    const { id: goalId } = await createActiveGoal([{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: '4時間は守りたい' }]);
 
-    const missing = await app.inject({ method: 'POST', url: '/api/goals/9999/plans', payload: { body: PLAN_BODY } });
+    const add = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${goalId}/rules`,
+      payload: { target: 'MANUAL_CHECK', label: '筋トレ', reason: '体を動かしたい' },
+    });
+    expect(add.statusCode).toBe(200);
+    const ruleId = add.json().rule.ruleId ?? add.json().rule.id;
+
+    const noReason = await app.inject({
+      method: 'PATCH',
+      url: `/api/goals/${goalId}/rules/${ruleId}`,
+      payload: { target: 'MANUAL_CHECK', label: '筋トレ', reason: '' },
+    });
+    expect(noReason.statusCode).toBe(400);
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/api/goals/${goalId}/rules/${ruleId}`,
+      payload: { reason: '反応が薄いから' },
+    });
+    expect(del.statusCode).toBe(200);
+
+    const noReasonDelete = await app.inject({ method: 'DELETE', url: `/api/goals/${goalId}/rules/${ruleId}`, payload: {} });
+    expect(noReasonDelete.statusCode).toBe(400);
+  });
+
+  it('6.2 延長フォーク: 未指定は409（proposedEndDay 付き）・extend/truncate 両分岐', async () => {
+    const { id: goalId } = await createActiveGoal([{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }]);
+    const today = todayKey(db, Date.now());
+    const overEnd = addDaysKey(today, 33);
+
+    const undecided = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${goalId}/rules`,
+      payload: { target: 'PHOTO', caption: '前髪', startDay: addDaysKey(today, 29), endDay: overEnd, reason: 'r' },
+    });
+    expect(undecided.statusCode).toBe(409);
+    expect(undecided.json().extensionRequired).toBe(true);
+    expect(undecided.json().proposedEndDay).toBe(overEnd);
+
+    const extend = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${goalId}/rules`,
+      payload: { target: 'PHOTO', caption: '前髪', startDay: addDaysKey(today, 29), endDay: overEnd, reason: 'r', extend: 'extend' },
+    });
+    expect(extend.statusCode).toBe(200);
+    expect(extend.json().truncated).toBe(false);
+    const afterExtend = await app.inject({ method: 'GET', url: `/api/goals/${goalId}` });
+    expect(afterExtend.json().endDay).toBe(overEnd);
+
+    // 2件目: 'truncate' 分岐（目標末尾まで切り詰めて作成は成功する）。
+    const goalEnd = afterExtend.json().endDay as string;
+    const anotherOverEnd = addDaysKey(goalEnd, 5);
+    const truncate = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${goalId}/rules`,
+      payload: { target: 'QUESTION', questionText: 'どう？', startDay: goalEnd, endDay: anotherOverEnd, reason: 'r', extend: 'truncate' },
+    });
+    expect(truncate.statusCode).toBe(200);
+    expect(truncate.json().truncated).toBe(true);
+    expect(truncate.json().rule.end_day).toBe(goalEnd);
+    const afterTruncate = await app.inject({ method: 'GET', url: `/api/goals/${goalId}` });
+    expect(afterTruncate.json().endDay).toBe(goalEnd); // 目標は延びない。
+  });
+
+  it('6.2 完走フォーク: 続ける/終える 両分岐', async () => {
+    const today = todayKey(db, Date.now());
+    const start = addDaysKey(today, -40);
+    const end = addDaysKey(today, -11);
+    const goalId = insertGoal(start, end); // 直接 DB へ完走済み目標を作る。
+    db.prepare(
+      "INSERT INTO rule (target, comparator, threshold_seconds, start_day, end_day, status, created_at) VALUES ('TOTAL_WORK', 'GTE', 100, ?, NULL, 'active', ?)",
+    ).run(start, Date.now());
+    const ruleId = (db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id;
+    db.prepare('INSERT INTO goal_rule (goal_id, rule_id) VALUES (?, ?)').run(goalId, ruleId);
+
+    const notCompleted = await app.inject({ method: 'POST', url: `/api/goals/${insertGoal(today, addDaysKey(today, 29))}/continue` });
+    expect(notCompleted.statusCode).toBe(409);
+
+    const cont = await app.inject({ method: 'POST', url: `/api/goals/${goalId}/continue` });
+    expect(cont.statusCode).toBe(200);
+    expect(cont.json().status).toBe('active');
+    expect(cont.json().dayNumber).toBe(1);
+
+    // 別の完走目標で「終える」分岐。
+    const goalId2 = insertGoal(start, end);
+    db.prepare(
+      "INSERT INTO rule (target, comparator, threshold_seconds, start_day, end_day, status, created_at) VALUES ('TOTAL_WORK', 'GTE', 100, ?, NULL, 'active', ?)",
+    ).run(start, Date.now());
+    const ruleId2 = (db.prepare('SELECT last_insert_rowid() AS id').get() as { id: number }).id;
+    db.prepare('INSERT INTO goal_rule (goal_id, rule_id) VALUES (?, ?)').run(goalId2, ruleId2);
+
+    const end_ = await app.inject({ method: 'POST', url: `/api/goals/${goalId2}/end`, payload: { reason: 'もう十分' } });
+    expect(end_.statusCode).toBe(200);
+    expect(end_.json().lifecycleChoice).toBe('ended');
+    const ruleRow = db.prepare('SELECT status FROM rule WHERE id = ?').get(ruleId2) as { status: string };
+    expect(ruleRow.status).toBe('removed');
+  });
+
+  it('6.3/6.4 今日タブの書き込みエンドポイントは存在しない（旧 /api/rules・/api/checks 系）', async () => {
+    const putRules = await app.inject({ method: 'PUT', url: '/api/rules/2026-07-10', payload: { conditions: [] } });
+    expect(putRules.statusCode).toBe(404);
+    const deleteRules = await app.inject({ method: 'DELETE', url: '/api/rules/2026-07-10' });
+    expect(deleteRules.statusCode).toBe(404);
+    const plans = await app.inject({ method: 'POST', url: '/api/goals/1/plans', payload: {} });
+    expect(plans.statusCode).toBe(404);
+  });
+
+  it('6.3 写真/質問ルールへの回答は /api/rules/:ruleId/photo・answer', async () => {
+    const today = todayKey(db, Date.now());
+    const { id: goalId, ruleId } = await createActiveGoal([
+      { target: 'PHOTO', caption: '前髪・正面', startDay: today, endDay: today, reason: 'r' },
+    ]);
+
+    const due = await app.inject({ method: 'GET', url: `/api/due-rules/${today}` });
+    expect(due.statusCode).toBe(200);
+    expect(due.json().rules).toHaveLength(1);
+    expect(due.json().rules[0]).toMatchObject({ ruleId, goalId, label: '前髪・正面' });
+
+    const submit = await app.inject({ method: 'POST', url: `/api/rules/${ruleId}/photo`, payload: { dataUrl: PNG_DATA_URL } });
+    expect(submit.statusCode).toBe(200);
+    expect(submit.json().imageId).toBeTypeOf('number');
+    expect((await app.inject({ method: 'GET', url: `/api/due-rules/${today}` })).json().rules).toEqual([]);
+  });
+
+  it('質問への空回答は400、存在しないルールへの操作は404', async () => {
+    const today = todayKey(db, Date.now());
+    const { ruleId } = await createActiveGoal([
+      { target: 'QUESTION', questionText: '使用感は？', startDay: today, endDay: today, reason: 'r' },
+    ]);
+    const empty = await app.inject({ method: 'POST', url: `/api/rules/${ruleId}/answer`, payload: { answerText: '  ' } });
+    expect(empty.statusCode).toBe(400);
+    const ok = await app.inject({ method: 'POST', url: `/api/rules/${ruleId}/answer`, payload: { answerText: '泡立ちは良い' } });
+    expect(ok.statusCode).toBe(200);
+    const missing = await app.inject({ method: 'POST', url: '/api/rules/9999/answer', payload: { answerText: 'x' } });
     expect(missing.statusCode).toBe(404);
   });
 
-  it('8.1 Check の作成（📷×単発・💬×範囲 の2軸が独立に組める）', async () => {
-    const planId = await makePlan(activeGoal());
-
-    const photo = await app.inject({
-      method: 'POST',
-      url: `/api/goals/plans/${planId}/checks`,
-      payload: { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 3, placeNote: '洗面所' },
-    });
-    expect(photo.statusCode).toBe(200);
-    expect(photo.json()).toMatchObject({
-      kind: 'photo',
-      schedule: 'single',
-      caption: '前髪・正面',
-      placeNote: '洗面所',
-    });
-
-    const question = await app.inject({
-      method: 'POST',
-      url: `/api/goals/plans/${planId}/checks`,
-      payload: { kind: 'question', questionText: '使用感はどうだった？', schedule: 'range', startInDays: 3, spanDays: 7 },
-    });
-    expect(question.statusCode).toBe(200);
-    expect(question.json()).toMatchObject({ kind: 'question', schedule: 'range', spanDays: 7 });
-  });
-
-  it('8.1 Check の入力検証は 400（キャプション空・範囲1日）', async () => {
-    const planId = await makePlan(activeGoal());
-    const noCaption = await app.inject({
-      method: 'POST',
-      url: `/api/goals/plans/${planId}/checks`,
-      payload: { kind: 'photo', caption: '', schedule: 'single', startInDays: 3 },
-    });
-    expect(noCaption.statusCode).toBe(400);
-
-    const shortRange = await app.inject({
-      method: 'POST',
-      url: `/api/goals/plans/${planId}/checks`,
-      payload: { kind: 'photo', caption: '前髪', schedule: 'range', startInDays: 3, spanDays: 1 },
-    });
-    expect(shortRange.statusCode).toBe(400);
-    expect(shortRange.json().error).toMatch(/2日以上/);
-  });
-
-  it('8.2 写真提出はキャプションを送らず、先指定キャプションで画像が保存される', async () => {
-    const goalId = activeGoal();
-    const today = todayKey(db, Date.now());
-    const checkId = await makeCheck(await makePlan(goalId), photoToday);
-
-    const submit = await app.inject({
-      method: 'POST',
-      url: `/api/goal-checks/${checkId}/photo`,
-      payload: { dataUrl: PNG_DATA_URL }, // caption は送らない。
-    });
-    expect(submit.statusCode).toBe(200);
-    expect(submit.json().imageId).toBeTypeOf('number');
-
-    // 画像は先指定キャプションで当日に保存され、③ Before/After へ流入する。
-    const images = await app.inject({ method: 'GET', url: `/api/goals/${goalId}/journal/${today}/images` });
-    expect(images.json()).toHaveLength(1);
-    expect(images.json()[0]).toMatchObject({ caption: '前髪・正面' });
-  });
-
-  it('8.2 質問回答は保存され、空回答は 400', async () => {
-    const checkId = await makeCheck(await makePlan(activeGoal()), {
-      kind: 'question',
-      questionText: '使用感は？',
-      schedule: 'single',
-      startInDays: 0,
-    });
-
-    const empty = await app.inject({
-      method: 'POST',
-      url: `/api/goal-checks/${checkId}/answer`,
-      payload: { answerText: '  ' },
-    });
-    expect(empty.statusCode).toBe(400);
-
-    const ok = await app.inject({
-      method: 'POST',
-      url: `/api/goal-checks/${checkId}/answer`,
-      payload: { answerText: '泡立ちは良い。乾燥は減った気がする' },
-    });
-    expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toMatchObject({ answerText: '泡立ちは良い。乾燥は減った気がする' });
-  });
-
-  it('8.3 沿革を取得できる（取り下げも理由つきで残る）', async () => {
-    const goalId = activeGoal();
-    const planId = await makePlan(goalId);
-    await makeCheck(planId, { kind: 'photo', caption: '前髪・正面', schedule: 'single', startInDays: 1 });
-
-    const withdraw = await app.inject({
-      method: 'POST',
-      url: `/api/goals/plans/${planId}/withdraw`,
-      payload: { reason: 'シャンプーが肌に合わず返品した' },
-    });
-    expect(withdraw.statusCode).toBe(200);
-
+  it('⑤沿革を取得できる', async () => {
+    const { id: goalId } = await createActiveGoal([{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: '守りたい' }]);
     const chronicle = await app.inject({ method: 'GET', url: `/api/goals/${goalId}/chronicle` });
     expect(chronicle.statusCode).toBe(200);
-    expect(chronicle.json()).toMatchObject({
-      goalId,
-      plans: [
-        {
-          body: PLAN_BODY,
-          status: 'withdrawn',
-          withdrawReason: 'シャンプーが肌に合わず返品した',
-          checks: [{ status: 'cancelled', cancelReason: 'シャンプーが肌に合わず返品した' }],
-        },
-      ],
-    });
+    expect(chronicle.json().entries[0]).toMatchObject({ target: 'TOTAL_WORK', change: { op: 'add', reason: '守りたい' } });
   });
 
-  it('8.3 理由なしの取り下げは 400', async () => {
-    const planId = await makePlan(activeGoal());
-    const res = await app.inject({
-      method: 'POST',
-      url: `/api/goals/plans/${planId}/withdraw`,
-      payload: { reason: '' },
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
-  it('8.4 その日に回答すべき Check を返す（回答すると消える）', async () => {
-    const today = todayKey(db, Date.now());
-    const checkId = await makeCheck(await makePlan(activeGoal()), photoToday);
-
-    const due = await app.inject({ method: 'GET', url: `/api/goal-checks/due/${today}` });
-    expect(due.statusCode).toBe(200);
-    expect(due.json().checks).toHaveLength(1);
-    expect(due.json().checks[0]).toMatchObject({
-      checkId,
-      label: '前髪・正面',
-      kind: 'photo',
-      planBody: PLAN_BODY,
-    });
-
-    await app.inject({ method: 'POST', url: `/api/goal-checks/${checkId}/photo`, payload: { dataUrl: PNG_DATA_URL } });
-    expect((await app.inject({ method: 'GET', url: `/api/goal-checks/due/${today}` })).json().checks).toEqual([]);
-  });
-
-  it('8.4 開始日前の Check は due に出ない（仕掛けた直後はゲートに影響しない）', async () => {
-    const today = todayKey(db, Date.now());
-    await makeCheck(await makePlan(activeGoal()), {
-      kind: 'photo',
-      caption: '前髪・正面',
-      schedule: 'single',
-      startInDays: 3,
-    });
-    expect((await app.inject({ method: 'GET', url: `/api/goal-checks/due/${today}` })).json().checks).toEqual([]);
-  });
-
-  it('今日タブから理由つきで取り下げるとゲートから外れる', async () => {
-    const today = todayKey(db, Date.now());
-    const checkId = await makeCheck(await makePlan(activeGoal()), photoToday);
-
-    const cancel = await app.inject({
-      method: 'POST',
-      url: `/api/goal-checks/${checkId}/cancel`,
-      payload: { reason: 'シャンプーが肌に合わず返品した' },
-    });
-    expect(cancel.statusCode).toBe(200);
-    expect(cancel.json()).toMatchObject({ status: 'cancelled' });
-    expect((await app.inject({ method: 'GET', url: `/api/goal-checks/due/${today}` })).json().checks).toEqual([]);
-  });
-
-  it('達成済みの Check の取り下げは 400 / 写真Check のキャプション変更は 409', async () => {
-    const checkId = await makeCheck(await makePlan(activeGoal()), photoToday);
-
-    const caption = await app.inject({
-      method: 'PATCH',
-      url: `/api/goal-checks/${checkId}/caption`,
-      payload: { caption: '別のキャプション' },
-    });
-    expect(caption.statusCode).toBe(409);
-
-    await app.inject({ method: 'POST', url: `/api/goal-checks/${checkId}/photo`, payload: { dataUrl: PNG_DATA_URL } });
-    const cancel = await app.inject({
-      method: 'POST',
-      url: `/api/goal-checks/${checkId}/cancel`,
-      payload: { reason: 'やめる' },
-    });
-    expect(cancel.statusCode).toBe(400);
-    expect(cancel.json().error).toMatch(/達成済み/);
-  });
-
-  it('存在しない Check への操作は 404', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/goal-checks/9999/answer', payload: { answerText: 'x' } });
-    expect(res.statusCode).toBe(404);
-  });
-
-  it('レポートは進行中でも 200（走行中プレビュー）で、⑤沿革を含む', async () => {
-    const goalId = activeGoal();
-    await makePlan(goalId);
+  it('レポートは進行中でも 200（走行中プレビュー）', async () => {
+    const { id: goalId } = await createActiveGoal([{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }]);
     const rep = await app.inject({ method: 'GET', url: `/api/goals/${goalId}/report` });
     expect(rep.statusCode).toBe(200);
     expect(rep.json().goal).toMatchObject({ status: 'active', dayNumber: 1, showFinalPhotoCta: false });
-    expect(rep.json().chronicle.plans).toHaveLength(1);
   });
 
   it('開始前の目標のレポートは 409（notReady）', async () => {

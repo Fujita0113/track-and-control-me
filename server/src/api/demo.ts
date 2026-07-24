@@ -4,13 +4,28 @@ import { getConfig, type DB } from '../db/index.js';
 import { zonedTimeToEpoch, parseDayKey } from '../aggregation/index.js';
 import {
   listGoals,
+  getGoal,
   getGoalReport,
   getJournal,
   getJournalImageBytes,
+  addRuleToGoal,
+  updateGoalRule,
+  removeGoalRule,
+  continueGoal,
+  endGoal,
+  listDueRules,
   GoalNotFoundError,
   GoalReportNotReadyError,
+  GoalExtensionRequiredError,
+  GoalLifecycleError,
   JournalImageNotFoundError,
 } from '../services/goals.js';
+import {
+  RuleNotFoundError,
+  ReasonRequiredError,
+  RuleValidationError,
+} from '../services/rule-registry.js';
+import { getChronicle } from '../services/goal-chronicle.js';
 import { daySummary } from '../services/summary.js';
 import { getDayAllocation } from '../services/day-allocation.js';
 import { getDemoDb, resetDemoDb } from '../services/demo-db.js';
@@ -66,6 +81,37 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
     const db = getDemoDb();
     const now = resolveNow((req.query as { now?: string }).now);
     return { ...DEMO_META, virtualDay: now, goals: listGoals(db, virtualNowMs(db, now)) };
+  });
+
+  // GET /api/demo/goals/:id?now=<dayKey> — 目標1件（導出状態つき）。
+  app.get('/api/demo/goals/:id', async (req, reply) => {
+    const db = getDemoDb();
+    const id = Number((req.params as { id: string }).id);
+    const now = resolveNow((req.query as { now?: string }).now);
+    try {
+      return getGoal(db, id, virtualNowMs(db, now));
+    } catch (err) {
+      if (err instanceof GoalNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // GET /api/demo/goals/:id/chronicle — ⑤沿革（デモ DB・読み取り専用）。
+  app.get('/api/demo/goals/:id/chronicle', async (req, reply) => {
+    const db = getDemoDb();
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return getChronicle(db, id);
+    } catch (err) {
+      if (err instanceof GoalNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
+      }
+      throw err;
+    }
   });
 
   // GET /api/demo/goals/:id/report?now=<dayKey> — 完走レポート4ブロック。
@@ -128,5 +174,101 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
     const summary = daySummary(db, now);
     // 本物の解禁経路には到達しない。解錠時に見せる値は固定のダミー。
     return { ...summary, virtualDay: now, dummyPassword: 'デモ用 123456' };
+  });
+
+  // GET /api/demo/due-rules?now=<dayKey> — 仮想日付の不足ルール（単発ルール通知チュートリアル）。
+  app.get('/api/demo/due-rules', async (req) => {
+    const db = getDemoDb();
+    const now = resolveNow((req.query as { now?: string }).now);
+    return { dayKey: now, rules: listDueRules(db, now) };
+  });
+
+  /**
+   * デモの2つのチュートリアル（spec: demo-rule-tutorial）だけは、デモ DB への書き込みを許す。
+   * ルール登録・完走フォークの関数をデモ DB（getDemoDb()）に対して呼ぶだけで、本番 DB・reveal・
+   * パスワード生成・目標本体の作成/削除/日記保存には一切触れない（design D8）。
+   */
+  function replyDemoError(err: unknown, reply: { code: (n: number) => void }): Record<string, unknown> {
+    if (err instanceof GoalNotFoundError || err instanceof RuleNotFoundError) {
+      reply.code(404);
+      return { error: (err as Error).message };
+    }
+    if (err instanceof GoalExtensionRequiredError) {
+      reply.code(409);
+      return { error: err.message, extensionRequired: true, proposedEndDay: err.proposedEndDay, goalEndDay: err.goalEndDay };
+    }
+    if (err instanceof GoalLifecycleError) {
+      reply.code(409);
+      return { error: err.message };
+    }
+    if (err instanceof ReasonRequiredError || err instanceof RuleValidationError) {
+      reply.code(400);
+      return { error: err.message };
+    }
+    throw err;
+  }
+
+  // POST /api/demo/goals/:id/rules — 振り返りタブでの単発ルール作成チュートリアル用（デモ DB のみ）。
+  app.post('/api/demo/goals/:id/rules', async (req, reply) => {
+    const db = getDemoDb();
+    const id = Number((req.params as { id: string }).id);
+    const now = resolveNow((req.body as { now?: string })?.now);
+    const b = (req.body ?? {}) as Record<string, unknown> & { extend?: 'extend' | 'truncate' };
+    try {
+      return addRuleToGoal(db, id, b as never, { extend: b.extend }, virtualNowMs(db, now));
+    } catch (err) {
+      return replyDemoError(err, reply);
+    }
+  });
+
+  // PATCH /api/demo/goals/:id/rules/:ruleId — ルール編集（デモ DB のみ）。
+  app.patch('/api/demo/goals/:id/rules/:ruleId', async (req, reply) => {
+    const db = getDemoDb();
+    const { id, ruleId } = req.params as { id: string; ruleId: string };
+    const b = (req.body ?? {}) as Record<string, unknown> & { extend?: 'extend' | 'truncate'; now?: string };
+    const now = resolveNow(b.now);
+    try {
+      return updateGoalRule(db, Number(id), Number(ruleId), b as never, { extend: b.extend }, virtualNowMs(db, now));
+    } catch (err) {
+      return replyDemoError(err, reply);
+    }
+  });
+
+  // DELETE /api/demo/goals/:id/rules/:ruleId — ルール削除（デモ DB のみ）。
+  app.delete('/api/demo/goals/:id/rules/:ruleId', async (req, reply) => {
+    const db = getDemoDb();
+    const { id, ruleId } = req.params as { id: string; ruleId: string };
+    const b = (req.body ?? {}) as { reason?: string; now?: string };
+    const now = resolveNow(b.now);
+    try {
+      return removeGoalRule(db, Number(id), Number(ruleId), b.reason ?? '', virtualNowMs(db, now));
+    } catch (err) {
+      return replyDemoError(err, reply);
+    }
+  });
+
+  // POST /api/demo/goals/:id/continue — 完走フォーク「続ける」チュートリアル用（デモ DB のみ）。
+  app.post('/api/demo/goals/:id/continue', async (req, reply) => {
+    const db = getDemoDb();
+    const id = Number((req.params as { id: string }).id);
+    const now = resolveNow((req.body as { now?: string })?.now);
+    try {
+      return continueGoal(db, id, virtualNowMs(db, now));
+    } catch (err) {
+      return replyDemoError(err, reply);
+    }
+  });
+
+  // POST /api/demo/goals/:id/end — 完走フォーク「終える」チュートリアル用（デモ DB のみ）。
+  app.post('/api/demo/goals/:id/end', async (req, reply) => {
+    const db = getDemoDb();
+    const id = Number((req.params as { id: string }).id);
+    const b = (req.body ?? {}) as { reason?: string; now?: string };
+    const now = resolveNow(b.now);
+    try {
+      return endGoal(db, id, b.reason, virtualNowMs(db, now));
+    } catch (err) {
+      return replyDemoError(err, reply);
+    }
   });
 }

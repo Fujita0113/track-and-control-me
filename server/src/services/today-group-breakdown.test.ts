@@ -3,7 +3,7 @@ import { UNGROUPED_KEY } from '@track/contract';
 import { openDb, type DB, updateConfig } from '../db/index.js';
 import { daySummary, rangeSummary } from './summary.js';
 import { totalWorkSecondsForDay } from './categories.js';
-import { upsertFutureRuleSet } from '../rules/rules.js';
+import { createRule } from './rule-registry.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
 import { resolveIdentity, renameIdentity } from './group-identity.js';
@@ -96,18 +96,8 @@ describe('2.2 集計方式切り替え後も総作業時間と解錠ルール判
     seedSession(db, 'g-dev', '開発B', 'green', 30 * MIN);
     seedSession(db, UNGROUPED_KEY, 'ungrouped', null, 20 * MIN);
 
-    upsertFutureRuleSet(
-      db,
-      DAY,
-      {
-        combinator: 'ALL',
-        conditions: [
-          { target: 'TOTAL_WORK', thresholdSeconds: 150 * 60 },
-          { target: 'GROUP', stableGroupId: 'g-dev', thresholdSeconds: 120 * 60 },
-        ],
-      },
-      NOW_BEFORE,
-    );
+    createRule(db, { target: 'TOTAL_WORK', thresholdSeconds: 150 * 60, startDay: DAY, reason: 'r' }, NOW_BEFORE);
+    createRule(db, { target: 'GROUP', stableGroupId: 'g-dev', thresholdSeconds: 120 * 60, startDay: DAY, reason: 'r' }, NOW_BEFORE);
     const r = evaluateDay(db, DAY, NOW_DAY);
 
     // KPI: 130 + 20 = 150 分（未グループ算入 = 既定 OFF）。

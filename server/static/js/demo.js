@@ -33,10 +33,34 @@ function statusLabel() {
   return `進行中 Day ${dayDiff(goal.startDay, virtualDay) + 1}/${goal.dayCount || 30}`;
 }
 
+/** 「この仮想日付では既にトーストを出したか」（デモ内メモリのみ・リロード/リセットで自然に消える）。 */
+let lastToastVirtualDay = null;
+
+/**
+ * 単発ルールの当日通知チュートリアル（spec: demo-rule-tutorial）。仮想日付が進んだとき、
+ * その日に回答すべき写真/質問ルールがあれば1回だけトーストを出す（本物の due-rule 通知と同じ体験）。
+ */
+async function maybeShowDemoDueRuleToast(dayKey) {
+  if (lastToastVirtualDay === dayKey) return;
+  try {
+    const res = await api.demo.dueRules(dayKey);
+    const rules = (res && res.rules) || [];
+    if (!rules.length) return;
+    lastToastVirtualDay = dayKey;
+    const first = rules[0];
+    const more = rules.length > 1 ? `ほか${rules.length - 1}件 ` : '';
+    const icon = first.target === 'PHOTO' ? '📷' : '💬';
+    toast(`${icon} ${first.label} ― 今日のルールです${more ? `（${more}` : '（'}${first.goalName || ''}）`);
+  } catch {
+    // 通知は補助でしかない。失敗しても画面は壊さない。
+  }
+}
+
 /** 仮想日付を dayKey へ設定して現在画面を再描画（バーも更新）。 */
 function setVirtualDay(dayKey) {
   state.demo.virtualDay = dayKey;
   renderDemoBar();
+  void maybeShowDemoDueRuleToast(dayKey);
   document.dispatchEvent(new CustomEvent('demo:refresh'));
 }
 
@@ -69,6 +93,7 @@ export async function startDemo() {
     dayCount: meta.goal?.dayCount ?? 30,
   };
   state.demo.virtualDay = meta.virtualDay; // 開始前
+  lastToastVirtualDay = null;
   renderDemoBar();
   document.dispatchEvent(new CustomEvent('demo:refresh'));
 }
@@ -78,6 +103,7 @@ export function stopDemo() {
   state.demo.active = false;
   state.demo.virtualDay = null;
   state.demo.goal = null;
+  lastToastVirtualDay = null;
   renderDemoBar();
   document.dispatchEvent(new CustomEvent('demo:refresh'));
 }
@@ -94,6 +120,7 @@ export async function resetSample() {
     dayCount: meta.goal?.dayCount ?? 30,
   };
   state.demo.virtualDay = meta.virtualDay;
+  lastToastVirtualDay = null;
   renderDemoBar();
   document.dispatchEvent(new CustomEvent('demo:refresh'));
   toast('サンプルを初期状態に戻しました', 'ok');

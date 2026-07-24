@@ -844,4 +844,274 @@ ALTER TABLE rule_condition ADD COLUMN group_identity_id INTEGER;
       }
     },
   },
+  {
+    version: 19,
+    name: 'goal-rule-lifecycle-registry',
+    // 解錠ルールを第一級エンティティ化する（spec: editable-rule-registry / design.md D1・D2・Migration Plan 1）。
+    // `rule`（安定キー＝行 id・condition_key='rule:<id>'）と `rule_change`（沿革の実体）、
+    // `goal_rule`（目標↔ルールの紐づけ）を新設し、既存 rule_condition / practice_threshold_change /
+    // goal_practice からデータを移送する。既存テーブル・過去日の凍結済み評価は一切書き換えない
+    // （並走構築・design.md Migration Plan 1。旧テーブルの撤去は後続バージョンで行う）。
+    sql: /* sql */ `
+CREATE TABLE rule (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target TEXT NOT NULL,                     -- TOTAL_WORK|GROUP|TIMELINE|MANUAL_CHECK|PLANNING|PHOTO|QUESTION
+  comparator TEXT NOT NULL DEFAULT 'GTE',
+  threshold_seconds INTEGER,                -- 時間型の閾値秒
+  label TEXT,                                -- TIMELINE のカテゴリ名 / MANUAL_CHECK のチェック名
+  signal_key TEXT,                           -- PLANNING の参照シグナル
+  stable_group_id TEXT,                      -- GROUP の後方互換参照（identity 未解決・壊れた旧UUID含む）
+  group_identity_id INTEGER REFERENCES group_identity(id),
+  caption TEXT,                              -- PHOTO の先指定キャプション（作成後変更不可）
+  question_text TEXT,                        -- QUESTION の先に書いた質問文
+  start_day TEXT NOT NULL,                   -- 単発は start=end、範囲は start<end、永続は end=NULL
+  end_day TEXT,                              -- NULL = 永続
+  status TEXT NOT NULL DEFAULT 'active',     -- active|removed
+  legacy_condition_key TEXT,                 -- 移行前の内容導出キー（過去日の per_condition_results 橋渡し）
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_rule_legacy_key ON rule(legacy_condition_key);
+CREATE INDEX idx_rule_status_period ON rule(status, start_day, end_day);
+
+-- 沿革の実体（add|update|remove を1操作1行で記録・design.md D4）。
+CREATE TABLE rule_change (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_id INTEGER NOT NULL REFERENCES rule(id) ON DELETE CASCADE,
+  day_key TEXT NOT NULL,                     -- 変更が効く日
+  op TEXT NOT NULL,                          -- add|update|remove
+  before TEXT,                                -- JSON（add のとき NULL）
+  after TEXT,                                 -- JSON（remove のとき NULL）
+  reason TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_rule_change_rule ON rule_change(rule_id, day_key, id);
+
+-- 目標↔ルールの紐づけ（「採用」概念の廃止・design.md D6）。
+CREATE TABLE goal_rule (
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  rule_id INTEGER NOT NULL REFERENCES rule(id) ON DELETE CASCADE,
+  PRIMARY KEY (goal_id, rule_id)
+);
+CREATE INDEX idx_goal_rule_rule ON goal_rule(rule_id);
+`,
+    run: (db) => {
+      interface RcRow {
+        key: string;
+        target: string;
+        comparator: string;
+        threshold_seconds: number | null;
+        label: string | null;
+        signal_key: string | null;
+        stable_group_id: string | null;
+        group_identity_id: number | null;
+        effective_date: string;
+        rs_created_at: number;
+      }
+      // 全履歴の rule_condition を新しい順に読み、condition_key ごとに「最新の中身」と
+      // 「最初に現れた日／作成時刻」を集約する（1条件=1rule 行・task 1.8）。
+      const rows = db
+        .prepare(
+          `SELECT rc.condition_key AS key, rc.target AS target, rc.comparator AS comparator,
+                  rc.threshold_seconds AS threshold_seconds, rc.label AS label, rc.signal_key AS signal_key,
+                  rc.stable_group_id AS stable_group_id, rc.group_identity_id AS group_identity_id,
+                  rs.effective_date AS effective_date, rs.created_at AS rs_created_at
+             FROM rule_condition rc JOIN daily_rule_set rs ON rs.id = rc.rule_set_id
+            ORDER BY rc.condition_key, rs.effective_date DESC, rc.id DESC`,
+        )
+        .all() as RcRow[];
+      if (rows.length === 0) return; // 既存ルールなし（新規インストール等）。
+
+      // 「現在」の実効ルール＝最新 effective_date のルールセットが持つ条件（旧 getEffectiveRuleSet の
+      // フォールバック規則と同型）。ここに無い条件キーは移行前に既に使われなくなっていたとみなし
+      // status='removed' で来歴だけ保存する（誤ってゲートへ復活させない）。
+      const latestSetId = db
+        .prepare('SELECT id FROM daily_rule_set ORDER BY effective_date DESC LIMIT 1')
+        .get() as { id: number } | undefined;
+      const currentKeys = latestSetId
+        ? new Set(
+            (
+              db.prepare('SELECT condition_key FROM rule_condition WHERE rule_set_id = ?').all(latestSetId.id) as {
+                condition_key: string;
+              }[]
+            ).map((r) => r.condition_key),
+          )
+        : new Set<string>();
+
+      interface Agg {
+        latest: RcRow;
+        minEffectiveDate: string;
+        minCreatedAt: number;
+      }
+      const byKey = new Map<string, Agg>();
+      for (const r of rows) {
+        const agg = byKey.get(r.key);
+        if (!agg) {
+          byKey.set(r.key, { latest: r, minEffectiveDate: r.effective_date, minCreatedAt: r.rs_created_at });
+        } else {
+          if (r.effective_date < agg.minEffectiveDate) agg.minEffectiveDate = r.effective_date;
+          if (r.rs_created_at < agg.minCreatedAt) agg.minCreatedAt = r.rs_created_at;
+        }
+      }
+
+      const insRule = db.prepare(
+        `INSERT INTO rule
+           (target, comparator, threshold_seconds, label, signal_key, stable_group_id, group_identity_id,
+            caption, question_text, start_day, end_day, status, legacy_condition_key, created_at)
+         VALUES (@target, @comparator, @threshold, @label, @signal, @group, @groupIdentityId,
+                 NULL, NULL, @startDay, NULL, @status, @legacyKey, @createdAt)`,
+      );
+      const legacyKeyToRuleId = new Map<string, number>();
+      for (const [key, agg] of byKey) {
+        const info = insRule.run({
+          target: agg.latest.target,
+          comparator: agg.latest.comparator || 'GTE',
+          threshold: agg.latest.threshold_seconds,
+          label: agg.latest.label,
+          signal: agg.latest.signal_key,
+          group: agg.latest.stable_group_id,
+          groupIdentityId: agg.latest.group_identity_id,
+          startDay: agg.minEffectiveDate,
+          status: currentKeys.has(key) ? 'active' : 'removed',
+          legacyKey: key,
+          createdAt: agg.minCreatedAt,
+        });
+        legacyKeyToRuleId.set(key, info.lastInsertRowid as number);
+      }
+
+      // goal_practice → goal_rule（task 1.7）。既存の goal_practice が指す condition_key を解決できない
+      // 場合（本来起きないはずの孤児参照）は、そのスナップショットから stub rule を作って来歴を失わない。
+      interface PracticeRow {
+        goal_id: number;
+        condition_key: string;
+        target: string;
+        label_snapshot: string | null;
+        stable_group_id: string | null;
+        signal_key: string | null;
+      }
+      const practices = db
+        .prepare(
+          'SELECT goal_id, condition_key, target, label_snapshot, stable_group_id, signal_key FROM goal_practice',
+        )
+        .all() as PracticeRow[];
+      const insGoalRule = db.prepare(
+        'INSERT OR IGNORE INTO goal_rule (goal_id, rule_id) VALUES (?, ?)',
+      );
+      const insStubRule = db.prepare(
+        `INSERT INTO rule
+           (target, comparator, threshold_seconds, label, signal_key, stable_group_id, group_identity_id,
+            caption, question_text, start_day, end_day, status, legacy_condition_key, created_at)
+         VALUES (@target, 'GTE', NULL, @label, @signal, @group, NULL, NULL, NULL, @startDay, NULL, 'removed', @legacyKey, @createdAt)`,
+      );
+      const goalStart = db.prepare('SELECT start_day, created_at FROM goal WHERE id = ?');
+      for (const p of practices) {
+        let ruleId = legacyKeyToRuleId.get(p.condition_key);
+        if (ruleId === undefined) {
+          console.warn(
+            `[migration 19] goal_practice の condition_key "${p.condition_key}" に対応する rule_condition が見つかりません; stub rule を作成します`,
+          );
+          const g = goalStart.get(p.goal_id) as { start_day: string; created_at: number } | undefined;
+          const info = insStubRule.run({
+            target: p.target,
+            label: p.label_snapshot,
+            signal: p.signal_key,
+            group: p.stable_group_id,
+            startDay: g?.start_day ?? '1970-01-01',
+            legacyKey: p.condition_key,
+            createdAt: g?.created_at ?? 0,
+          });
+          ruleId = info.lastInsertRowid as number;
+          legacyKeyToRuleId.set(p.condition_key, ruleId);
+        }
+        insGoalRule.run(p.goal_id, ruleId);
+      }
+
+      // practice_threshold_change → rule_change（op='update'・task 1.6）。
+      interface PtcRow {
+        condition_key: string;
+        effective_date: string;
+        old_seconds: number | null;
+        new_seconds: number | null;
+        reason: string;
+        created_at: number;
+      }
+      const ptcs = db
+        .prepare(
+          'SELECT condition_key, effective_date, old_seconds, new_seconds, reason, created_at FROM practice_threshold_change',
+        )
+        .all() as PtcRow[];
+      const insChange = db.prepare(
+        `INSERT INTO rule_change (rule_id, day_key, op, before, after, reason, created_at)
+         VALUES (?, ?, 'update', ?, ?, ?, ?)`,
+      );
+      for (const ptc of ptcs) {
+        const ruleId = legacyKeyToRuleId.get(ptc.condition_key);
+        if (ruleId === undefined) {
+          console.warn(
+            `[migration 19] practice_threshold_change の condition_key "${ptc.condition_key}" に対応する rule が見つかりません; skip します`,
+          );
+          continue;
+        }
+        insChange.run(
+          ruleId,
+          ptc.effective_date,
+          JSON.stringify({ thresholdSeconds: ptc.old_seconds }),
+          JSON.stringify({ thresholdSeconds: ptc.new_seconds }),
+          ptc.reason,
+          ptc.created_at,
+        );
+      }
+    },
+  },
+  {
+    version: 20,
+    name: 'rule-answer',
+    // PHOTO/QUESTION ルールの回答（画像/回答保存）を rule_id 参照で持つ（spec: editable-rule-registry /
+    // goal-check-gate / design.md D5）。旧 goal_check_result（check_id 参照）と同型だが、Check という
+    // 中間エンティティを挟まずルール本体へ直接ぶら下げる。(rule_id, day_key) 一意＝1日1回答。
+    sql: /* sql */ `
+CREATE TABLE rule_answer (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rule_id INTEGER NOT NULL REFERENCES rule(id) ON DELETE CASCADE,
+  day_key TEXT NOT NULL,
+  image_id INTEGER REFERENCES goal_journal_image(id) ON DELETE SET NULL,
+  answer_text TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE (rule_id, day_key)
+);
+CREATE INDEX idx_rule_answer_rule ON rule_answer(rule_id, day_key);
+`,
+  },
+  {
+    version: 21,
+    name: 'drop-frozen-rule-model',
+    // 凍結モデル（`daily_rule_set`/`rule_condition`・DRAFT_FUTURE/DRAFT_TODAY/FROZEN_ACTIVE/PAST・
+    // freeze-on-read・baseline 包含検証・ジャンル固定）を撤去する（spec: same-day-rule-additions
+    // REMOVED / design.md D3・Migration Plan 4・task 4.1-4.2）。v19 で全データを `rule`/`rule_change`/
+    // `goal_rule` へ移送済みのため、過去日の判定（`unlock_evaluation.per_condition_results`、`rule_condition`
+    // に一切 FK しない独立 JSON）には影響しない。テーブルを DROP すると付随トリガも自動的に消える。
+    sql: /* sql */ `
+DROP TABLE IF EXISTS rule_condition;
+DROP TABLE IF EXISTS daily_rule_set;
+`,
+  },
+  {
+    version: 22,
+    name: 'goal-lifecycle-fork-and-plan-check-removal',
+    // 完走フォーク（続ける/終える）の決定を保持する列を goal に追加する（spec: goal-lifecycle-fork /
+    // design.md D7）。Plan/Check（goal_plan/goal_check/goal_check_result）と、採用モデルの実体
+    // だった goal_practice/practice_threshold_change を撤去する（既に rule/rule_change/goal_rule へ
+    // 移送済み・v19。実データは Plan1・Check0 のため破棄で損失なし・proposal.md Impact）。
+    sql: /* sql */ `
+ALTER TABLE goal ADD COLUMN lifecycle_choice TEXT;        -- NULL|'continued'|'ended'
+ALTER TABLE goal ADD COLUMN lifecycle_reason TEXT;        -- 'ended' のときのみ意味を持つ（任意）
+ALTER TABLE goal ADD COLUMN lifecycle_decided_at INTEGER;
+ALTER TABLE goal ADD COLUMN continued_goal_id INTEGER REFERENCES goal(id);
+
+DROP TABLE IF EXISTS goal_check_result;
+DROP TABLE IF EXISTS goal_check;
+DROP TABLE IF EXISTS goal_plan;
+DROP TABLE IF EXISTS goal_practice;
+DROP TABLE IF EXISTS practice_threshold_change;
+`,
+  },
 ];

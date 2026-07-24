@@ -19,6 +19,14 @@ import {
   DEMO_AFTER_END_DAY,
   DEMO_GOAL2_START_DAY,
   DEMO_ALLOC_DAY,
+  RULE_TOTAL_ID,
+  RULE_KIN_ID,
+  RULE_WALK_ID,
+  RULE_STRETCH_ID,
+  RULE_PHOTO_MORNING_ID,
+  RULE_QUESTION_FOCUS_ID,
+  RULE_PHOTO_SKY_ID,
+  RULE_QUESTION_PHONE_ID,
 } from './demo-seed.js';
 
 const TZ = 'Asia/Tokyo';
@@ -76,11 +84,11 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     // ヘッダ: 達成 24/30。
     expect(rep.goal.dayCount).toBe(30);
     expect(rep.goal.achievedDays).toBe(24);
-    // ① 実践4つ（総作業 / 振り返り / 明日タスク / 筋トレ手動チェック）・各30マス。
-    expect(rep.practices.length).toBe(4);
-    for (const p of rep.practices) expect(p.cells.length).toBe(30);
-    // 手動チェック実践（筋トレ）が非時間型として乗る（goal-adopt-manual-check）。
-    const kin = rep.practices.find((p) => p.conditionKey === 'manual:筋トレ')!;
+    // ① 永続ルール4つ（総作業 / 振り返り / 明日タスク / 筋トレ手動チェック）＋⑤沿革の写真/質問ルール4つ・各30マス。
+    expect(rep.rules.length).toBe(8);
+    for (const p of rep.rules) expect(p.cells.length).toBe(30);
+    // 手動チェックルール（筋トレ）が非時間型として乗る。
+    const kin = rep.rules.find((p) => p.conditionKey === `rule:${RULE_KIN_ID}`)!;
     expect(kin).toBeDefined();
     expect(kin.target).toBe('MANUAL_CHECK');
     expect(kin.isTimeType).toBe(false);
@@ -91,11 +99,11 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(kin.cells[29]!.met).toBe(true); // Day30
     // ② 時間型（総作業）あり＋Day13 の閾値変更（4h→3h・理由つき）。
     expect(rep.hasTimeType).toBe(true);
-    expect(rep.thresholdChanges.length).toBe(1);
-    expect(rep.thresholdChanges[0]!.dayNumber).toBe(13);
-    expect(rep.thresholdChanges[0]!.oldSeconds).toBe(14400);
-    expect(rep.thresholdChanges[0]!.newSeconds).toBe(10800);
-    expect(rep.thresholdChanges[0]!.reason).toContain('課題週間');
+    expect(rep.ruleChanges.length).toBe(1);
+    expect(rep.ruleChanges[0]!.dayNumber).toBe(13);
+    expect(rep.ruleChanges[0]!.before).toEqual({ thresholdSeconds: 14400 });
+    expect(rep.ruleChanges[0]!.after).toEqual({ thresholdSeconds: 10800 });
+    expect(rep.ruleChanges[0]!.reason).toContain('課題週間');
     // ③④ 30日ぶんの日記が全て埋まっている（Before/After 含む）。
     expect(rep.days.length).toBe(30);
     expect(rep.days.every((d) => d.source === 'journal' && d.text.trim().length > 0)).toBe(true);
@@ -105,7 +113,7 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
 
   it('中盤の谷（未達成日）が存在し、後半は持ち直す', () => {
     const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-    const total = rep.practices.find((p) => p.conditionKey === 'total_work')!;
+    const total = rep.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
     // Day11（谷）は総作業未達成、Day30（後半）は達成。
     expect(total.cells[10]!.met).toBe(false); // Day11
     expect(total.cells[29]!.met).toBe(true); // Day30
@@ -119,79 +127,72 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(getJournal(db, DEMO_GOAL_ID, DEMO_END_DAY).content).toContain('30日を終えて');
   });
 
-  describe('⑤沿革のサンプル（Plan / Check）', () => {
-    /** 完走レポートの沿革（Plan は day_key 昇順・同日内は記録順）。 */
+  describe('⑤沿革のサンプル（ルール操作の年表）', () => {
+    /** 完走レポートの沿革（rule_change は day_key 昇順・同日内は記録順）。 */
     const chronicle = (): ReturnType<typeof getGoalReport>['chronicle'] =>
       getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY)).chronicle;
 
-    it('Plan が3件、既存の谷（Day11 / Day13 / Day20）に時系列で並ぶ', () => {
-      const plans = chronicle().plans;
-      expect(plans.map((p) => p.dayKey)).toEqual(['2026-06-21', '2026-06-23', '2026-06-30']);
-      expect(plans[0]!.body).toContain('朝いちに前倒し');
-      expect(plans[1]!.body).toContain('3時間へ下げる'); // Day13 の閾値変更の判断と呼応する。
+    it('6件のルール操作が既存の谷（Day11 / Day13 / Day20 / Day23）に時系列で並ぶ', () => {
+      const entries = chronicle().entries;
+      expect(entries.map((e) => e.change.dayKey)).toEqual([
+        '2026-06-21', '2026-06-21', '2026-06-23', '2026-06-23', '2026-06-30', '2026-07-03',
+      ]);
+      expect(entries.map((e) => e.ruleId)).toEqual([
+        RULE_PHOTO_MORNING_ID, RULE_QUESTION_FOCUS_ID, RULE_TOTAL_ID, RULE_PHOTO_SKY_ID, RULE_QUESTION_PHONE_ID, RULE_QUESTION_PHONE_ID,
+      ]);
+      expect(entries[0]!.change.reason).toContain('朝いちに前倒し');
+      expect(entries[3]!.change.reason).toContain('3時間へ下げる'); // Day13 の閾値変更の判断と呼応する。
     });
 
-    it('📷×単発・💬×単発・📷×範囲・取り下げ済み が1つずつ揃う（沿革が読み物になる）', () => {
-      const checks = chronicle().plans.flatMap((p) => p.checks);
-      const shape = (c: (typeof checks)[number]): string =>
-        `${c.kind}/${c.schedule}${c.status === 'cancelled' ? '/cancelled' : ''}`;
-      expect(checks.map(shape)).toEqual([
-        'photo/single', // 朝の机（Day14）
-        'question/single', // 集中はどうだった？（Day15）
-        'photo/range', // その日の空（Day14〜20）
-        'question/range/cancelled', // 取り下げ済み
+    it('📷×単発・💬×単発・📷×範囲・削除済み が1つずつ揃う（沿革が読み物になる）', () => {
+      const entries = chronicle().entries;
+      expect(entries.map((e) => `${e.target}/${e.change.op}`)).toEqual([
+        'PHOTO/add', 'QUESTION/add', 'TOTAL_WORK/update', 'PHOTO/add', 'QUESTION/add', 'QUESTION/remove',
       ]);
     });
 
-    it('📷×単発は画像つきで提出済み', () => {
-      const c = chronicle().plans[0]!.checks[0]!;
-      expect(c).toMatchObject({ kind: 'photo', caption: '朝の机', startDayKey: '2026-06-24', spanDays: null });
-      expect(c.results).toHaveLength(1);
-      expect(c.results[0]!.imageId).toBeTypeOf('number');
+    it('📷×単発は画像つきの答え合わせがぶら下がる', () => {
+      const e = chronicle().entries.find((x) => x.ruleId === RULE_PHOTO_MORNING_ID)!;
+      expect(e.label).toBe('朝の机');
+      expect(e.answers).toHaveLength(1);
+      expect(e.answers[0]!.imageId).toBeTypeOf('number');
     });
 
     it('💬×単発は Q&A のペアで残る', () => {
-      const c = chronicle().plans[0]!.checks[1]!;
-      expect(c.questionText).toBe('前倒しで集中は変わったか');
-      expect(c.results[0]!.answerText).toContain('朝は入りが速い');
+      const e = chronicle().entries.find((x) => x.ruleId === RULE_QUESTION_FOCUS_ID)!;
+      expect(e.label).toBe('前倒しで集中は変わったか');
+      expect(e.answers[0]!.answerText).toContain('朝は入りが速い');
     });
 
     it('📷×範囲は「7日中5日提出」の事実がそのまま残る（サボりを美化も負債化もしない）', () => {
-      const c = chronicle().plans[1]!.checks[0]!;
-      expect(c).toMatchObject({ kind: 'photo', schedule: 'range', caption: 'その日の空', spanDays: 7 });
-      expect(c.results).toHaveLength(5);
-      // Day16（06-26）・Day19（06-29）はサボった日＝提出が無い。
-      expect(c.results.map((r) => r.dayKey)).toEqual([
-        '2026-06-24',
-        '2026-06-25',
-        '2026-06-27',
-        '2026-06-28',
-        '2026-06-30',
+      const e = chronicle().entries.find((x) => x.ruleId === RULE_PHOTO_SKY_ID)!;
+      expect(e.answers).toHaveLength(5);
+      // Day16（06-26）・Day20（06-30）はサボった日（既存の谷日）＝提出が無い。
+      expect(e.answers.map((r) => r.dayKey)).toEqual([
+        '2026-06-24', '2026-06-25', '2026-06-27', '2026-06-28', '2026-06-29',
       ]);
     });
 
-    it('取り下げた Plan / Check が理由つきで沿革に残る', () => {
-      const p = chronicle().plans[2]!;
-      expect(p).toMatchObject({ status: 'withdrawn' });
-      expect(p.withdrawReason).toContain('置き場所から変える');
-      expect(p.checks[0]).toMatchObject({ status: 'cancelled' });
-      expect(p.checks[0]!.cancelReason).toContain('置き場所から変える');
-      // 取り下げても、それまでに答えた2日は消えない。
-      expect(p.checks[0]!.results).toHaveLength(2);
+    it('削除したルールが理由つきで沿革に残る（答えた2日は消えない）', () => {
+      const addEntry = chronicle().entries.find((x) => x.ruleId === RULE_QUESTION_PHONE_ID && x.change.op === 'add')!;
+      const removeEntry = chronicle().entries.find((x) => x.ruleId === RULE_QUESTION_PHONE_ID && x.change.op === 'remove')!;
+      expect(removeEntry.change.reason).toContain('置き場所から変える');
+      // 取り下げても、それまでに答えた2日は消えない（add エントリにぶら下がる）。
+      expect(addEntry.answers).toHaveLength(2);
     });
 
     it('走行中プレビューの沿革は「その日までに起きたこと」だけを載せる（未来を見せない）', () => {
-      // Day12（06-22）時点: Day11 の Plan A だけが存在し、Day13 の Plan B・Day20 の Plan C はまだ無い。
+      // Day12（06-22）時点: Day11 の2件だけが存在し、Day13 以降はまだ無い。
       const day12 = getGoalReport(db, DEMO_GOAL_ID, vnow('2026-06-22')).chronicle;
-      expect(day12.plans.map((p) => p.dayKey)).toEqual(['2026-06-21']);
-      // Plan A の Check は仕掛かり中（Day14・Day15 の回答はまだ起きていない）。
-      expect(day12.plans[0]!.checks.every((c) => c.results.length === 0)).toBe(true);
+      expect(day12.entries.map((e) => e.change.dayKey)).toEqual(['2026-06-21', '2026-06-21']);
+      // 仕掛かり中（Day14・Day15 の回答はまだ起きていない）。
+      expect(day12.entries.every((e) => e.answers.length === 0)).toBe(true);
 
-      // Day15（06-25）時点: Plan B まで現れ、Day14・Day15 の回答だけが載る。
+      // Day15（06-25）時点: Day13 の2件まで現れ、Day14・Day15 の回答だけが載る。
       const day15 = getGoalReport(db, DEMO_GOAL_ID, vnow('2026-06-25')).chronicle;
-      expect(day15.plans.map((p) => p.dayKey)).toEqual(['2026-06-21', '2026-06-23']);
-      const sky = day15.plans[1]!.checks[0]!;
-      expect(sky.results.map((r) => r.dayKey)).toEqual(['2026-06-24', '2026-06-25']); // 06-27 以降はまだ。
+      expect(day15.entries.map((e) => e.change.dayKey)).toEqual(['2026-06-21', '2026-06-21', '2026-06-23', '2026-06-23']);
+      const sky = day15.entries.find((e) => e.ruleId === RULE_PHOTO_SKY_ID)!;
+      expect(sky.answers.map((r) => r.dayKey)).toEqual(['2026-06-24', '2026-06-25']); // 06-27 以降はまだ。
     });
 
     it('沿革に日記本文は載らない（④日記リーダーが読む）', () => {
@@ -200,19 +201,18 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
       expect(json).not.toContain('30日を終えて'); // Day30 の日記見出し。
     });
 
-    it('写真Check の提出画像は③ Before/After へ流入する（先指定キャプションでグループ化）', () => {
+    it('写真ルールの提出画像は③ Before/After へ流入する（先指定キャプションでグループ化）', () => {
       const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
       const sky = rep.reportImages.filter((i) => i.caption === 'その日の空');
-      expect(sky.map((i) => i.dayNumber)).toEqual([14, 15, 17, 18, 20]); // 古い→新しい順。
+      expect(sky.map((i) => i.dayNumber)).toEqual([14, 15, 17, 18, 19]); // 古い→新しい順（サボりは既存の谷日）。
       expect(rep.reportImages.filter((i) => i.caption === '朝の机')).toHaveLength(1);
     });
 
-    it('Plan / Check は達成日数 24/30 の筋書きに影響しない（goal_practice ではない）', () => {
+    it('沿革の写真/質問ルールは①にも乗るが、達成日数 24/30 の筋書きは崩れない（谷日にサボりを寄せてある）', () => {
       const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
       expect(rep.goal.achievedDays).toBe(24);
-      // Check は実践ではないので①の行に現れない（沿革⑤が読み手）。
-      expect(rep.practices).toHaveLength(4);
-      expect(rep.practices.every((p) => !p.conditionKey.startsWith('check:'))).toBe(true);
+      // 沿革専用の写真/質問ルールも goal_rule で紐づくため①の行に乗る（4つの永続ルール＋4つの沿革ルール）。
+      expect(rep.rules).toHaveLength(8);
     });
   });
 
@@ -224,20 +224,20 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(g2.name).toBe('朝の散歩を習慣にする');
 
     const rep = getGoalReport(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
-    // ① 実践は手動チェック2つ・各30マス。全て非時間型。
-    expect(rep.practices.length).toBe(2);
-    for (const p of rep.practices) {
+    // ① ルールは手動チェック2つ・各30マス。全て非時間型。
+    expect(rep.rules.length).toBe(2);
+    for (const p of rep.rules) {
       expect(p.target).toBe('MANUAL_CHECK');
       expect(p.isTimeType).toBe(false);
       expect(p.cells.length).toBe(30);
     }
-    // ② 時間の推移は出ない（時間型実践ゼロ）＋閾値変更も無い。
+    // ② 時間の推移は出ない（時間型ルールゼロ）＋変更ログも無い。
     expect(rep.hasTimeType).toBe(false);
-    expect(rep.thresholdChanges.length).toBe(0);
+    expect(rep.ruleChanges.length).toBe(0);
     // 達成日数（両方 met の日）＝ 24/30。個別 met は 朝散歩27・ストレッチ26。
     expect(rep.goal.achievedDays).toBe(24);
-    const walk = rep.practices.find((p) => p.conditionKey === 'manual:朝散歩')!;
-    const stretch = rep.practices.find((p) => p.conditionKey === 'manual:ストレッチ')!;
+    const walk = rep.rules.find((p) => p.conditionKey === `rule:${RULE_WALK_ID}`)!;
+    const stretch = rep.rules.find((p) => p.conditionKey === `rule:${RULE_STRETCH_ID}`)!;
     expect(walk.cells.filter((c) => c.met).length).toBe(27);
     expect(stretch.cells.filter((c) => c.met).length).toBe(26);
     expect(walk.cells[4]!.met).toBe(false); // Day5 は朝散歩を飛ばした
