@@ -1114,4 +1114,111 @@ DROP TABLE IF EXISTS goal_practice;
 DROP TABLE IF EXISTS practice_threshold_change;
 `,
   },
+  {
+    version: 23,
+    name: 'split-collapsed-shared-rules',
+    // issue #64 の修正。v19 は「1 condition_key = 1 rule」に畳んだため、旧モデルで同じ解錠条件を
+    // 「採用」していた複数の**独立した**目標が同一 rule を共有してしまい、沿革（rule_change）と
+    // その理由まで連動する（例: 「設計理解をしたい」と「茶色取りたい」が同じ GROUP ルールを共有）。
+    // ここで legacy 由来（legacy_condition_key IS NOT NULL）の共有ルールを目標ごとに複製し、
+    // identity を分離する。継続チェイン（continued_goal_id で連結する目標群）は正当な共有なので
+    // 分割しない。過去日の評価（unlock_evaluation）は書き換えない: 複製は同じ legacy_condition_key を
+    // 引き継ぐため凍結日は従来どおり解決でき、当日は起動時パイプラインの再評価で rule:<新id> が入る。
+    run: (db) => {
+      interface Link {
+        rule_id: number;
+        goal_id: number;
+      }
+      // legacy 由来かつ 2 目標以上に紐づくルール（＝畳み込みの結果）だけを対象にする。
+      const links = db
+        .prepare(
+          `SELECT gr.rule_id AS rule_id, gr.goal_id AS goal_id
+             FROM goal_rule gr
+             JOIN rule r ON r.id = gr.rule_id
+            WHERE r.legacy_condition_key IS NOT NULL
+              AND gr.rule_id IN (SELECT rule_id FROM goal_rule GROUP BY rule_id HAVING COUNT(*) > 1)
+            ORDER BY gr.rule_id, gr.goal_id`,
+        )
+        .all() as Link[];
+      if (links.length === 0) return;
+
+      // continued_goal_id の隣接（双方向）で目標を連結成分に分ける union-find。
+      const parent = new Map<number, number>();
+      const ensure = (x: number): void => {
+        if (!parent.has(x)) parent.set(x, x);
+      };
+      const find = (x: number): number => {
+        ensure(x);
+        let r = x;
+        while (parent.get(r) !== r) r = parent.get(r)!;
+        let c = x;
+        while (parent.get(c) !== r) {
+          const n = parent.get(c)!;
+          parent.set(c, r);
+          c = n;
+        }
+        return r;
+      };
+      const union = (a: number, b: number): void => {
+        parent.set(find(a), find(b));
+      };
+
+      const goalIds = new Set<number>(links.map((l) => l.goal_id));
+      for (const gid of goalIds) ensure(gid);
+      for (const g of db.prepare('SELECT id, continued_goal_id FROM goal').all() as {
+        id: number;
+        continued_goal_id: number | null;
+      }[]) {
+        if (g.continued_goal_id != null && goalIds.has(g.id) && goalIds.has(g.continued_goal_id))
+          union(g.id, g.continued_goal_id);
+      }
+
+      const byRule = new Map<number, number[]>();
+      for (const l of links) {
+        if (!byRule.has(l.rule_id)) byRule.set(l.rule_id, []);
+        byRule.get(l.rule_id)!.push(l.goal_id);
+      }
+
+      // 元 rule の全列（id 以外）をそのまま複製。legacy_condition_key も引き継ぐ（凍結日の解決を保つ）。
+      const cloneRule = db.prepare(
+        `INSERT INTO rule
+           (target, comparator, threshold_seconds, label, signal_key, stable_group_id, group_identity_id,
+            caption, question_text, start_day, end_day, status, legacy_condition_key, created_at)
+         SELECT target, comparator, threshold_seconds, label, signal_key, stable_group_id, group_identity_id,
+                caption, question_text, start_day, end_day, status, legacy_condition_key, created_at
+           FROM rule WHERE id = ?`,
+      );
+      // 沿革（threshold 変更等）を複製先へ丸ごとコピーし、各目標のレポート②注釈・⑤沿革を維持する。
+      const cloneChanges = db.prepare(
+        `INSERT INTO rule_change (rule_id, day_key, op, before, after, reason, created_at)
+         SELECT ?, day_key, op, before, after, reason, created_at
+           FROM rule_change WHERE rule_id = ? ORDER BY day_key, id`,
+      );
+      const unlink = db.prepare('DELETE FROM goal_rule WHERE goal_id = ? AND rule_id = ?');
+      const relink = db.prepare('INSERT OR IGNORE INTO goal_rule (goal_id, rule_id) VALUES (?, ?)');
+
+      for (const [ruleId, goals] of byRule) {
+        // 連結成分（＝継続チェイン）ごとにまとめる。同一成分は共有を保つ。
+        const comps = new Map<number, number[]>();
+        for (const gid of goals) {
+          const root = find(gid);
+          if (!comps.has(root)) comps.set(root, []);
+          comps.get(root)!.push(gid);
+        }
+        if (comps.size <= 1) continue; // 全目標が同一継続チェイン＝正当な共有。分割しない。
+        // 最小 goal id を含む成分が元ルールを保持。他成分はそれぞれ複製へ移す。
+        const compList = [...comps.values()]
+          .map((gs) => ({ gs, min: Math.min(...gs) }))
+          .sort((a, b) => a.min - b.min);
+        for (let i = 1; i < compList.length; i++) {
+          const newRuleId = cloneRule.run(ruleId).lastInsertRowid as number;
+          cloneChanges.run(newRuleId, ruleId);
+          for (const gid of compList[i]!.gs) {
+            unlink.run(gid, ruleId);
+            relink.run(gid, newRuleId);
+          }
+        }
+      }
+    },
+  },
 ];
