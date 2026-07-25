@@ -1,7 +1,7 @@
 # demo-rule-tutorial Specification
 
 ## Purpose
-TBD - created by syncing change goal-rule-lifecycle. Update Purpose after archive.
+デモモードで、日付が絡む2つの動線（単発ルールの当日通知・完走フォーク）を「1日後」「30日後」ボタンで日付を進めながら手を動かして体験できるようにする。日付送りと通知・完走判定はデモ DB 限定の実サーバー経路を通し、`Date.now()` に依存しない。
 
 ## Requirements
 

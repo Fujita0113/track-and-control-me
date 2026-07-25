@@ -1,7 +1,7 @@
 # goal-lifecycle-fork Specification
 
 ## Purpose
-TBD - created by syncing change goal-rule-lifecycle. Update Purpose after archive.
+30日チャレンジが完走したとき「続ける／終える」を、目標コーナーで作るルールの終端が目標末尾を越えるとき「伸ばす／やめる」を問う。続けるは永続ルールを引き継いだ新しい30日目標を Day 1/30 で作り、終えるは永続ルールをゲートから外しつつレポート・沿革・カレンダーは読めるまま残す。伸ばすは目標期間を前方向にのみ延長し、やめるはルールを目標末尾まで切り詰める。
 
 ## Requirements
 
