@@ -5,11 +5,11 @@ TBD - created by archiving change goal-30day-challenge. Update Purpose after arc
 ## Requirements
 ### Requirement: 30日チャレンジの作成
 
-システムは、名前・目的の一文・採用する実践（1つ以上）・**開始日の選択（今日から／明日から。既定＝今日から）** を指定して30日チャレンジ（以下「目標」）を作成できなければならない（MUST）。期間は選択した開始日から **30日固定**（`start_day ∈ {今日, 翌日}`・`end_day = start_day + 29`）であり、開始日は今日か明日の二択のみ・それ以外の開始日や期間は指定できない（MUST NOT）。今日開始を選んだ目標は当日を Day 1 として作成直後に「進行中（Day 1/30）」となり、明日開始を選んだ目標は「開始前」で現れる。複数の目標を並行して作成・運用できる（MUST）。
+システムは、名前・目的の一文・**この目標のためのルール（1つ以上）**・**開始日の選択（今日から／明日から。既定＝今日から）** を指定して30日チャレンジ（以下「目標」）を作成できなければならない（MUST）。期間は選択した開始日から **30日以上**（既定は `end_day = start_day + 29`。末尾を越えるルールを見届けるため前方向に延長されうる・`goal-lifecycle-fork`）とし、開始日は今日か明日の二択のみ・それ以外の開始日を指定できない（MUST NOT）。今日開始を選んだ目標は当日を Day 1 として作成直後に「進行中（Day 1/M）」となり、明日開始を選んだ目標は「開始前」で現れる。複数の目標を並行して作成・運用できる（MUST）。
 
 #### Scenario: 今日開始を選ぶと当日から進行中になる
 
-- **WHEN** 開始日「今日から」（既定）で名前・目的・実践を指定して目標を作成する
+- **WHEN** 開始日「今日から」（既定）で名前・目的・ルールを指定して目標を作成する
 - **THEN** `start_day` は当日、`end_day` は当日から30日目となり、一覧に「進行中（Day 1/30）」として現れる
 
 #### Scenario: 明日開始を選ぶと翌日から開始前になる
@@ -20,92 +20,40 @@ TBD - created by archiving change goal-30day-challenge. Update Purpose after arc
 #### Scenario: 並行して2つ目を作成できる
 
 - **WHEN** 進行中の目標がある状態で別の目標を作成する
-- **THEN** 両方が独立に運用される（採用実践の重複も許容される）
+- **THEN** 両方が独立に運用される
 
 ### Requirement: 実践の採用は condition_key で行う
 
-目標の実践は、**開始日（今日開始なら当日・明日開始なら翌日）** の実効ルールセットに現存する条件から選択するか、または目標作成時にその場で作成して開始日のルールへ追記した新規条件（`goal-inline-condition`）から採用し、その `condition_key`（`total_work` / `group:<identityId>` / `planning:<signalKey>` / `timeline:<ラベル>` / `manual:<ラベル>`）の文字列を保存 SHALL する。安定キーを持つターゲット（`TOTAL_WORK` / `GROUP` / `PLANNING` / `TIMELINE` / `MANUAL_CHECK`）はいずれも採用候補に含める SHALL。かつては `MANUAL_CHECK` の同一性が並び順依存（`manual:<index>`）であったため採用候補から除外していたが、安定キー `manual:<ラベル>`（`manual-check-stable-key`）の導入により採用可能になった。`MANUAL_CHECK` は完了/未完了（チェック）型の非時間型実践として採用 SHALL され、閾値（`threshold_seconds`）を持たない。インライン作成した条件は、開始日のルールへ追記され採用可能になった時点で、既存条件と同じく `condition_key` 文字列で採用 SHALL する。採用時に表示用ラベル（グループ名・カテゴリ名・手動チェックのテキスト等）のスナップショットを保存 SHALL する。
+目標が追うルール（旧「採用実践」）は、**目標作成時**または**振り返りの目標コーナー**でその目標のために作成したルールを、当該目標へ**自動で紐づける**（`goal_rule`）SHALL。かつての「既存条件から `condition_key` を選んで採用する」明示選択は廃止 SHALL する。紐づけは安定キー `rule:<id>`（`editable-rule-registry`）を参照 SHALL し、内容導出キー（`total_work` / `group:<uuid>` 等）を新規に参照してはならない（MUST NOT）。対象ルールの中身（グループ改名・閾値変更・差し替え）が変わっても紐づけ（`rule:<id>`）は変化してはならない（MUST NOT）。過去に保存された `group:<stableGroupId>` / `group:<identityId>` 形式のキーは `legacy_condition_key` として引き続き有効 SHALL とし、書き換えてはならない（MUST NOT）。表示用ラベル（グループ名・カテゴリ名・チェック名等）はルールの現在値から解決 SHALL する。
 
-`GROUP` 実践のキーはグループ identity の内部 ID（`group-identity-registry`）を参照 SHALL し、拡張機能が採番する `stable_group_id` を新規に参照してはならない（MUST NOT）。対象グループが改名された場合、`condition_key` は変化させず、保存済みの表示用ラベルスナップショットを新しい名前へ更新 SHALL する（`tab-group-rename-tracking`）。過去に保存された `group:<stableGroupId>` 形式の実践キーは引き続き有効 SHALL とし、書き換えてはならない（MUST NOT）。
+#### Scenario: 目標コーナーで足したルールが紐づく
 
-#### Scenario: 開始日の実効ルールから採用候補が出る
+- **WHEN** 進行中の目標のコーナーで新しいルールを作る
+- **THEN** そのルールは `rule:<id>` で当該目標に紐づき、レポートで追う対象になる
 
-- **WHEN** 目標作成 UI を開く
-- **THEN** 選択した開始日（今日／明日）の実効ルールセットの `TOTAL_WORK` / `GROUP` / `PLANNING` / `TIMELINE` / `MANUAL_CHECK` 条件が候補として表示される
-- **AND** `GROUP` 条件はグループ名（現在名）で表示され、UUID や内部 ID は表示されない
+#### Scenario: グループ改名でも紐づけは変わらずラベルだけ更新される
 
-#### Scenario: 採用実践はキー文字列で保存される
-
-- **WHEN** 「総作業時間 4時間」条件を実践として採用する
-- **THEN** `goal_practice` に `condition_key='total_work'` が保存される
-
-#### Scenario: TIMELINE 条件を実践として採用できる
-
-- **WHEN** ラベル「運動」・30分の `TIMELINE` 条件を実践として採用する
-- **THEN** `goal_practice` に `condition_key='timeline:運動'`・`target='TIMELINE'`・ラベルスナップショット「運動」が保存される
-
-#### Scenario: MANUAL_CHECK 条件を実践として採用できる
-
-- **WHEN** ラベル「筋トレ」の `MANUAL_CHECK` 条件を実践として採用する
-- **THEN** `goal_practice` に `condition_key='manual:筋トレ'`・`target='MANUAL_CHECK'`・ラベルスナップショット「筋トレ」が保存され、非時間型として扱われる
-
-#### Scenario: インライン作成した条件がそのまま採用される
-
-- **WHEN** 目標作成で新規「掃除・15分」の TIMELINE 条件をその場で作成して目標を作成する
-- **THEN** その条件は翌日ルールへ追記され、`goal_practice` に `condition_key='timeline:掃除'`・`target='TIMELINE'` が保存される
-
-#### Scenario: GROUP 実践は identity 参照で保存される
-
-- **WHEN** `競技プログラミング` を対象とする GROUP 条件を実践として採用する
-- **THEN** `goal_practice` に `condition_key='group:<identityId>'` と、その時点の名前のラベルスナップショットが保存される
-
-#### Scenario: 改名でキーは変わらずラベルだけ更新される
-
-- **WHEN** 採用中の GROUP 実践の対象グループを `競技プログラミング` から `競プロ` へ改名する
-- **THEN** `condition_key` は変化せず、目標画面の実践名が `競プロ` として表示される
-
-### Requirement: 期間中のジャンル固定
-
-進行中または開始前の目標が採用している実践について、ルールセットの編集・削除（`upsertFutureRuleSet` / `deleteRuleSet`）の結果、目標の残期間（**`max(今日, start_day)` 〜 `end_day`**）のいずれかの日の実効ルールセットからその実践の `condition_key` が欠ける場合、システムはその編集をエラーで拒否 SHALL する（トランザクション内で適用後検証・ABORT）。今日開始の目標が当日追加して採用した条件も、当日から残期間の対象に含まれ、同日でも骨抜きにできない。既存の凍結条件の緩和は従来どおり翌日以降でのみ可能とし、当日は追加のみを許す（`same-day-rule-additions`）。
-
-#### Scenario: 採用中条件の削除は拒否される
-
-- **WHEN** 進行中の目標が採用する「総作業時間」条件を未来ルールから外した内容で PUT する
-- **THEN** リクエストはエラーになり、ルールセットは変更されない
-
-#### Scenario: 今日開始で当日採用した条件は当日削除できない
-
-- **WHEN** 今日開始の目標が当日追加・採用した条件を、同じ日にルールから削除しようとする
-- **THEN** リクエストは拒否され、当日の実効ルールから採用中 `condition_key` は欠けない
-
-#### Scenario: 削除フォールバックでも実践が残るなら許可される
-
-- **WHEN** ある未来日のルールセットを DELETE し、持ち越しで実効になる過去ルールセットにも採用中の実践がすべて含まれている
-- **THEN** 削除は成功する
-
-#### Scenario: 目標期間外の日の編集は制約されない
-
-- **WHEN** すべての目標の `end_day` より後の日だけに影響する編集を行う
-- **THEN** 実践の有無にかかわらず従来どおり成功する
+- **WHEN** 紐づくグループルールの対象を `競技プログラミング` から `競プロ` へ改名する
+- **THEN** 紐づけ `rule:<id>` は変化せず、目標画面の表示名が `競プロ` になる
 
 ### Requirement: 閾値変更には理由が必須で、記録される
 
-採用中の実践に対応する時間型条件（`TOTAL_WORK` / `GROUP` / `TIMELINE`）の `threshold_seconds` を変更する編集（上げ下げ問わず）は、非空の理由テキストを伴わなければならない（MUST）。理由が無い場合は編集を拒否 SHALL する。変更は `condition_key`・適用日・変更前後の秒数・理由として永続化 SHALL し、同一条件を複数目標が採用していても記録は1本とする。採用されていない条件の閾値変更は従来どおり理由不要（MUST NOT 要求）。
+目標が追うルールに対する**追加・変更・削除**（閾値の上げ下げ・グループ差し替え・条件の除去を含む）は、非空の理由テキストを伴わなければならない（MUST。かつては閾値変更のみ理由必須だったが、全操作へ拡張し操作種別で場合分けしない）。理由が無い場合は編集を拒否 SHALL する。変更は `rule_change`（`rule_id`・適用日・変更前後・理由）として永続化 SHALL し、同一ルールを複数目標が追っていても記録は1本とする。採用中条件の削除を拒否する「ジャンル固定」は廃止 SHALL する（採用中でも理由つきで削除・変更できる）。
 
-#### Scenario: 理由なしの閾値変更は拒否される
+#### Scenario: 理由なしの操作は拒否される
 
-- **WHEN** 採用中の「総作業時間 4時間」を 3時間 に変更する PUT を理由なしで送る
-- **THEN** 400 エラーになりルールセットは変更されない
+- **WHEN** 目標が追う「総作業時間 4時間」を 3時間 に変更する操作を理由なしで送る
+- **THEN** 400 エラーになりルールは変更されない
 
-#### Scenario: 理由つきの閾値変更は記録される
+#### Scenario: 理由つきの操作は記録される
 
 - **WHEN** 同じ変更を理由「課題週間。ゼロにはしない」つきで送る
-- **THEN** 編集は成功し、変更記録（14400→10800・適用日・理由）が保存される
+- **THEN** 編集は成功し、`rule_change` に変更記録（14400→10800・適用日・理由）が保存される
 
-#### Scenario: TIMELINE 閾値の緩和も理由が必須
+#### Scenario: 目標が追う条件も理由つきで削除できる
 
-- **WHEN** 採用中のラベル「運動」の `TIMELINE` 条件を 30分→15分 に変更する PUT を理由なしで送る
-- **THEN** 400 エラーになり、理由つきで送ると変更記録（1800→900・適用日・理由）が保存される
+- **WHEN** 進行中の目標が追うルールを理由つきで削除する
+- **THEN** 削除は成功し（ジャンル固定は無い）、当日の実効ゲートから外れ、過去の達成日数は変わらない
 
 ### Requirement: 削除は作成当日のみ
 
@@ -123,10 +71,14 @@ TBD - created by archiving change goal-30day-challenge. Update Purpose after arc
 
 ### Requirement: 状態は導出され、成否ラベルは存在しない
 
-目標の状態は保存せず、現在の day_key から導出 SHALL する: `today < start_day` は「開始前」、`start_day <= today <= end_day` は「進行中（Day N/30）」、`today > end_day` は「完走」。達成日数によらず、合格・不合格・スコアに相当する状態や表示を持ってはならない（MUST NOT）。
+目標の状態は保存せず、現在の day_key から導出 SHALL する: `today < start_day` は「開始前」、`start_day <= today <= end_day` は「進行中（Day N/M・M=`end_day − start_day + 1`）」、`today > end_day` は「完走」。達成日数によらず、合格・不合格・スコアに相当する状態や表示を持ってはならない（MUST NOT）。完走時は「続ける／終える」を問う（`goal-lifecycle-fork`）。
 
 #### Scenario: 30日経過で完走になる
 
 - **WHEN** `end_day` の翌日以降に目標一覧を見る
 - **THEN** その目標は達成日数が何日であっても「完走」と表示され、レポートを開けるようになる
 
+#### Scenario: 延長された目標は Day N/M で進行中に留まる
+
+- **WHEN** 末尾ルールのため `end_day` が延長された目標を、延長後の期間内に見る
+- **THEN** 「進行中（Day N/M）」と表示され、延長後の `end_day` を越えるまで完走しない

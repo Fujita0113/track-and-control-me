@@ -7,70 +7,47 @@ TBD - created by syncing change goal-inline-rule-timeline-highlight. Update Purp
 
 ### Requirement: 目標作成時に新規条件を作成して採用できる
 
-目標作成は、既存条件の採用に加えて、その場で新規ルール条件を作成し同時に採用 SHALL できる。対応ターゲットは今日タブの条件エディタと同等の**全5ターゲット（`TOTAL_WORK` / `GROUP` / `TIMELINE` / `MANUAL_CHECK` / `PLANNING`）**とする。各ターゲットの新規条件は次を持つ: `TOTAL_WORK` は `thresholdSeconds`（> 0）、`GROUP` は**グループ identity**（直近使用グループの一覧から選択した identity ID）と `thresholdSeconds`（> 0）、`TIMELINE` はカテゴリ名 `label`（非空）と `thresholdSeconds`（> 0）、`MANUAL_CHECK` はチェック名 `label`（非空・閾値なし）、`PLANNING` は `signalKey`。新規条件は**目標の開始日（今日開始なら当日ルール・明日開始なら翌日ルール）の実効ルールセットへ追記**したうえで、そのターゲットに応じた `condition_key`（`total_work` / `group:<identityId>` / `timeline:<ラベル>` / `manual:<ラベル>` / `planning:<signalKey>`）を採用 SHALL する。今日開始で当日ルールへ追記する場合は、`same-day-rule-additions` の当日追加経路（`DRAFT_TODAY`・baseline 保存）で追記 SHALL する。作成と採用は一体の操作として扱い、途中で失敗（凍結・ジャンル固定・採用不整合・バリデーション）した場合は目標も条件も作成してはならない（MUST NOT）。追加しようとした条件の `condition_key` が開始日の実効ルールに既存の場合（`TOTAL_WORK` / `PLANNING` の singleton や同名の `GROUP` / `TIMELINE` / `MANUAL_CHECK`）は、重複追記せず既存条件の採用へ寄せる SHALL。
+目標作成は、その場で**新規ルールを作成し、作成した目標へ自動で紐づける**（`goal_rule`）SHALL（「既存条件の採用」明示選択は廃止）。対応ターゲットは時間型・非時間型・写真・質問を含む **`TOTAL_WORK` / `GROUP` / `TIMELINE` / `MANUAL_CHECK` / `PLANNING` / `PHOTO` / `QUESTION`**。各ターゲットの新規ルールは次を持つ: `TOTAL_WORK` は `thresholdSeconds`（>0）、`GROUP` は**グループ identity**（直近使用グループから選択）と `thresholdSeconds`（>0）、`TIMELINE` はカテゴリ名 `label`（非空）と `thresholdSeconds`（>0）、`MANUAL_CHECK` はチェック名 `label`（非空・閾値なし）、`PLANNING` は `signalKey`、`PHOTO` はキャプション（非空・後変更不可）、`QUESTION` は質問文（非空）。スケジュール（永続／単発／範囲）は種類と独立に指定 SHALL する（`editable-rule-registry`）。
+
+新規ルールの作成には**非空の理由が必須**（`editable-rule-registry`）SHALL。作成された `rule` 行は安定キー `rule:<id>` を持ち、目標はこの `rule:<id>` を紐づけ SHALL する。作成と紐づけは一体の操作として扱い、途中で失敗（バリデーション）した場合は目標もルールも作成してはならない（MUST NOT）。かつて存在した「開始日の実効ルールへ追記」「今日開始は当日 `DRAFT_TODAY` 経路で追記」「既存キーとの重複は既存採用へ寄せる」処理は、凍結モデル・採用モデルの撤廃により不要 SHALL とする。
 
 `GROUP` のグループ選択肢は、直近に実測された identity の一覧（`group-identity-registry`）から提示 SHALL し、`tab_group` テーブルの行や UUID 文字列を提示してはならない（MUST NOT）。
 
-#### Scenario: 明日開始でカテゴリ＋分数の TIMELINE 条件を作成して採用できる
+#### Scenario: カテゴリ＋分数の TIMELINE ルールを作って紐づけられる
 
-- **WHEN** 開始日「明日から」で新規に「掃除・15分」の TIMELINE 条件を追加して目標を作成する
-- **THEN** 翌日の未来ルールへ `target='TIMELINE'`・`label='掃除'`・`threshold_seconds=900`・`condition_key='timeline:掃除'` が追記され、その `condition_key` が当該目標に採用される
+- **WHEN** 新規に「掃除・15分」の TIMELINE ルールを理由つきで追加して目標を作成する
+- **THEN** `target='TIMELINE'`・`label='掃除'`・`threshold_seconds=900` の `rule` 行が作られ、`rule:<id>` が当該目標に紐づく
 
-#### Scenario: 今日開始では当日ルールへ追記して採用する
+#### Scenario: グループ作業（GROUP）を作って紐づけられる
 
-- **WHEN** 開始日「今日から」で新規「掃除・15分」の TIMELINE 条件を追加して目標を作成する
-- **THEN** 当日ルール（`DRAFT_TODAY`）へ `timeline:掃除` が追記され当日の実効ゲートに算入され、その `condition_key` が当該目標に当日から採用される
+- **WHEN** 直近使用グループから `競技プログラミング` を選び「そのグループ・2時間」の GROUP ルールを理由つきで追加して目標を作成する
+- **THEN** `target='GROUP'`・当該 identity 参照・`threshold_seconds=7200` の `rule` 行が作られ、`rule:<id>` が紐づく
 
-#### Scenario: 総作業時間（TOTAL_WORK）をその場で作成して採用できる
+#### Scenario: 写真ルールをその場で作って紐づけられる
 
-- **WHEN** 開始日の実効ルールに `total_work` が無い状態で、新規「総作業時間・4時間」条件を追加して目標を作成する
-- **THEN** 開始日ルールへ `target='TOTAL_WORK'`・`threshold_seconds=14400`・`condition_key='total_work'` が追記され、その `condition_key` が採用される
+- **WHEN** キャプション「前髪・正面」・範囲7日間の PHOTO ルールを理由つきで追加して目標を作成する
+- **THEN** `target='PHOTO'` の `rule` 行が作られ、`rule:<id>` が当該目標に紐づく
 
-#### Scenario: グループ作業（GROUP）をその場で作成して採用できる
+#### Scenario: 理由なし・label 空・分数0は拒否される
 
-- **WHEN** 直近使用グループの一覧から `競技プログラミング` を選び、新規「そのグループ・2時間」の GROUP 条件を追加して目標を作成する
-- **THEN** 開始日ルールへ `target='GROUP'`・当該 identity 参照・`threshold_seconds=7200`・`condition_key='group:<identityId>'` が追記され、その `condition_key` が採用される
+- **WHEN** 理由が空、または `TIMELINE`/`MANUAL_CHECK` のラベルが空、または時間型の分数が 0 以下で目標を作成する
+- **THEN** 400 エラーで拒否され、目標もルールも作られない
 
-#### Scenario: 手動チェック（MANUAL_CHECK）をその場で作成して採用できる
+#### Scenario: 作成が失敗すると目標もルールも作られない
 
-- **WHEN** 新規「筋トレ」の MANUAL_CHECK 条件を追加して目標を作成する
-- **THEN** 開始日ルールへ `target='MANUAL_CHECK'`・`label='筋トレ'`・`condition_key='manual:筋トレ'`（閾値なし）が追記され、その `condition_key` が非時間型として採用される
-
-#### Scenario: 翌日計画（PLANNING）をその場で作成して採用できる
-
-- **WHEN** 新規に signal を選んだ PLANNING 条件を追加して目標を作成する
-- **THEN** 開始日ルールへ `target='PLANNING'`・当該 `signal_key`・`condition_key='planning:<signalKey>'` が追記され、その `condition_key` が採用される
-
-#### Scenario: 既存キーと重複する新規作成は既存採用へ寄せる
-
-- **WHEN** 開始日の実効ルールに既に `total_work` がある状態で、新規「総作業時間」条件を追加して目標を作成する
-- **THEN** `total_work` は重複追記されず（閾値・キーは変わらず）、その `condition_key` が採用される
-
-#### Scenario: 作成が失敗すると目標も条件も作られない
-
-- **WHEN** 新規条件の追記処理が失敗する（例: バリデーション不正で拒否される）
-- **THEN** 目標は作成されず、新規条件も未来ルールへ追記されない（部分状態を残さない）
-
-#### Scenario: label 空・分数0は拒否される
-
-- **WHEN** インライン作成で `TIMELINE`/`MANUAL_CHECK` のラベルが空、または時間型（`TOTAL_WORK`/`GROUP`/`TIMELINE`）の分数が 0 以下で目標を作成する
-- **THEN** 400 エラーで拒否される
-
-#### Scenario: 未知・未対応ターゲットのインライン作成は拒否される
-
-- **WHEN** 目標作成のインライン作成で全5ターゲット以外の未知ターゲットを指定する
-- **THEN** 400 エラーで拒否され、目標もルールも変更されない
+- **WHEN** 新規ルールの作成処理が失敗する（バリデーション不正）
+- **THEN** 目標は作成されず、ルールも作られない（部分状態を残さない）
 
 ### Requirement: インライン作成は既存の採用条件・ルールを壊さない
 
-目標作成時のインライン条件追記は、**開始日（今日／明日）**の実効ルールに現存する条件を据え置きで保持したうえで新規条件を加える SHALL。既存条件の `condition_key`・閾値を変更しないため、既存採用条件のジャンル固定を破らず、閾値変更の理由要求も発生させない（MUST NOT）。開始日が明示ルールを持たずフォールバック継承である場合、その継承内容を明示ルールとして materialize したうえで追記 SHALL する（内容は同一のため既存採用条件は残存する）。今日開始で当日ルールへ materialize/追記する場合も、baseline（day 開始時点の実効条件）を保存し、既存条件を欠かせない SHALL。
+目標作成時のインライン作成は、既存の他ルールを据え置きで保持したうえで新規ルールを加える SHALL。既存ルールの内容・安定キーを変更してはならない（MUST NOT）。凍結モデル・ジャンル固定は廃止されたため、`DRAFT_TODAY` への materialize や baseline 保存、ジャンル固定違反の検査は行わない SHALL。
 
-#### Scenario: 既存の開始日条件が保持される
+#### Scenario: 既存ルールが保持される
 
-- **WHEN** 開始日の実効ルールに `total_work` 条件がある状態で、新規「掃除15分」条件を追加して目標を作成する
-- **THEN** 開始日ルールには `total_work` と `timeline:掃除` の両方が存在し、`total_work` の閾値・キーは変わらない
+- **WHEN** 既に `total_work` ルールがある状態で、新規「掃除15分」ルールを追加して目標を作成する
+- **THEN** 既存の `total_work` ルールは内容・安定キーとも変わらず、新規ルールが加わる
 
-#### Scenario: 既存採用条件のジャンル固定を破らない
+#### Scenario: 他目標が追う条件を壊さない
 
-- **WHEN** 別目標が `total_work` を採用中の状態で、新規 TIMELINE 条件のインライン追加を行う
-- **THEN** `total_work` は翌日ルールに残るため GoalLockError は発生せず、追記と採用が成功する
+- **WHEN** 別目標が追うルールがある状態で、新規 TIMELINE ルールのインライン追加を行う
+- **THEN** 既存ルールは変更されず、追加と紐づけが成功する（ジャンル固定違反の検査は無い）
