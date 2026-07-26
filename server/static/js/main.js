@@ -2,7 +2,6 @@
 import { loadState, state } from './state.js';
 import { h, clear, closeModal, attachTooltip, isTypingTarget } from './util.js';
 import * as today from './today.js';
-import * as timeline from './timeline.js';
 import * as kanban from './kanban.js';
 import * as reflection from './reflection.js';
 import * as goals from './goals.js';
@@ -11,7 +10,7 @@ import { maybeShowOnboarding } from './onboarding.js';
 import { renderDemoBar, isDemo } from './demo.js';
 import { maybeShowDueRuleToast } from './rule-form.js';
 
-const SCREENS = { today, timeline, kanban, reflection, goals, settings };
+const SCREENS = { today, kanban, reflection, goals, settings };
 let current = null;
 
 async function activate(name) {
@@ -59,12 +58,14 @@ function bootNav() {
     attachTooltip(btn, { label: btn.textContent, keys: [String(i + 1)] });
   });
   bootGlobalKeys(tabs);
-  // ディープリンク: #timeline で始まる hash は timeline タブへ(通知からの遷移。timeline-revamp D8)。
-  // 既に timeline 表示中でも from/to 付きで来たら再表示するため、いったん解除してから activate。
+  // ディープリンク: #timeline で始まる hash は振り返りタブへ移行(通知からの遷移。
+  // spec: タイムラインタブの振り返りタブへの統合とナビゲーション。振り返りタブがタイムライン
+  // ビューを開いて着地する＝リンク切れにしない)。
+  // 既に振り返り表示中でも from/to 付きで来たら再表示するため、いったん解除してから activate。
   window.addEventListener('hashchange', () => {
     if ((location.hash || '').startsWith('#timeline')) {
-      if (current === 'timeline') current = null;
-      void activate('timeline');
+      if (current === 'reflection') current = null;
+      void activate('reflection');
     }
   });
 }
@@ -88,9 +89,9 @@ function bootGlobalKeys(tabs) {
   });
 }
 
-/** 初期表示画面: #timeline で始まる hash があれば timeline、なければ today。 */
+/** 初期表示画面: #timeline で始まる hash があれば振り返り（タイムラインビュー）、なければ today。 */
 function initialScreen() {
-  return (location.hash || '').startsWith('#timeline') ? 'timeline' : 'today';
+  return (location.hash || '').startsWith('#timeline') ? 'reflection' : 'today';
 }
 
 /**

@@ -106,39 +106,33 @@ export function hide() {
   closePopover();
 }
 
-export async function show(root) {
-  clear(root);
+/**
+ * 対象日を引数に任意コンテナへ完全版タイムラインを描画する（振り返りワークスペースの
+ * 左メイン「タイムライン」ビューからマウントされる・design D1）。記録・離席ドラッグ・
+ * ポップオーバー・自動スクロール等の副作用は renderCore 側にそのまま保持される。
+ */
+export async function render(container, date) {
+  clear(container);
   // 記録ポップオーバーのチップ用にカテゴリを先読み(失敗しても記録機能は既定でフォールバック)。
   refreshCategories();
   // 追跡中カテゴリ(目標採用の timeline:*)を先読みし、手動記録/チップの強調に使う。
   await refreshTrackedCategories();
-  // ディープリンク: #timeline?from=&to= を読み取り、該当区間の記録ドラフトを自動オープンする。
-  const link = consumeHashParams();
-  const initialDate = link && link.from ? deriveDayKey(link.from) : state.today;
-
-  const dateInput = h('input', { type: 'date', value: initialDate });
-  root.appendChild(h('div', { class: 'section-head', style: { justifyContent: 'flex-end' } },
-    h('div', { class: 'row' }, h('label', { class: 'field' }, '対象日', dateInput)),
-  ));
   const hint = h('div', { class: 'tl-hint' },
     h('span', { class: 'tl-hint-a', text: '「＋ 未記録」をクリックして離席を記録' }),
     h('span', { class: 'tl-hint-b', text: '空き領域のドラッグでも任意区間を記録できます' }),
   );
-  root.appendChild(hint);
+  container.appendChild(hint);
   const body = h('div', {});
-  root.appendChild(body);
-
-  const load = () => render(body, dateInput.value || state.today).catch((e) => toast(`失敗: ${e.message}`, 'err'));
-  dateInput.addEventListener('change', load);
-  await load();
-
-  // 描画完了後にディープリンク区間の記録ポップオーバーを開き、URL からパラメータを除去する。
-  if (link && link.from && link.to) {
-    openDraftForRange(link.from, link.to);
-  }
+  container.appendChild(body);
+  await renderCore(body, date || state.today).catch((e) => toast(`失敗: ${e.message}`, 'err'));
 }
 
-async function render(body, date) {
+/** 薄いラッパ（振り返りワークスペースへの統合前の単独画面契約を残すのみ・通常ルーティングからは呼ばれない）。 */
+export async function show(root) {
+  await render(root, state.today);
+}
+
+async function renderCore(body, date) {
   clear(body);
   closePopover();
   body.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
@@ -668,7 +662,7 @@ function openDetail(block, x, y) {
         await api.deleteEntry(block.id);
         toast('削除しました', 'ok');
         closePopover();
-        render(ctx.body, ctx.date);
+        renderCore(ctx.body, ctx.date);
       } catch (err) { toast(`失敗: ${err.message}`, 'err'); }
     });
     node.appendChild(h('div', { class: 'tlc-pop-hr' }));
@@ -809,7 +803,7 @@ function openDraft(startMin, endMin, x, y) {
       closePopover();
       // 登録された新規/再使用カテゴリを次回チップに反映するためキャッシュを更新。
       await refreshCategories();
-      render(ctx.body, ctx.date);
+      renderCore(ctx.body, ctx.date);
     } catch (err) { toast(`失敗: ${err.message}`, 'err'); addBtn.disabled = false; }
   };
   addBtn.addEventListener('click', submit);
@@ -837,7 +831,7 @@ function openDraft(startMin, endMin, x, y) {
 }
 
 /** ディープリンク: from/to(epoch ms) 区間の記録ドラフトを中央に自動オープンする。 */
-function openDraftForRange(fromMs, toMs) {
+export function openDraftForRange(fromMs, toMs) {
   if (!ctx) return;
   const startMin = Math.max(0, Math.min(ctx.totalMin, minOf(fromMs)));
   const endMin = Math.max(0, Math.min(ctx.totalMin, minOf(toMs)));
@@ -866,7 +860,7 @@ function awayMinSeconds() {
 }
 
 /** epoch ms → day_key(境界 04:00 を考慮)。導出不能時は state.today。 */
-function deriveDayKey(ms) {
+export function deriveDayKey(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n)) return state.today;
   const boundaryMin = (state.config && state.config.day_boundary_minutes) || 240;
@@ -877,7 +871,7 @@ function deriveDayKey(ms) {
  * location.hash から #timeline?from=&to= を読み取り、パラメータを URL から除去して返す。
  * リロードで再発火させないため replaceState で消費する。返り値 { from, to } or null。
  */
-function consumeHashParams() {
+export function consumeHashParams() {
   const hash = location.hash || '';
   const qi = hash.indexOf('?');
   if (!hash.startsWith('#timeline') || qi < 0) return null;

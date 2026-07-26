@@ -12,18 +12,18 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
 });
 
-test('数字キー 1〜6 でタブ切替、入力中は発火しない（5.3）', async ({ page }) => {
+test('数字キー 1〜5 でタブ切替、入力中は発火しない（5.3）', async ({ page }) => {
   // 3 → カンバンがアクティブ。
   await page.keyboard.press('3');
   await expect(page.locator('#screen-kanban')).toHaveClass(/active/);
   await expect(page.locator('#tabs button[data-target="kanban"]')).toHaveClass(/active/);
 
-  // 5 → 目標。
-  await page.keyboard.press('5');
+  // 4 → 目標。
+  await page.keyboard.press('4');
   await expect(page.locator('#screen-goals')).toHaveClass(/active/);
 
-  // 6 → 設定。設定の入力にフォーカスして数字を打っても切替は起きず、入力へ反映される。
-  await page.keyboard.press('6');
+  // 5 → 設定。設定の入力にフォーカスして数字を打っても切替は起きず、入力へ反映される。
+  await page.keyboard.press('5');
   await expect(page.locator('#screen-settings')).toHaveClass(/active/);
   const tz = page.locator('#screen-settings input[type="text"]').first();
   await tz.click();

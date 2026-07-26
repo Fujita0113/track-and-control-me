@@ -15,9 +15,8 @@ const OUT_DIR = 'test-results/screenshots';
 
 const TABS: Array<{ target: string; label: string }> = [
   { target: 'today', label: '今日' },
-  { target: 'timeline', label: 'タイムライン' },
-  { target: 'kanban', label: 'カンバン' },
   { target: 'reflection', label: '振り返り' },
+  { target: 'kanban', label: 'カンバン' },
   { target: 'goals', label: '目標' },
   { target: 'settings', label: '設定' },
 ];
