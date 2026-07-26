@@ -101,6 +101,7 @@ export async function show(root) {
     settingsOpen: false,
     completingId: null,
     draggingId: null,
+    renamingId: null, // カード上インライン編集中のタスクID(issue #29)
   };
   clear(root);
   root.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
@@ -214,6 +215,10 @@ function afterRender() {
     const inp = rootEl.querySelector('.kb-cat-input');
     if (inp) inp.focus();
   }
+  if (S.renamingId != null) {
+    const inp = rootEl.querySelector('.kb-card-title-edit');
+    if (inp) { inp.focus(); inp.select(); }
+  }
   // 詳細パネルのタイトルは DOM 挿入後（scrollHeight 確定後）に初期高さを確定する。
   const detTitle = rootEl.querySelector('textarea.kb-detail-title');
   if (detTitle) autosize(detTitle);
@@ -262,6 +267,14 @@ function iconCheckAnimated(size, sw) {
       d: 'M5 12.5l4.2 4.3L19 7', stroke: '#fff', 'stroke-width': sw,
       'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'kb-check-path',
     }));
+}
+function iconTrash() {
+  return svgEl('svg', { width: '13', height: '13', viewBox: '0 0 24 24', fill: 'none' },
+    svgEl('path', {
+      d: 'M4 7h16M9 7V4.8c0-.44.36-.8.8-.8h4.4c.44 0 .8.36.8.8V7m-9 0 .9 12.1c.06.8.73 1.4 1.53 1.4h6.14c.8 0 1.47-.6 1.53-1.4L18.9 7',
+      stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+    }),
+    svgEl('path', { d: 'M10 11v6M14 11v6', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round' }));
 }
 function iconCalendar(stroke) {
   return svgEl('svg', { width: '14', height: '14', viewBox: '0 0 24 24', fill: 'none' },
@@ -504,10 +517,41 @@ function colEl(col) {
   return el;
 }
 
+/** 確認ダイアログを経てタスクを削除する（詳細パネルの削除ボタン／カードのゴミ箱アイコン／
+ * カードの右クリックの3箇所から共通で呼ばれる）。 */
+async function deleteTaskWithConfirm(t) {
+  if (!confirm('このタスクを削除しますか?')) return;
+  try {
+    await api.deleteTask(t.id);
+    S.tasks = S.tasks.filter((x) => x.id !== t.id);
+    S.detailId = null; S.dueCalOpen = false;
+    toast('削除しました', 'ok');
+  } catch (err) { toast(`削除に失敗: ${err.message}`, 'err'); }
+  renderAll();
+}
+
+const OPEN_DETAIL_DELAY_MS = 220; // dblclick 判定猶予（ブラウザは dblclick 前に click を2回発火するため）
+
 function cardEl(t) {
   const pri = PRI[t.priority] ? t.priority : 'low';
   const card = h('div', { class: 'kb-card', draggable: 'true', dataset: { id: String(t.id) } });
-  card.addEventListener('click', (e) => { e.stopPropagation(); openDetail(t); });
+  let openTimer = null;
+  // シングルクリックは即座に開かず一呼吸置く: dblclick（カード上リネーム）が続けて来た場合に
+  // 詳細パネルが誤って開かないよう、猶予内の2クリック目までは openDetail をキャンセルできる状態にする。
+  card.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (openTimer) clearTimeout(openTimer);
+    openTimer = setTimeout(() => { openTimer = null; openDetail(t); }, OPEN_DETAIL_DELAY_MS);
+  });
+  card.addEventListener('dblclick', () => {
+    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+  });
+  card.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+    deleteTaskWithConfirm(t);
+  });
   card.addEventListener('dragstart', (e) => {
     S.draggingId = t.id;
     try {
@@ -527,16 +571,61 @@ function cardEl(t) {
 
   card.appendChild(h('div', { class: 'kb-card-top' },
     h('span', { class: `kb-pri ${pri}`, text: PRI[pri].label }),
-    h('span', {
-      class: 'kb-due',
-      title: t.due_locked ? '手動指定した期日（自動更新なし）' : '自動決定の期日',
-    }, fmtDue(t.due), t.due_locked ? ' 🔒' : null)));
-  card.appendChild(h('div', { class: 'kb-card-title', text: t.title }));
+    h('div', { class: 'kb-card-top-right' },
+      h('span', {
+        class: 'kb-due',
+        title: t.due_locked ? '手動指定した期日（自動更新なし）' : '自動決定の期日',
+      }, fmtDue(t.due), t.due_locked ? ' 🔒' : null),
+      h('button', {
+        class: 'kb-card-del', type: 'button', title: '削除', draggable: 'false',
+        onclick: (e) => { e.stopPropagation(); deleteTaskWithConfirm(t); },
+      }, iconTrash()))));
+  card.appendChild(cardTitleEl(t));
   const badge = categoryBadgeEl(t);
   if (badge) card.appendChild(badge);
   if (S.detailId === t.id) card.appendChild(h('div', { class: 'kb-card-sel' }));
   if (S.completingId === t.id) card.appendChild(completingOverlayEl());
   return card;
+}
+
+/** カードタイトル部。通常は静的表示＋ダブルクリックでインライン編集(`S.renamingId`)へ入る。
+ * 編集中は input を描画し、Enter/blur で確定保存、Escape で編集前の値へ戻す。 */
+function cardTitleEl(t) {
+  if (S.renamingId === t.id) {
+    const input = h('input', { class: 'kb-card-title-edit', type: 'text', value: t.title });
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('dblclick', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        S.renamingId = null;
+        renderAll();
+      }
+    });
+    input.addEventListener('blur', async () => {
+      if (S.renamingId !== t.id) return; // Escape で既に処理済み
+      const next = input.value.trim();
+      S.renamingId = null;
+      if (!next) { renderAll(); return; }
+      t.title = next;
+      try { await api.updateTask(t.id, { title: next }); }
+      catch (err) { toast(`保存に失敗: ${err.message}`, 'err'); }
+      renderAll();
+    });
+    return input;
+  }
+  const title = h('div', { class: 'kb-card-title', text: t.title });
+  // stopPropagation しない: card 側の dblclick リスナー（保留中の openDetail タイマー解除）へ
+  // 伝播させる必要があるため。
+  title.addEventListener('dblclick', () => {
+    S.renamingId = t.id;
+    renderAll();
+  });
+  return title;
 }
 
 function completingOverlayEl() {
@@ -1104,16 +1193,7 @@ function detailEl(t) {
   panel.appendChild(h('div', { class: 'kb-detail-foot' },
     h('button', {
       class: 'kb-del-btn', type: 'button', text: 'タスクを削除',
-      onclick: async () => {
-        if (!confirm('このタスクを削除しますか?')) return;
-        try {
-          await api.deleteTask(t.id);
-          S.tasks = S.tasks.filter((x) => x.id !== t.id);
-          S.detailId = null; S.dueCalOpen = false;
-          toast('削除しました', 'ok');
-        } catch (err) { toast(`削除に失敗: ${err.message}`, 'err'); }
-        renderAll();
-      },
+      onclick: () => deleteTaskWithConfirm(t),
     }),
     h('p', { class: 'kb-detail-hint', text: 'ノートは自動保存されます。カードはボードでドラッグして列の移動・並べ替えができます。' })));
   return panel;
