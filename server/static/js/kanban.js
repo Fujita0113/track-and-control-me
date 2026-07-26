@@ -536,29 +536,26 @@ async function deleteTaskWithConfirm(t) {
   }
 }
 
-const OPEN_DETAIL_DELAY_MS = 220; // dblclick 判定猶予（ブラウザは dblclick 前に click を2回発火するため）
-
 function cardEl(t) {
   const pri = PRI[t.priority] ? t.priority : 'low';
   const card = h('div', { class: 'kb-card', draggable: 'true', dataset: { id: String(t.id) } });
-  let openTimer = null;
-  // シングルクリックは即座に開かず一呼吸置く: dblclick（カード上リネーム）が続けて来た場合に
-  // 詳細パネルが誤って開かないよう、猶予内の2クリック目までは openDetail をキャンセルできる状態にする。
+  // シングルクリックは即座に詳細を開く（体感速度を優先）。ブラウザは dblclick の前に
+  // click を2回発火するため、ダブルクリック時は一瞬だけ詳細が開くが、続く dblclick で
+  // それを閉じてリネームへ切り替える（下の dblclick ハンドラ）。
   card.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (openTimer) clearTimeout(openTimer);
-    openTimer = setTimeout(() => { openTimer = null; openDetail(t); }, OPEN_DETAIL_DELAY_MS);
+    openDetail(t);
   });
   // カードのどこをダブルクリックしてもタイトルのインライン編集に入る。
+  // 直前の2回の click で開いてしまった詳細パネルがあれば閉じる。
   card.addEventListener('dblclick', () => {
-    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+    if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; }
     S.renamingId = t.id;
     renderAll();
   });
   card.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
     deleteTaskWithConfirm(t);
   });
   card.addEventListener('dragstart', (e) => {
