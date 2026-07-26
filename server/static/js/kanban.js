@@ -518,16 +518,22 @@ function colEl(col) {
 }
 
 /** 確認ダイアログを経てタスクを削除する（詳細パネルの削除ボタン／カードのゴミ箱アイコン／
- * カードの右クリックの3箇所から共通で呼ばれる）。 */
+ * カードの右クリックの3箇所から共通で呼ばれる）。
+ * Optimistic UI: サーバー応答を待たずに即座にボードから消し、失敗時のみ元の位置へ戻す。 */
 async function deleteTaskWithConfirm(t) {
   if (!confirm('このタスクを削除しますか?')) return;
+  const prevTasks = S.tasks;
+  S.tasks = prevTasks.filter((x) => x.id !== t.id);
+  if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; }
+  renderAll();
   try {
     await api.deleteTask(t.id);
-    S.tasks = S.tasks.filter((x) => x.id !== t.id);
-    S.detailId = null; S.dueCalOpen = false;
     toast('削除しました', 'ok');
-  } catch (err) { toast(`削除に失敗: ${err.message}`, 'err'); }
-  renderAll();
+  } catch (err) {
+    S.tasks = prevTasks; // ロールバック: 元の並び順のまま復元する
+    toast(`削除に失敗: ${err.message}`, 'err');
+    renderAll();
+  }
 }
 
 const OPEN_DETAIL_DELAY_MS = 220; // dblclick 判定猶予（ブラウザは dblclick 前に click を2回発火するため）

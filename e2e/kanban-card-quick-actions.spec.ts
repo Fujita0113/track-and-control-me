@@ -67,6 +67,38 @@ test('確認をキャンセルすると削除されない', async ({ page }) => 
   await expect(card).toHaveCount(1);
 });
 
+test('削除は即座にボードから消える（Optimistic UI）が、失敗時は復元される', async ({ page }) => {
+  const { id, title } = await seedTask(page.request, 'サーバーエラーで復元されるタスク');
+  await page.reload();
+  await page.getByRole('button', { name: 'あとで' }).click({ timeout: 2000 }).catch(() => {});
+  await page.locator('#tabs button[data-target="kanban"]').click();
+
+  // DELETE を失敗させる。応答に遅延を入れ、「サーバー応答を待たず消える」→「失敗後に戻る」の
+  // 2段階を確実に観測できるようにする（即時応答だと一瞬で戻ってしまい判定が不安定になるため）。
+  await page.route(`**/api/tasks/${id}`, async (route) => {
+    if (route.request().method() === 'DELETE') {
+      await new Promise((r) => setTimeout(r, 400));
+      await route.fulfill({ status: 500, body: 'boom' });
+    } else {
+      await route.continue();
+    }
+  });
+
+  const card = page.locator(`.kb-card[data-id="${id}"]`);
+  await expect(card).toBeVisible();
+
+  page.once('dialog', (d) => d.accept());
+  await card.locator('.kb-card-del').click();
+
+  // サーバー応答（失敗）を待たず即座にボードから消える。
+  await expect(card).toHaveCount(0);
+
+  // 失敗レスポンスの後、ロールバックされ元の位置に復元される。
+  await expect(card).toHaveCount(1);
+  await expect(card.locator('.kb-card-title')).toHaveText(title);
+  await expect(page.locator('.toast-err', { hasText: '削除に失敗' })).toBeVisible();
+});
+
 test('カードをダブルクリックしてタイトルを直し、Enterで確定するとボード上のタイトルが変わる', async ({ page }) => {
   const { id, title } = await seedTask(page.request, '直す前のタイトル');
   await page.reload();
