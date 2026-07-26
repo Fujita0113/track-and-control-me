@@ -1,0 +1,77 @@
+name: OpenSpec archive after merge
+
+# PR がマージされたら、その PR に紐づく OpenSpec の変更を archive へ移動する。
+# sync は PR の中で済んでいる前提なので、ここは純粋なディレクトリ移動だけ。
+# LLM を使わないので、コストゼロ・結果は完全に決定論的。
+#
+# PR 本文の末尾にある `openspec-change: <名前>` の行を目印にしている。
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openspec-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: PR 本文から変更名を取り出す
+        id: find
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          NAME=$(printf '%s' "$PR_BODY" | grep -oP '^openspec-change:\s*\K[a-z0-9][a-z0-9-]*' | head -1 || true)
+          if [ -z "$NAME" ]; then
+            echo "この PR に openspec-change 行はありません。何もしません。"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "変更名: $NAME"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.find.outputs.found == 'true'
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: archive へ移動してコミット
+        if: steps.find.outputs.found == 'true'
+        env:
+          NAME: ${{ steps.find.outputs.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          SRC="openspec/changes/$NAME"
+          if [ ! -d "$SRC" ]; then
+            echo "$SRC が見つかりません（既に archive 済みの可能性）。何もしません。"
+            exit 0
+          fi
+
+          DEST="openspec/changes/archive/$(date -u +%Y-%m-%d)-$NAME"
+          if [ -e "$DEST" ]; then
+            echo "::error::$DEST は既に存在します。手動で解決してください。"
+            exit 1
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p openspec/changes/archive
+          git mv "$SRC" "$DEST"
+
+          printf 'Archive %s (PR #%s)\n\n%s → %s\n' "$NAME" "$PR_NUMBER" "$SRC" "$DEST" \
+            > "$RUNNER_TEMP/msg.txt"
+          git commit -F "$RUNNER_TEMP/msg.txt"
+          git push origin main
+
+          echo "✅ $DEST へアーカイブしました"

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同じブランチで新しい push があれば古い実行は打ち切る。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 依存インストール
+        run: npm ci
+
+      - name: 型検査
+        run: npm run typecheck
+
+      - name: ユニットテスト（vitest）
+        run: npm test
+
+      - name: Playwright ブラウザ導入
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E（Playwright／デモモード）
+        run: npm run test:e2e
+
+      - name: 失敗時の Playwright レポートを保存
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

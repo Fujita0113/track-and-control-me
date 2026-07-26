@@ -1,0 +1,424 @@
+name: size/XS auto-implement
+
+# タスクサイズが XS（極小）の issue から、OpenSpec の propose → apply → sync までを
+# 自動実行し、テストを通してから Draft PR を作る。archive はマージ後（opsx-archive.yml）。
+#
+# サイズは size/XS・size/S・size/M・size/L の4段階。自動実装が走るのは XS だけで、
+# S 以上は人間が判断する（サイズの目安は SETUP-TODO.md を参照）。
+#
+# 起動条件（どちらもリポジトリのオーナー本人のみ）:
+#   - issue に `size/XS` ラベルを付ける
+#   - issue に `/xs` とコメントする（やり直したいとき）
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# 複数の issue が同時に走るとメインスペックが衝突するので直列化する。
+concurrency:
+  group: openspec-auto
+  cancel-in-progress: false
+
+env:
+  # ── モデル設定（ここだけ変えれば差し替えできる）────────────────────
+  # 賢いモデル: 原因特定・提案づくり・メインスペックへの sync
+  MODEL_SMART: opencode-go/deepseek-v4-pro
+  # 軽量コーディングモデル: 実装
+  MODEL_CODE: opencode-go/kimi-k2.7-code
+  # ────────────────────────────────────────────────────────────
+  # checked-in の .opencode/skills を生成したのと同じ版に固定する
+  OPENSPEC_VERSION: 1.4.1
+
+jobs:
+  auto:
+    # オーナー本人以外は起動できない（public リポなので必須のガード）。
+    if: >-
+      (
+        github.event_name == 'issues'
+        && github.event.label.name == 'size/XS'
+        && github.event.issue.author_association == 'OWNER'
+      ) || (
+        github.event_name == 'issue_comment'
+        && !github.event.issue.pull_request
+        && github.event.comment.author_association == 'OWNER'
+        && startsWith(github.event.comment.body, '/xs')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 開始したことを issue に伝える
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "🤖 自動実装を開始しました。進捗は [Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) で確認できます。"
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 依存インストール
+        run: npm ci
+
+      - name: Playwright ブラウザ導入
+        run: npx playwright install --with-deps chromium
+
+      - name: OpenSpec CLI 導入
+        run: npm i -g "@fission-ai/openspec@${OPENSPEC_VERSION}"
+
+      - name: 作業ブランチを作る
+        id: branch
+        run: |
+          BRANCH="xs/issue-${{ github.event.issue.number }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: 既存の変更ディレクトリを記録（新規作成分を特定するため）
+        run: |
+          ls -1 openspec/changes | grep -v '^archive$' | sort > "$RUNNER_TEMP/changes-before.txt" || true
+          cat "$RUNNER_TEMP/changes-before.txt"
+
+      # ── 1. 調査 + 提案（賢いモデル）─────────────────────────────
+      - name: 原因特定と OpenSpec 提案
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ env.MODEL_SMART }}
+          share: "false"
+          use_github_token: "true"
+          prompt: |
+            あなたはこのリポジトリの調査担当です。以下の GitHub issue に対する OpenSpec の変更提案を作ってください。
+
+            ## 対象 issue
+            番号: #${{ github.event.issue.number }}
+            タイトル: ${{ github.event.issue.title }}
+
+            本文:
+            ${{ github.event.issue.body }}
+
+            ## 手順
+            1. まずリポジトリを調査し、issue の原因を具体的に特定する（該当するファイルと行まで突き止める）。
+               推測で書かず、実際にコードを読んで確認すること。
+            2. `.opencode/skills/openspec-propose/SKILL.md` を読み、その手順に厳密に従って変更を作る
+               （`/opsx-propose` と同じ手順）。change 名は英小文字のケバブケースにする。
+            3. **凍結ラインを引く**（`AGENTS.md`「テストの凍結ライン」に従う）。
+               ここで書いたものは実装フェーズで**変更禁止**になるので、決まっているものだけを書く:
+               - **vitest を赤で置く。** design.md が名前を決めたサービス関数・API ルートに対して書く。
+                 この層の契約は今の時点で確定しているので test-first できる。
+               - **新規 E2E は書かない。** セレクタ・ラベル・DOM 構造は実装中に発明されるもので、
+                 今は当てようがない。代わりに「実装フェーズがどの筋を E2E で押さえるべきか」を
+                 **筋の名前で**（例:「ルールを足す→ゲートが開く」）tasks.md に書く。セレクタは書かない。
+               - **既存 E2E への影響はここで洗い出して直す。** `e2e/*.spec.ts` を実際に読み、
+                 この変更で落ちる spec があるかを判定する。既存 E2E は実装フェーズで凍結され、
+                 向こうでは直せないので、ここで直さないと詰む。判定結果は必ず tasks.md に書く:
+                 - 影響があるなら「どの spec の・何を・なぜ変えたのか」を明記する
+                 - 影響がないなら「既存 E2E への影響なし」と明記する
+               （E2E は背骨だけに絞る方針。条件分岐・境界値・日付ロジックは vitest 側に書く）
+               ここを曖昧にすると、実装フェーズで「テストを直すのかコードを直すのか」を
+               判断する根拠が無くなり、テストを都合よく書き換えて緑にする事故が起きる。
+            4. proposal.md / design.md / tasks.md を作る。tasks.md は実装者がそのまま順に実行できる粒度で書く。
+            5. プロジェクトのルールは `AGENTS.md` を読んで必ず守ること。
+
+            ## 絶対に守ること
+            - **git のコミット・push・ブランチ操作・PR 作成は一切しない。** ファイルの作成と編集だけを行う。
+              コミット以降は後続のワークフローが担当する。
+            - 無人実行なので、ユーザーへの質問はできない。判断は自分で行い、迷ったら最も素直な解釈を採る。
+            - スコープは issue に書かれたことだけ。ついでのリファクタリング・機能追加・整理はしない。
+            - `openspec/specs/` (メインスペック) はこの段階では変更しない。変更は `openspec/changes/<name>/` の中だけ。
+
+      - name: 作られた変更の名前を特定
+        id: change
+        run: |
+          ls -1 openspec/changes | grep -v '^archive$' | sort > "$RUNNER_TEMP/changes-after.txt"
+          NEW=$(comm -13 "$RUNNER_TEMP/changes-before.txt" "$RUNNER_TEMP/changes-after.txt")
+          COUNT=$(printf '%s\n' "$NEW" | grep -c . || true)
+          if [ "$COUNT" != "1" ]; then
+            echo "::error::新しい OpenSpec 変更をちょうど1件特定できませんでした（検出: ${COUNT} 件）"
+            printf '%s\n' "$NEW"
+            exit 1
+          fi
+          echo "name=$NEW" >> "$GITHUB_OUTPUT"
+          echo "変更名: $NEW"
+
+      # ── 2. 実装（軽量コーディングモデル）───────────────────────
+      - name: 実装
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ env.MODEL_CODE }}
+          share: "false"
+          use_github_token: "true"
+          prompt: |
+            OpenSpec の変更 `${{ steps.change.outputs.name }}` を実装してください。
+
+            ## 手順
+            1. `.opencode/skills/openspec-apply-change/SKILL.md` を読み、その手順に従う（`/opsx-apply` と同じ）。
+            2. `openspec/changes/${{ steps.change.outputs.name }}/tasks.md` のタスクを上から順に実装し、
+               終わったものは `- [x]` に更新する。
+            3. tasks.md が名指しした筋に対する **新規 E2E をここで書く**（提案フェーズは
+               DOM を知らないので意図的に書いていない）。実装が終わって DOM が確定してから、
+               最後に書くこと。細部は vitest、ユーザーの筋だけ E2E。
+            4. **新規 E2E の red 証明**（自分で後から書いた spec は、実装抜きで落ちることを
+               示すまで何も証明していない）:
+               ```
+               git stash push -- server/ extension/ packages/
+               CI=1 npx playwright test e2e/<新しい spec>   # 落ちること
+               git stash pop
+               ```
+               `CI=1` は必須（無いと reuseExistingServer が起動済みサーバを使い回して偽の緑になる）。
+               stash 側で通ってしまったら、その spec は今回の変更について何も主張していないので書き直す。
+            5. `npm run typecheck` → `npm test` → `npx playwright test` の3つすべてを実行し、
+               **全部通ることを自分で確認してから終わる。** 通っていない状態で終わらせない。
+            6. プロジェクトのルールは `AGENTS.md` を読んで必ず守ること。
+
+            ## 凍結されているもの（絶対に書き換えない）
+            - delta spec（`openspec/changes/${{ steps.change.outputs.name }}/specs/`）
+            - 提案フェーズが書いた vitest
+            - **既存の** `e2e/*.spec.ts`
+
+            ## 既存テストが落ちたときの判断（重要）
+            tasks.md に「この spec をこう変える」と**書かれている**場合だけ、そのテストを書き換えてよい。
+            書かれていない既存テストが落ちたら、それは**実装側のバグ**である可能性が高い。
+            とくに既存 E2E が赤くなったのは、この変更が出荷済みの挙動を壊したという最も重要なシグナル。
+            テスト側をいじって緑にするのではなく、コードを直すこと。
+            どうしてもテスト側が誤っていると考えるなら、その根拠をコミットせずに
+            `openspec/changes/${{ steps.change.outputs.name }}/tasks.md` の末尾に追記して残すこと。
+            **無人実行なので聞き返せない。判断がつかないときの答えは常に「テストを変えない」**。
+            赤いまま残して人間に見せるほうが、書き換えて緑にするより安全。
+
+            ## 絶対に守ること
+            - **git のコミット・push・ブランチ操作・PR 作成は一切しない。** ファイルの編集だけを行う。
+            - **テストの削除・`skip`・`fixme` 化で緑にするのは禁止。**
+            - 無人実行なので、ユーザーへの質問はできない。
+            - tasks.md に書かれていないことはしない。スコープを広げない。
+            - `openspec/specs/` (メインスペック) はまだ変更しない。次の工程で行う。
+
+      # ── 3. テストゲート ────────────────────────────────────────
+      - name: テスト（1回目）
+        id: gate1
+        continue-on-error: true
+        run: |
+          npm run typecheck
+          npm test
+          npx playwright test
+
+      - name: テスト失敗時の修正（1回だけ）
+        if: steps.gate1.outcome == 'failure'
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ env.MODEL_CODE }}
+          share: "false"
+          use_github_token: "true"
+          prompt: |
+            直前の実装でテストが失敗しました。原因を特定して直してください。
+
+            ## 手順
+            1. `npm run typecheck` / `npm test` / `npx playwright test` を実行して失敗内容を確認する。
+            2. `openspec/changes/${{ steps.change.outputs.name }}/tasks.md` を読み、
+               落ちたテストが「変更予定」として書かれているか確認する。
+            3. 下の判断ルールに従って直す。
+            4. 再度 3 つとも通ることを確認する。
+
+            ## 判断ルール（ここを間違えると壊れた実装が緑になる）
+            - **tasks.md に「この spec をこう変える」と書かれている** → テスト側を直してよい。
+            - **tasks.md に書かれていない既存テストが落ちた** → **テストを触ってはいけない。**
+              実装がその機能を壊したということなので、コード側を直す。
+              これは今回の変更が想定外の影響を出したサインであり、最も重要な発見。
+            - 判断がつかない場合もテストは触らず、コード側で解決を試みる。
+              解決できなければ、その旨を tasks.md の末尾に書き残して終わってよい
+              （無理に緑にするより、落ちたまま人間に見せるほうが良い）。
+
+            ## 絶対に守ること
+            - **git のコミット・push は一切しない。** ファイルの編集だけ。
+            - **テストの削除・`skip`・`fixme` 化・アサーションの緩和で通すのは禁止。**
+            - スコープを広げない。今回の変更と無関係な失敗は直さず、報告だけする。
+
+      - name: テスト（2回目・最終）
+        id: gate2
+        continue-on-error: true
+        run: |
+          npm run typecheck
+          npm test
+          npx playwright test
+
+      # ── 3.5 新規 E2E の red 証明（モデル呼び出し0回・決定論的）──────────
+      # エージェントは commit しないので、新規 spec は untracked のまま残っている。
+      # 実装ディレクトリだけを stash して走らせ、「実装が無ければ落ちる」ことを機械的に確かめる。
+      # これが通ってしまう spec は、実装に合わせて後から書かれた骨抜きのテスト。
+      - name: 新規 E2E の red 証明
+        id: redproof
+        continue-on-error: true
+        run: |
+          NEW=$(git ls-files --others --exclude-standard -- e2e/ | grep '\.spec\.ts$' || true)
+          if [ -z "$NEW" ]; then
+            echo "新規 E2E はありません。証明はスキップします。"
+            echo "result=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "対象:"; printf '%s\n' "$NEW"
+
+          # stash されなかった場合に無関係な stash を pop しないようガードする
+          # （git stash push は該当変更が無くても exit 0 で何も積まない）。
+          if git stash push -- server/ extension/ packages/ | grep -q '^Saved'; then
+            STASHED=1
+          else
+            STASHED=0
+            echo "::warning::実装ディレクトリに差分がありません。証明の意味がありません。"
+          fi
+
+          # ★1本ずつ検証する。まとめて走らせると、1本落ちただけで全部が証明済みに見えてしまう。
+          FALSE_GREEN=""
+          while IFS= read -r SPEC; do
+            [ -z "$SPEC" ] && continue
+            set +e
+            CI=1 npx playwright test "$SPEC"
+            RC=$?
+            set -e
+            if [ "$RC" -eq 0 ]; then
+              echo "::error::$SPEC は実装を戻しても通りました。この spec は今回の変更について何も主張していません。"
+              FALSE_GREEN="$FALSE_GREEN $SPEC"
+            else
+              echo "✅ $SPEC は実装抜きでは落ちました。"
+            fi
+          done <<< "$NEW"
+
+          [ "$STASHED" = "1" ] && git stash pop
+
+          if [ -n "$FALSE_GREEN" ]; then
+            echo "::error::骨抜きの疑いがある spec:$FALSE_GREEN"
+            echo "result=false-green" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "result=proved" >> "$GITHUB_OUTPUT"
+
+      # ── 4. メインスペックへ sync（賢いモデル）───────────────────
+      - name: メインスペックへ sync
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          model: ${{ env.MODEL_SMART }}
+          share: "false"
+          use_github_token: "true"
+          prompt: |
+            OpenSpec の変更 `${{ steps.change.outputs.name }}` の delta spec を、メインスペックへ sync してください。
+
+            ## 手順
+            1. `.opencode/skills/openspec-sync-specs/SKILL.md` を読み、その手順に厳密に従う（`/opsx-sync` と同じ）。
+            2. 対象の change は `${{ steps.change.outputs.name }}` で確定している。選択を問い合わせる必要はない。
+
+            ## 絶対に守ること（ここは正典を書き換える工程なので特に重要）
+            - **既存の日本語の言い回し・粒度・見出し構造を保つ。** 勝手に要約・英語化・整形をしない。
+            - delta spec に書かれていない要件やシナリオには**一切触らない**。
+            - ADDED / MODIFIED / REMOVED / RENAMED の指示どおり、最小限の差分だけを当てる。
+            - **`/opsx-archive` は実行しない。** アーカイブはマージ後に別のワークフローが行う。
+            - **git のコミット・push は一切しない。**
+
+      # ── 5. スクリーンショット ──────────────────────────────────
+      - name: UI スクリーンショット撮影（デモモード）
+        id: shots
+        continue-on-error: true
+        run: npx playwright test e2e/screenshots.spec.ts
+
+      - name: スクリーンショットを保存
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-screenshots
+          path: test-results/screenshots/
+          retention-days: 14
+          if-no-files-found: warn
+
+      # ── 6. コミット・push・PR 作成（シェルのみ／決定論的）──────────
+      - name: コミットして push
+        id: push
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          CHANGE_NAME: ${{ steps.change.outputs.name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          git add -A
+          # 実行時の一時生成物は含めない
+          git reset -- test-results playwright-report 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "::error::変更が1件もありません。エージェントがファイルを編集できていない可能性があります。"
+            exit 1
+          fi
+          printf '%s (issue #%s)\n\nOpenSpec 変更: %s\n自動実装（調査: %s / 実装: %s）\n\nCo-Authored-By: opencode <noreply@opencode.ai>\n' \
+            "$ISSUE_TITLE" "$ISSUE_NUMBER" "$CHANGE_NAME" "$MODEL_SMART" "$MODEL_CODE" > "$RUNNER_TEMP/commit-msg.txt"
+          git commit -F "$RUNNER_TEMP/commit-msg.txt"
+          git push -u origin "${{ steps.branch.outputs.name }}" --force-with-lease
+
+      - name: Draft PR を作る
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CHANGE_NAME: ${{ steps.change.outputs.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TESTS: ${{ steps.gate2.outcome == 'success' && '✅ 通過' || '❌ 失敗（要確認）' }}
+          SHOTS: ${{ steps.shots.outcome == 'success' && '✅ 撮影済み' || '⚠️ 撮影失敗' }}
+          REDPROOF: ${{ steps.redproof.outputs.result == 'proved' && '✅ 実装抜きで落ちることを確認' || (steps.redproof.outputs.result == 'none' && '— 新規 E2E なし' || '❌ 実装を戻しても通った（骨抜きの疑い）') }}
+        run: |
+          cat > "$RUNNER_TEMP/pr-body.md" <<EOF
+          Closes #${ISSUE_NUMBER}
+
+          🤖 `size/XS` 自動実装。**マージ前に必ず内容を確認してください。**
+
+          | 項目 | 状態 |
+          |---|---|
+          | テスト（typecheck / vitest / e2e） | ${TESTS} |
+          | 新規 E2E の red 証明 | ${REDPROOF} |
+          | UI スクリーンショット | ${SHOTS} |
+
+          ## UI の確認方法
+          [このワークフロー実行](${RUN_URL}) のページ下部にある **ui-screenshots** をダウンロードすると、
+          デモモードの全6タブの画面が見られます。
+
+          ## レビューの重点
+          - \`openspec/specs/\` の差分（プロジェクトの正典なので、日本語の劣化がないか目視してください）
+          - 実装がスコープを超えていないか
+
+          ---
+          openspec-change: ${CHANGE_NAME}
+          EOF
+          gh pr create \
+            --repo "${{ github.repository }}" \
+            --base main \
+            --head "${{ steps.branch.outputs.name }}" \
+            --title "${ISSUE_TITLE} (issue #${ISSUE_NUMBER})" \
+            --body-file "$RUNNER_TEMP/pr-body.md" \
+            --draft
+
+      - name: 失敗したことを issue に伝える
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "❌ 自動実装が途中で失敗しました。[ログ](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) を確認してください。\`/xs\` とコメントすればやり直せます。"
