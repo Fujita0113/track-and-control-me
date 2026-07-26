@@ -5,8 +5,8 @@
   "type": "module",
   "description": "ローカル backend：WS 受信・時間集計・ルール評価・パスワード・ダッシュボード",
   "scripts": {
-    "start": "tsx src/main.ts",
-    "dev": "tsx watch src/main.ts",
+    "start": "tsx --env-file-if-exists=.env src/main.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

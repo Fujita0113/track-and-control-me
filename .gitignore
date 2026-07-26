@@ -9,6 +9,7 @@ dist/
 data/
 backups/
 .env
+!/server/.env
 config.local.json
 
 # build output
