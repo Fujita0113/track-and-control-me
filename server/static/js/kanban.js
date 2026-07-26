@@ -869,36 +869,84 @@ function composerEl() {
   return ta;
 }
 
+/** サーバー応答を待たず即座に次の入力へ進めるための仮タスクID（実IDは正の連番のため、
+ * 負の値で衝突を避ける）。 */
+let nextTempTaskId = -1;
+
+/** 仮ID→本物のIDへ、state 側の参照（bareな id 値を保持している箇所）を差し替える。
+ * タスクオブジェクト自体は同一参照を保った上で id フィールドだけ書き換える
+ * （detailEl 内の scheduleSave 等が同じオブジェクト参照を閉じ込めているため、
+ * オブジェクトを差し替えると入力途中の内容が失われる）。 */
+function reconcileTaskId(oldId, newId) {
+  if (S.detailId === oldId) S.detailId = newId;
+  if (S.renamingId === oldId) S.renamingId = newId;
+  if (S.completingId === oldId) S.completingId = newId;
+  if (S.draggingId === oldId) S.draggingId = newId;
+  if (S.categorizePick && S.categorizePick.id === oldId) S.categorizePick = { ...S.categorizePick, id: newId };
+}
+
 async function commitComposer(keepOpen, openDet) {
   const text = (S.composerText || '').trim();
   const col = S.composingCol;
   if (!col) return;
   if (!text) { S.composingCol = null; S.composerText = ''; renderAll(); return; }
   S.composerText = '';
-  try {
-    // 作成時に列＋明日トグルから due を自動決定（design D3）。ロックは 0。
-    const dec = computeDue(null, normStatus(col), tomorrowMode(), state.today);
-    const due = dec.change ? dec.due : null;
-    const t = await api.createTask({ title: text, status: col, priority: 'low', due, due_locked: 0 });
-    S.tasks.push(t);
-    if (openDet) {
-      S.composingCol = null;
-      S.detailId = t.id;
-      S.focusNotes = true;
-    } else if (keepOpen && categorizeMode()) {
-      // カテゴリ付けモード（Enter 作成時）: 次入力の位置に作成タスクのカテゴリ選択を出す（design D5）。
-      try { S.groups = await api.getGroups(); } catch { S.groups = S.groups || []; }
-      S.composingCol = null;
-      S.categorizePick = { id: t.id, col };
-    } else if (!keepOpen && S.composingCol === col) {
-      // blur コミット中に別列のコンポーザが開かれた場合はそちらを維持する。
-      S.composingCol = null;
-    }
-  } catch (err) {
-    toast(`追加に失敗: ${err.message}`, 'err');
-    if (S.composingCol === col) S.composingCol = null;
+
+  // 作成時に列＋明日トグルから due を自動決定（design D3）。ロックは 0。
+  const dec = computeDue(null, normStatus(col), tomorrowMode(), state.today);
+  const due = dec.change ? dec.due : null;
+  const tempId = nextTempTaskId--;
+  const placeholder = {
+    id: tempId, title: text, description: null, status: col, planned_for: null,
+    sort_order: 0, created_at: Date.now(), done_at: null, updated_at: Date.now(),
+    priority: 'low', due, due_locked: 0, notes: null,
+    category_group_id: null, category_name: null, category_color: null,
+  };
+  S.tasks.push(placeholder);
+
+  // Optimistic UI: api.createTask の応答を待たず、ここで即座に次の入力へ進む。
+  if (openDet) {
+    S.composingCol = null;
+    S.detailId = tempId;
+    S.focusNotes = true;
+  } else if (keepOpen && categorizeMode()) {
+    // カテゴリ付けモード（Enter 作成時）: 次入力の位置に作成タスクのカテゴリ選択を出す（design D5）。
+    // グループ候補は待たずにピッカーを開き、取得できたら裏で反映する。
+    S.composingCol = null;
+    S.categorizePick = { id: tempId, col };
+    api.getGroups().then((g) => { S.groups = g; renderAll(); }).catch(() => {});
+  } else if (!keepOpen && S.composingCol === col) {
+    // blur コミット中に別列のコンポーザが開かれた場合はそちらを維持する。
+    S.composingCol = null;
   }
   renderAll();
+
+  try {
+    const t = await api.createTask({ title: text, status: col, priority: 'low', due, due_locked: 0 });
+    // 画面上の何かがまだこの仮タスクを参照しているときだけ再描画する。plain な連続作成
+    // （コンポーザが開いたままの最頻ケース）では何も参照していないため再描画しない。
+    // ここで無条件に renderAll すると、まだ何も操作していない次のコンポーザ・インスタンスが
+    // 再構築で作り直され、その blur で空文字コミットが誤発火して連続作成状態が壊れてしまう
+    // （実際に発生し確認済みのバグ）。
+    const needsRerender = S.detailId === tempId
+      || S.renamingId === tempId
+      || (S.categorizePick && S.categorizePick.id === tempId);
+    placeholder.id = t.id; // オブジェクト参照は維持し id のみ本物に差し替える
+    reconcileTaskId(tempId, t.id);
+    if (needsRerender) {
+      // 詳細を開いたまま裏で確定した場合、再描画でノートのフォーカスが奪われないようにする。
+      if (S.detailId === t.id) S.focusNotes = true;
+      renderAll();
+    }
+  } catch (err) {
+    S.tasks = S.tasks.filter((x) => x !== placeholder);
+    if (S.detailId === tempId) { S.detailId = null; S.dueCalOpen = false; }
+    if (S.renamingId === tempId) S.renamingId = null;
+    if (S.categorizePick && S.categorizePick.id === tempId) S.categorizePick = null;
+    if (S.composingCol === col) S.composingCol = null; // 失敗時はコンポーザを閉じる（既存挙動を踏襲）
+    toast(`追加に失敗: ${err.message}`, 'err');
+    renderAll();
+  }
 }
 
 // --- カテゴリ付けピッカー ------------------------------------------------------
