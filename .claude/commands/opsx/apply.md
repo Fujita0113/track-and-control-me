@@ -65,6 +65,20 @@ Implement tasks from an OpenSpec change.
 
 6. **Implement tasks (loop until done or blocked)**
 
+   **Frozen for the whole of apply** — do NOT edit, delete, skip, `test.skip`, `test.fixme`,
+   or loosen an assertion in any of these:
+   - the spec deltas (`openspec/changes/<name>/specs/`)
+   - the vitest tests propose wrote
+   - every **pre-existing** `e2e/**/*.spec.ts`
+
+   A failure in the frozen set means the implementation is not done yet — not that the test
+   is wrong. A pre-existing e2e turning red is the highest-signal event in this workflow: it
+   says the change broke shipped behavior.
+
+   **Yours to write**: the implementation, additional vitest tests, and the **new** e2e spec
+   for the flow `tasks.md` names. Write the e2e **last**, against the DOM you actually built —
+   propose deliberately did not guess at selectors.
+
    For each pending task:
    - Show which task is being worked on
    - Make the code changes required
@@ -77,6 +91,58 @@ Implement tasks from an OpenSpec change.
    - Implementation reveals a design issue → suggest updating artifacts
    - Error or blocker encountered → report and wait for guidance
    - User interrupts
+   - A frozen test looks wrong → follow the escalation below
+
+   **Prove the new e2e is real (red-proof — deterministic, no model calls)**
+
+   A spec you wrote yourself, after the fact, proves nothing until it has been shown to fail
+   without your change. After writing a new e2e spec:
+
+   ```bash
+   git stash push -- server/ extension/ packages/
+   CI=1 npx playwright test e2e/<new-spec>.spec.ts   # MUST fail
+   git stash pop
+   CI=1 npx playwright test e2e/<new-spec>.spec.ts   # MUST pass
+   ```
+
+   `CI=1` is REQUIRED. Without it, `reuseExistingServer` in `playwright.config.ts` reuses the
+   already-running server, the stashed run executes against the new code anyway, and you get a
+   false green that certifies a worthless spec.
+
+   If the stashed run passes, the spec asserts nothing about your change — rewrite it until it
+   fails. Report both outcomes; do not claim red-proof you did not run.
+
+   **Escalation: a frozen test is wrong (ask once, then obey the answer)**
+
+   Only when you have implemented the behavior the design describes AND concluded the frozen
+   test itself contradicts it (asserts a removed feature, wrong expected value, stale selector
+   for markup this change legitimately replaces):
+
+   1. STOP. Do not edit it, and do not keep working around it.
+   2. Ask the user once with the **AskUserQuestion tool**:
+      > propose で作られたテストに誤りが見つかり通りません。変更しても良いでしょうか。
+
+      Include: which file and assertion, actual vs. expected output, why this is a test error
+      rather than an implementation gap, and what the corrected test would assert.
+   3. If approved → edit it, make it pass, and name the change in the summary and the commit
+      message.
+   4. If not approved → leave it untouched. Fix the implementation, or mark the task blocked
+      and report.
+
+   Ask at most once per task. Needing a second round on the same test means the proposal
+   (spec deltas / design) is likely wrong — report that instead of asking again.
+   "It would be faster" or "my implementation is more natural" are not grounds to escalate;
+   only a test that contradicts the agreed design is.
+
+   When in doubt, the answer is "do not change it" — leaving it red and reporting beats
+   rewriting a test to be green.
+
+   Before reporting completion, verify the frozen set is untouched:
+   ```bash
+   git status --short e2e/ && git diff --stat -- e2e/ openspec/changes/
+   ```
+   Pre-existing specs and spec deltas must show no changes. Only your new e2e file may appear,
+   as untracked. Anything else must be an approved change from the escalation — otherwise revert it.
 
 7. **On completion or pause, show status**
 
@@ -138,6 +204,9 @@ What would you like to do?
 ```
 
 **Guardrails**
+- NEVER edit, delete, or skip the frozen set (spec deltas, propose's vitest,
+  pre-existing `e2e/**/*.spec.ts`) — ask the user once first (step 6)
+- Write the NEW e2e last, then red-proof it with `git stash` + `CI=1` (step 6)
 - Keep going through tasks until done or blocked
 - Always read context files before starting (from the apply instructions output)
 - If task is ambiguous, pause and ask before implementing

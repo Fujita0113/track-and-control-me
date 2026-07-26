@@ -80,7 +80,26 @@ When ready to implement, run /opsx:apply
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Show final status**
+5. **Write the failing tests you CAN write now (vitest) — do NOT write new e2e**
+
+   Two things become frozen for apply: the spec deltas (scenarios) and the vitest tests you
+   write here. Apply may change neither.
+
+   - Write vitest tests (`**/*.test.ts`) against the seams the design already names:
+     service functions and API routes. Those contracts are decidable now — write them red.
+   - **Do NOT write new e2e specs.** Selectors, labels and DOM structure are invented during
+     implementation, so anything written here is a guess that apply cannot correct without
+     stopping to ask the user. Apply writes the e2e last, against the DOM it actually built.
+   - **DO update existing `e2e/**/*.spec.ts` that this change invalidates.** That DOM exists
+     today, so it is not a guess. Leaving a stale spec for apply to discover blocks apply,
+     because pre-existing e2e is frozen there.
+   - Record in `tasks.md`: the vitest tests added, the existing e2e specs changed and why
+     (or "既存 E2E への影響なし"), and which user-visible flow apply must cover with a new
+     e2e — named as a flow ("ルールを足す→ゲートが開く"), never as selectors.
+   - Run `npm test` and report which tests fail and why. A test that passes before the
+     implementation exists asserts nothing new — rewrite it.
+
+6. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```
@@ -104,6 +123,8 @@ After completing all artifacts, summarize:
   - These guide what you write, but should never appear in the output
 
 **Guardrails**
+- Write vitest red here; never write NEW e2e (apply does, once the DOM exists)
+- Update existing e2e this change invalidates — apply cannot, it is frozen there
 - Create ALL artifacts needed for implementation (as defined by schema's `apply.requires`)
 - Always read dependency artifacts before creating a new one
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
