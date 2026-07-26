@@ -104,6 +104,8 @@ export async function show(root) {
   };
   clear(root);
   root.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
+  document.addEventListener('dragover', onDocDragOverV);
+  document.addEventListener('dragleave', onDocDragLeaveV);
   S.tasks = await api.getTasks();
   renderAll();
 }
@@ -111,6 +113,9 @@ export async function show(root) {
 export function hide() {
   flushSaves();
   document.body.classList.remove('kb-page');
+  document.removeEventListener('dragover', onDocDragOverV);
+  document.removeEventListener('dragleave', onDocDragLeaveV);
+  stopVAutoScroll();
 }
 
 async function reload() {
@@ -369,6 +374,55 @@ function stopAutoScroll() {
   autoScrollSpeed = 0;
 }
 
+// --- ドラッグ端の自動縦スクロール(issue #34) --------------------------------
+// 未着手列にタスクが積み上がると画面外の列(進行中など)へ直接ドロップできない問題への対応。
+// 横スクロールと同じ考え方で、ドラッグ中にポインタがビューポート上下端近傍へ入ると
+// requestAnimationFrame ループでページ(window)を縦スクロールする。renderAll は呼ばない。
+const V_EDGE_ZONE = 90; // 端からこの距離(px)以内でスクロール開始
+const V_MAX_SPEED = 18; // 1フレームあたりの最大スクロール量(px)
+let vAutoScrollDir = 0; // -1=上 / +1=下 / 0=停止
+let vAutoScrollSpeed = 0;
+let vAutoScrollRAF = null;
+
+function vAutoScrollStep() {
+  if (vAutoScrollDir === 0) { vAutoScrollRAF = null; return; }
+  window.scrollBy(0, vAutoScrollDir * vAutoScrollSpeed);
+  vAutoScrollRAF = requestAnimationFrame(vAutoScrollStep);
+}
+
+/** 端への食い込み量 intensity(0〜1) に比例した速度でループ開始/更新。冪等。 */
+function startVAutoScroll(dir, intensity) {
+  if (!S || !S.draggingId) return; // ドラッグ中でなければ無視(暴走防止)
+  vAutoScrollDir = dir;
+  vAutoScrollSpeed = V_MAX_SPEED * Math.max(0, Math.min(1, intensity));
+  if (vAutoScrollRAF == null) vAutoScrollRAF = requestAnimationFrame(vAutoScrollStep);
+}
+
+function stopVAutoScroll() {
+  if (vAutoScrollRAF != null) { cancelAnimationFrame(vAutoScrollRAF); vAutoScrollRAF = null; }
+  vAutoScrollDir = 0;
+  vAutoScrollSpeed = 0;
+}
+
+// 横スクロールは .kb-board-scroll 限定だが、縦スクロールはページ全体が対象のため
+// document で拾う。列側の dragover/dragleave は stopPropagation していないため
+// バブリングで届く(横スクロールが .kb-board-scroll で clientX を拾えているのと同じ前提)。
+function onDocDragOverV(e) {
+  if (!S || !S.draggingId) return;
+  const distTop = e.clientY;
+  const distBottom = window.innerHeight - e.clientY;
+  if (distTop >= 0 && distTop < V_EDGE_ZONE) {
+    startVAutoScroll(-1, (V_EDGE_ZONE - distTop) / V_EDGE_ZONE);
+  } else if (distBottom >= 0 && distBottom < V_EDGE_ZONE) {
+    startVAutoScroll(1, (V_EDGE_ZONE - distBottom) / V_EDGE_ZONE);
+  } else {
+    stopVAutoScroll();
+  }
+}
+function onDocDragLeaveV(e) {
+  if (e.relatedTarget == null) stopVAutoScroll(); // ウィンドウ外へ完全に出た
+}
+
 // --- ボード -----------------------------------------------------------------
 function boardEl() {
   const scroll = h('div', {
@@ -468,6 +522,7 @@ function cardEl(t) {
     document.querySelectorAll('.kb-col-over').forEach((o) => o.remove());
     removeDropIndicator();
     stopAutoScroll();
+    stopVAutoScroll();
   });
 
   card.appendChild(h('div', { class: 'kb-card-top' },
@@ -579,6 +634,7 @@ async function saveReorder(groups) {
 async function onDrop(e, colKey, colElm) {
   e.preventDefault();
   stopAutoScroll();
+  stopVAutoScroll();
   colElm.querySelector('.kb-col-over')?.remove();
   removeDropIndicator();
   let id = Number(e.dataTransfer.getData('text/plain'));
