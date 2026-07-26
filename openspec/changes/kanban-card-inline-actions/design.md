@@ -28,8 +28,11 @@
 - **右クリック＝メニューを出さず直接削除確認**: `card.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); deleteTaskWithConfirm(t); })`。ブラウザ既定の右クリックメニューは `preventDefault` で抑止する。
   - 代替案（右クリックで小さなメニューを出し「削除」を選ばせる）は却下: 現状 delete 以外にカード右クリックで行いたい操作が無く、メニューを作るコストに見合わない。将来操作が増えたら再検討する（Open Question参照）。
 - **ゴミ箱アイコン**: `cardEl` に `.kb-card-del` ボタンを追加し、`click` ハンドラで `e.stopPropagation()`（カードの `openDetail` を誤発火させないため。1110行にある `tomorrow-plan.js` の `.rf-plan-item-del` パターンと同じ考え方）してから `deleteTaskWithConfirm(t)` を呼ぶ。
-- **シングルクリックの遅延判定（実装時に追加した決定）**: 当初案の「`dblclick` ハンドラで `stopPropagation` するだけ」では不十分だった。ブラウザは `dblclick` の前に `click` を2回発火するため、`.kb-card-title` へのダブルクリックでも1回目の `click` がカードの `click`（`openDetail`）にバブルし、`renderAll()` が割り込んでカードを開いてしまう（DOM上は dblclick 自体は成立するが、その頃には既に詳細パネルが開いた状態になっている）。これを避けるため、カードの `click` ハンドラは即座に `openDetail` せず `OPEN_DETAIL_DELAY_MS`(220ms) 後に実行する `setTimeout` に変更し、その猶予内に `dblclick`／`contextmenu` が来たらタイマーを破棄する（`openTimer` をカードごとのクロージャに保持）。
-- **インラインリネーム**: `S.renamingId`（新規state）を追加。`.kb-card-title` の `dblclick` で `S.renamingId = t.id; renderAll()`（上記の理由により `stopPropagation` はしない——card 側の `dblclick` リスナーへバブルさせて保留中の `openTimer` を解除させる必要があるため）。`cardEl` は `S.renamingId === t.id` のとき `.kb-card-title` の代わりに `<input class="kb-card-title-edit">`（value=`t.title`）を描画し、自動フォーカス＋全選択する（`afterRender()` の既存パターンに倣う）。
+- **シングルクリックは常に即時 openDetail（2回のイテレーションを経た最終決定）**:
+  1. 当初案「`dblclick` ハンドラで `stopPropagation` するだけ」は不十分だった。ブラウザは `dblclick` の前に `click` を2回発火するため、1回目の `click` がカードの `click`（`openDetail`）にバブルし、`renderAll()` が割り込んでカードを開いてしまう。
+  2. これを避けるため一度は「`click` を `OPEN_DETAIL_DELAY_MS`(220ms) 遅延させ、猶予内に `dblclick`／`contextmenu` が来たらキャンセルする」方式にしたが、これは**カードを開く操作全般に220msの遅延を持ち込む**副作用があり、「タスク追加→Enterのあと次のタスク登録へスムーズに移れない」という体感速度の劣化としてユーザーから指摘された。
+  3. 最終的に、**遅延を撤去してシングルクリックは常に即時 `openDetail`** に戻し、代わりに **`dblclick` 側で後始末する**方式にした: `card.addEventListener('dblclick', () => { if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; } S.renamingId = t.id; renderAll(); })`。ダブルクリック時は1・2回目の `click` で詳細パネルが一瞬開くが、続く `dblclick` でそれを閉じてリネームへ切り替える。単発クリック（圧倒的多数のケース）は常に即時、ダブルクリック時のみ一瞬の開閉フラッシュが起きる — 逆向きのトレードオフの方が体感速度を優先する上で妥当と判断した。
+- **インラインリネーム**: `S.renamingId`（新規state）を追加。`dblclick` はカード全体（`cardEl`）で拾う——タイトル以外（優先度バッジ・期日など）をダブルクリックしてもリネームに入れるようにするため、`.kb-card-title` 個別には listen しない。`cardEl` は `S.renamingId === t.id` のとき `.kb-card-title` の代わりに `<input class="kb-card-title-edit">`（value=`t.title`）を描画し、自動フォーカス＋全選択する（`afterRender()` の既存パターンに倣う）。
   - 保存タイミング: 継続入力中のデバウンス保存（`scheduleSave` 相当）ではなく、**Enter確定／blurで1回だけ** `api.updateTask(t.id, { title })` を呼び `S.renamingId = null`。理由: カード上の編集はワンショットの改名操作であり、詳細パネルのタイトル欄（連続編集・自動保存前提のtextarea）と違って「編集開始→確定→終了」の短い操作なので、デバウンスより単純な確定型のほうが状態管理が少なく済む。
   - キャンセル: `Escape` で `t.title` を変更せず `S.renamingId = null; renderAll()`。
   - IME確定Enterガード: `e.isComposing || e.keyCode === 229` の場合は確定しない（`kanban-detail-title` 仕様のタイトル欄と同じガード条件を移植、177-193行のパターンに倣う）。
@@ -41,6 +44,12 @@
 - [ドラッグ操作中に誤って削除/リネームが起動する] → ゴミ箱アイコン・ダブルクリックはどちらも `mousedown` 起点のドラッグ (`draggable=true`) と競合しうる。`stopPropagation` に加え、アイコン自体は `draggable` を継承させず、クリック領域をカード全体でなくアイコン/タイトル要素に限定することで軽減する。
 - [右クリック削除の誤操作コスト] → ワンクリック的に見えて実際は `confirm()` を必ず挟むため、既存の詳細パネル削除と同じ誤操作耐性を持つ。誤発火自体（右クリックで即・確認なし削除）は起きない設計。
 - [インライン編集中に他操作で `renderAll()` が割り込む] → `S.renamingId` を state に保持し再描画のたびに編集モードへ戻すことで、入力途中の値そのもの（DOM内のinput.value）は失われうるが「編集モードが解除されて詳細を開く挙動に戻る」事故は防ぐ。完全な入力値保持まではスコープ外（Non-Goals）。
+- [ダブルクリック時に詳細パネルが一瞬開閉する] → 上記「シングルクリックは常に即時 openDetail」の採用に伴う既知の副作用。単発クリックの体感速度を優先するトレードオフとして許容する。
+
+## 追加修正（実装後にユーザーから指摘）
+
+- **削除は Optimistic UI**: `deleteTaskWithConfirm` は当初 `await api.deleteTask()` の完了を待ってから `S.tasks` を更新していたため、削除のたびに体感できる待ち時間があった。確認後は即座に `S.tasks` から除去して `renderAll()` し、API 呼び出しは背後で行う。失敗時のみ元の配列（`prevTasks`）へロールバックしてエラー toast を出す。
+  - 副次的に見つかったバグも修正: 削除処理が複数の入口（詳細パネル／カードのゴミ箱アイコン／右クリック）から呼べるようになったことで、無条件の `S.detailId = null` が「別カードの詳細を開いたまま他のカードを削除すると、その詳細まで閉じる」という不具合として顕在化していた。削除対象自身の詳細が開いていた場合のみクリアするよう修正。
 
 ## Open Questions
 
