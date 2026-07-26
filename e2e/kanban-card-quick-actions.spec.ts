@@ -113,3 +113,16 @@ test('カードをダブルクリックして編集中にEscapeで元のタイ�
   await expect(card.locator('.kb-card-title-edit')).toHaveCount(0);
   await expect(card.locator('.kb-card-title')).toHaveText(title);
 });
+
+test('タイトル以外（優先度バッジ付近）をダブルクリックしてもリネームに入る', async ({ page }) => {
+  const { id } = await seedTask(page.request, '優先度付近ダブルクリック');
+  await page.reload();
+  await page.getByRole('button', { name: 'あとで' }).click({ timeout: 2000 }).catch(() => {});
+  await page.locator('#tabs button[data-target="kanban"]').click();
+
+  const card = page.locator(`.kb-card[data-id="${id}"]`);
+  await card.locator('.kb-pri').dblclick();
+
+  await expect(card.locator('.kb-card-title-edit')).toBeFocused();
+  await expect(page.locator('.kb-detail')).toHaveCount(0);
+});

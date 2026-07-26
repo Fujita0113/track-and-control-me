@@ -543,8 +543,11 @@ function cardEl(t) {
     if (openTimer) clearTimeout(openTimer);
     openTimer = setTimeout(() => { openTimer = null; openDetail(t); }, OPEN_DETAIL_DELAY_MS);
   });
+  // カードのどこをダブルクリックしてもタイトルのインライン編集に入る。
   card.addEventListener('dblclick', () => {
     if (openTimer) { clearTimeout(openTimer); openTimer = null; }
+    S.renamingId = t.id;
+    renderAll();
   });
   card.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -588,7 +591,7 @@ function cardEl(t) {
   return card;
 }
 
-/** カードタイトル部。通常は静的表示＋ダブルクリックでインライン編集(`S.renamingId`)へ入る。
+/** カードタイトル部。カードのどこかをダブルクリックすると `S.renamingId` 経由で編集状態になる。
  * 編集中は input を描画し、Enter/blur で確定保存、Escape で編集前の値へ戻す。 */
 function cardTitleEl(t) {
   if (S.renamingId === t.id) {
@@ -618,14 +621,9 @@ function cardTitleEl(t) {
     });
     return input;
   }
-  const title = h('div', { class: 'kb-card-title', text: t.title });
-  // stopPropagation しない: card 側の dblclick リスナー（保留中の openDetail タイマー解除）へ
-  // 伝播させる必要があるため。
-  title.addEventListener('dblclick', () => {
-    S.renamingId = t.id;
-    renderAll();
-  });
-  return title;
+  // dblclick 自体はカード全体（cardEl）で拾う: タイトル以外（優先度・期日など）を
+  // ダブルクリックしてもリネームに入れるようにするため、ここでは個別に listen しない。
+  return h('div', { class: 'kb-card-title', text: t.title });
 }
 
 function completingOverlayEl() {
