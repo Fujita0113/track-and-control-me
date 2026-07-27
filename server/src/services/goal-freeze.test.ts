@@ -6,6 +6,7 @@ import { getChronicle } from './goal-chronicle.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import {
   reserveFreeze,
+  reserveFreezeMulti,
   updateFreeze,
   cancelFreeze,
   releaseFreeze,
@@ -109,12 +110,13 @@ describe('凍結の予約は翌日発効', () => {
 // --- 月枠（アプリ全体で月1回）--------------------------------------------------
 
 describe('凍結の枠はアプリ全体で月1回', () => {
-  it('同じ予約日（同日発効）であれば、別の目標も一緒に予約できる', () => {
+  it('同じ予約日（同日発効）であれば、別の目標も一緒に一括予約できる', () => {
     const a = makeGoal('設計理解をしたい');
     const b = makeGoal('茶色取りたい');
-    reserveFreeze(db, a.id, { endDay: '2026-07-14', reason: '大タスク' }, NOW_0710);
-    const f = reserveFreeze(db, b.id, { endDay: '2026-07-14', reason: '大タスク' }, NOW_0710);
-    expect(f.startDay).toBe('2026-07-11');
+    const res = reserveFreezeMulti(db, [a.id, b.id], { endDay: '2026-07-14', reason: '大タスク' }, NOW_0710);
+    expect(res).toHaveLength(2);
+    expect(res[0]!.startDay).toBe('2026-07-11');
+    expect(res[1]!.startDay).toBe('2026-07-11');
   });
 
   it('別の日（別の予約セッション）での同月2件目は、別の目標でも拒否される', () => {
