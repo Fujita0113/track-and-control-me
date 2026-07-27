@@ -547,8 +547,12 @@ body.kb-page .content { max-width: 1580px; }
 .kb-pri.high { background: #FBEAE6; color: #B4493B; }
 .kb-pri.mid { background: #FAF1DD; color: #9A7A1F; }
 .kb-pri.low { background: #EEF1F4; color: #5E7E96; }
+.kb-card-top-right { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .kb-due { font-size: 11.5px; color: #9B9A94; white-space: nowrap; }
+.kb-card-del { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; background: transparent; border: none; border-radius: 6px; color: #8A8980; cursor: pointer; }
+.kb-card-del:hover { background: #FBEAE6; color: #B4493B; }
 .kb-card-title { font-size: 14.5px; font-weight: 600; color: #37352F; line-height: 1.45; word-break: break-word; }
+.kb-card-title-edit { display: block; width: 100%; font-family: inherit; font-size: 14.5px; font-weight: 600; color: #37352F; line-height: 1.45; padding: 0; border: none; border-bottom: 1px solid #4F86C7; background: transparent; outline: none; }
 .kb-card-sel { position: absolute; inset: 0; border: 2px solid #7FC79B; border-radius: 10px; pointer-events: none; }
 
 /* 完了列の空ドロップ案内 */
