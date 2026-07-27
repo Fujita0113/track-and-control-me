@@ -35,6 +35,16 @@ const VIEW_META = {
 };
 const STRIP_RADIUS = 3; // 日付ストリップに表示する前後日数
 
+// 左メインの現在ビューが、右サイドバーのタブ構成と日付ストリップの有効性を駆動する
+// 単一の写像（design D2 / spec: 左ビューによるサイドバーと日付ストリップの駆動）。
+const SB_TAB_META = { journal: '本文', detail: '詳細', log: 'ログ' };
+const VIEW_CHROME = {
+  timeline: { strip: true, sidebarTabs: ['journal'] },
+  alloc: { strip: true, sidebarTabs: ['journal'] },
+  plan: { strip: false, sidebarTabs: ['journal', 'detail', 'log'] },
+};
+function viewChrome(view) { return VIEW_CHROME[view] || VIEW_CHROME.timeline; }
+
 let ctx = null;
 
 export function hide() {
@@ -173,11 +183,16 @@ export async function show(root) {
   // 目標日記コーナー（進行中の目標ごと）。本文エディタの下に置き、同じ保存動線に相乗りする。
   const journalsHost = h('div', { class: 'rf-journals' });
 
-  const sidebar = h('aside', { class: 'rf-sidebar' }, moodRow, card, journalsHost);
+  // --- 右サイドバー: タブ器（design D2）。journal は常時、detail/log は plan ビューのときのみ。
+  // detail/log は kanban.js（埋め込み盤面）が内容を供給する外部ホスト（design D1 asideHost）。
+  const journalPane = h('div', { class: 'rf-sb-pane active', dataset: { pane: 'journal' } }, moodRow, card, journalsHost);
+  const detailPane = h('div', { class: 'rf-sb-pane', dataset: { pane: 'detail' } });
+  const logPane = h('div', { class: 'rf-sb-pane', dataset: { pane: 'log' } });
+  const sbTabsHost = h('div', { class: 'rf-sb-tabs' });
+  const sidebar = h('aside', { class: 'rf-sidebar' }, sbTabsHost, journalPane, detailPane, logPane);
 
-  // --- 左メイン: ビュータブ + 横スクロール・スナップのデッキ ---
+  // --- 左メイン: ビュータブ切替（横スクロール・スナップは廃止・design D3）。
   const tabButtons = {};
-  const viewHosts = {};
   const viewPrev = h('button', { class: 'rf-viewnav', type: 'button', text: '‹' });
   const viewNext = h('button', { class: 'rf-viewnav', type: 'button', text: '›' });
   const tabsRow = h('div', { class: 'rf-viewtabs' }, viewPrev);
@@ -192,12 +207,13 @@ export async function show(root) {
   }
   tabsRow.appendChild(viewNext);
 
-  const deck = h('div', { class: 'rf-deck' });
-  for (const key of VIEW_ORDER) {
-    const view = h('section', { class: 'rf-view', dataset: { view: key } });
-    viewHosts[key] = view;
-    deck.appendChild(view);
-  }
+  // アクティブなビューのみを描画するホスト（design D3: デッキ/scroll-snap は持たない）。
+  // 各ビューの DOM は viewHosts に保持し、非表示中は viewHost から外して状態を保つ
+  // （タイムラインのスクロール位置等を、タブ往復のたびに失わないため）。
+  const viewHosts = {};
+  for (const key of VIEW_ORDER) viewHosts[key] = h('section', { class: 'rf-view', dataset: { view: key } });
+  const viewHost = h('div', { class: 'rf-view-host' });
+
   viewPrev.addEventListener('click', () => {
     const idx = Math.max(0, VIEW_ORDER.indexOf(ctx.currentView) - 1);
     switchView(VIEW_ORDER[idx]);
@@ -207,9 +223,9 @@ export async function show(root) {
     switchView(VIEW_ORDER[idx]);
   });
 
-  const main = h('div', { class: 'rf-main' }, tabsRow, deck);
+  const main = h('div', { class: 'rf-main' }, tabsRow, viewHost);
 
-  // --- 上部: 日付ストリップ ---
+  // --- 上部: 日付ストリップ（明日の計画ビューでは無効化・design D2）---
   const stripHost = h('div', { class: 'rf-strip-host' });
 
   root.appendChild(h('div', { class: 'rf-workspace' }, stripHost,
@@ -218,26 +234,15 @@ export async function show(root) {
   ctx = {
     activeDate: initialDate, satisfaction: 0, dirty: false, loading: false,
     editor, savedEl, saveBtn, syncMood, journalsHost, journals: [], activeGoals: [],
-    tabButtons, viewHosts, deck, stripHost, currentView: 'timeline',
+    tabButtons, viewHosts, viewHost, stripHost, currentView: 'timeline',
+    sidebarTab: 'journal', sbTabsHost, journalPane, detailPane, logPane,
     viewDates: { timeline: null, alloc: null, plan: null },
     reflectionsByDate: new Map(),
   };
 
-  let scrollTimer = null;
-  deck.addEventListener('scroll', () => {
-    clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => {
-      if (!ctx) return;
-      const w = ctx.deck.clientWidth || 1;
-      const idx = Math.round(ctx.deck.scrollLeft / w);
-      const key = VIEW_ORDER[Math.max(0, Math.min(VIEW_ORDER.length - 1, idx))];
-      if (key !== ctx.currentView) { ctx.currentView = key; updateTabsUI(); }
-      void ensureViewRendered(key);
-    }, 130);
-  });
-
   saveBtn.addEventListener('click', () => doSave(saveBtn));
   updateTabsUI();
+  applyViewChrome(ctx.currentView);
 
   // 進行中の目標を取得（日記コーナーの対象）。
   ctx.activeGoals = (await api.getGoals().catch(() => [])).filter((g) => g.status === 'active');
@@ -257,26 +262,81 @@ function updateTabsUI() {
   for (const key of VIEW_ORDER) ctx.tabButtons[key].classList.toggle('active', key === ctx.currentView);
 }
 
-/** ビュー切替は対象日を変えない（design D2/spec: 左メインのビュー切替）。 */
+/** 右サイドバーのタブ構成（journal / detail / log）を現在ビューに合わせて再構築する（design D2）。 */
+function buildSidebarTabs() {
+  if (!ctx) return;
+  clear(ctx.sbTabsHost);
+  const chrome = viewChrome(ctx.currentView);
+  if (chrome.sidebarTabs.length <= 1) { ctx.sbTabsHost.hidden = true; return; }
+  ctx.sbTabsHost.hidden = false;
+  for (const key of chrome.sidebarTabs) {
+    const btn = h('button', {
+      class: `rf-sb-tab${ctx.sidebarTab === key ? ' active' : ''}`, type: 'button', text: SB_TAB_META[key],
+    });
+    btn.addEventListener('click', () => setSidebarTab(key));
+    ctx.sbTabsHost.appendChild(btn);
+  }
+}
+
+/** 右サイドバーの表示タブを切り替える（journal は常に維持し、内容の dirty 状態を保つ）。 */
+function setSidebarTab(key) {
+  if (!ctx) return;
+  ctx.sidebarTab = key;
+  ctx.journalPane.classList.toggle('active', key === 'journal');
+  ctx.detailPane.classList.toggle('active', key === 'detail');
+  ctx.logPane.classList.toggle('active', key === 'log');
+  buildSidebarTabs();
+}
+
+/** 左ビューが決まるたび、日付ストリップの有効性とサイドバーのタブ構成を単一の規則で更新する（design D2）。 */
+function applyViewChrome(view) {
+  if (!ctx) return;
+  const chrome = viewChrome(view);
+  ctx.stripHost.hidden = !chrome.strip;
+  if (!chrome.sidebarTabs.includes(ctx.sidebarTab)) setSidebarTab('journal');
+  else buildSidebarTabs();
+}
+
+/** ビュー切替は対象日を変えない（design D2/spec: 左メインのビュー切替）。横スクロールは持たない（design D3）。 */
 function switchView(key) {
   if (!ctx) return;
+  const prev = ctx.currentView;
   ctx.currentView = key;
   updateTabsUI();
-  const idx = VIEW_ORDER.indexOf(key);
-  ctx.deck.scrollTo({ left: idx * (ctx.deck.clientWidth || 0), behavior: 'smooth' });
+  applyViewChrome(key);
+  // 明日の計画ビューから離れるときは埋め込み盤面を確実に unmount する（design D1/design Risks）。
+  if (prev === 'plan' && key !== 'plan') { try { planView.hide(); } catch { /* noop */ } }
   void ensureViewRendered(key);
 }
 
-/** 現在表示中のビューのみ描画/更新する（design D3: 非表示ビューは遅延させてよい）。
+/** 現在アクティブなビューのみを viewHost へ描画/接続する（design D3: デッキ廃止・アクティブビューのみ描画）。
  * 明日の計画ビューは本文の最新状態を見せたいため、訪れるたびに常に再描画する。 */
 async function ensureViewRendered(key) {
   if (!ctx) return;
-  if (key !== 'plan' && ctx.viewDates[key] === ctx.activeDate) return;
-  ctx.viewDates[key] = ctx.activeDate;
   const host = ctx.viewHosts[key];
+  if (key !== 'plan' && ctx.viewDates[key] === ctx.activeDate) {
+    attachView(host);
+    return;
+  }
+  ctx.viewDates[key] = ctx.activeDate;
   if (key === 'timeline') await timeline.render(host, ctx.activeDate);
   else if (key === 'alloc') await renderAllocView(host, ctx.activeDate);
-  else if (key === 'plan') await planView.render(host, ctx.editor.getValue());
+  else if (key === 'plan') {
+    await planView.render(host, ctx.editor.getValue(), {
+      detailHost: ctx.detailPane,
+      logHost: ctx.logPane,
+      onDetailOpen: () => setSidebarTab('detail'),
+      onArchived: () => setSidebarTab('log'),
+    });
+  }
+  attachView(host);
+}
+
+/** viewHost の内容をアクティブなビューの DOM 一つだけへ入れ替える（他ビューは detached のまま状態を保つ）。 */
+function attachView(host) {
+  if (!ctx) return;
+  clear(ctx.viewHost);
+  ctx.viewHost.appendChild(host);
 }
 
 // --- 日付ストリップ（対象日ナビゲーション・spec: 日付ストリップによる対象日ナビゲーション） ---

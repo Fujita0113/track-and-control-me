@@ -80,13 +80,41 @@ export function computeDue(fromCol, toCol, tomorrowOn, workday) {
 }
 
 // --- 画面状態 -------------------------------------------------------------
+// mount(root, opts) / unmount()（design D1）: kanban.js はインスタンス化せず、
+// モジュールレベルのシングルトン状態のまま「同時に2つマウントされない」ことだけを保証する。
+// show()/hide() はカンバンタブ向けの薄いラッパ。埋め込み盤面（明日の計画ビュー）は
+// mount() に差分 opts を渡して呼ぶ。
 let rootEl = null;
 let S = null;
+let O = null;
 const saveTimers = new Map(); // `${id}:${field}` → { timer, run }
 
-export async function show(root) {
+const DEFAULT_OPTS = {
+  bodyClass: 'kb-page', // body へ付けるクラス。埋め込み時は null（rf-page を壊さない）
+  asideHost: null, // { detail, log } 埋め込み時、右サイドバーの外部要素へ供給する
+  effects: true, // 完了時のフロスト演出・粒子・サウンド
+  settingsPopover: true, // 設定（サウンド切替）ポップオーバー
+  categorizeMode: true, // カテゴリ付けモード
+  tomorrowDefault: false, // 初回マウントで明日トグルを既定 ON にする
+  onDetailOpen: null, // カード選択で詳細が開いたとき（右サイドバーのタブ切替に使う）
+  onArchived: null, // 完了アーカイブが確定したとき（右サイドバーのタブ切替に使う）
+};
+
+/** 今日の明示選択がまだ無ければ明日トグルを ON にする（design D6）。既存の選択は上書きしない。 */
+function ensureTomorrowDefault() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOMORROW_KEY) || 'null');
+    if (raw && raw.date === state.today) return;
+  } catch { /* noop */ }
+  setTomorrowMode(true);
+}
+
+export async function mount(root, opts) {
+  unmount(); // 単一マウントの保証（design D1）
   rootEl = root;
-  document.body.classList.add('kb-page');
+  O = { ...DEFAULT_OPTS, ...(opts || {}) };
+  if (O.bodyClass) document.body.classList.add(O.bodyClass);
+  if (O.tomorrowDefault) ensureTomorrowDefault();
   S = {
     tasks: [],
     detailId: null,
@@ -110,17 +138,60 @@ export async function show(root) {
   renderAll();
 }
 
-export function hide() {
+export function unmount() {
   flushSaves();
-  document.body.classList.remove('kb-page');
+  if (O && O.bodyClass) document.body.classList.remove(O.bodyClass);
+  if (rootEl) clear(rootEl);
+  if (O && O.asideHost) {
+    if (O.asideHost.detail) clear(O.asideHost.detail);
+    if (O.asideHost.log) clear(O.asideHost.log);
+  }
   document.removeEventListener('dragover', onDocDragOverV);
   document.removeEventListener('dragleave', onDocDragLeaveV);
   stopVAutoScroll();
+  stopAutoScroll();
+  removeDropIndicator();
+  rootEl = null;
+  S = null;
+  O = null;
+}
+
+export async function show(root) {
+  await mount(root, {});
+}
+
+export function hide() {
+  unmount();
+}
+
+/** 埋め込み盤面のホスト（tomorrow-plan.js）が外部でタスクを作成した後に、盤面表示を最新化する。 */
+export async function reloadTasks() {
+  if (!S) return;
+  await reload();
 }
 
 async function reload() {
   try { S.tasks = await api.getTasks(); } catch { /* 直前の状態を維持 */ }
   renderAll();
+}
+
+/** rootEl / 埋め込み先の外部ホストの双方から検索する（詳細パネルは asideHost 側にあり得る）。 */
+function queryAny(sel) {
+  if (rootEl) {
+    const el = rootEl.querySelector(sel);
+    if (el) return el;
+  }
+  if (O && O.asideHost) {
+    if (O.asideHost.detail) {
+      const el = O.asideHost.detail.querySelector(sel);
+      if (el) return el;
+    }
+    if (O.asideHost.log) {
+      const el = O.asideHost.log.querySelector(sel);
+      if (el) return el;
+    }
+  }
+  return null;
 }
 
 // --- 派生データ -----------------------------------------------------------
@@ -195,27 +266,61 @@ function flushSaves() {
 // --- 全体レンダリング -------------------------------------------------------
 function renderAll() {
   clear(rootEl);
-  const page = h('div', { class: 'kb' });
-  page.appendChild(headerEl());
-  const main = h('div', { class: 'kb-main' });
-  main.appendChild(boardEl());
-  main.appendChild(asideEl());
-  page.appendChild(main);
-  rootEl.appendChild(page);
+  if (O.asideHost) {
+    // 埋め込み盤面（design Risks）: .kb-main を使わず盤面スクロール要素のみを左メインへ置き、
+    // aside（詳細・ログ）は外部の右サイドバー要素へ供給する。
+    rootEl.appendChild(embedHeaderEl());
+    rootEl.appendChild(boardEl());
+    renderAsideInto(O.asideHost);
+  } else {
+    const page = h('div', { class: 'kb' });
+    page.appendChild(headerEl());
+    const main = h('div', { class: 'kb-main' });
+    main.appendChild(boardEl());
+    main.appendChild(asideEl());
+    page.appendChild(main);
+    rootEl.appendChild(page);
+  }
   afterRender();
+}
+
+/** 埋め込み盤面用の最小ヘッダ。明日トグルのみを提供する（design D1: 設定/カテゴリ付けは持ち込まない）。 */
+function embedHeaderEl() {
+  const tmOn = tomorrowMode();
+  const planChip = h('div', { class: `kb-chip${tmOn ? ' kb-chip-plan' : ''}` },
+    h('span', { class: 'kb-chip-lbl', text: '明日の計画' }),
+    switchEl(tmOn, () => { setTomorrowMode(!tmOn); renderAll(); }));
+  return h('div', { class: 'kb-embed-head' }, planChip);
+}
+
+/** 埋め込み時の aside 供給: 詳細と（進捗なしの）ログを、外部の右サイドバー要素へ描画する。 */
+function renderAsideInto(hosts) {
+  const t = S.detailId != null ? findTask(S.detailId) : null;
+  if (hosts.detail) {
+    clear(hosts.detail);
+    hosts.detail.appendChild(t
+      ? detailEl(t)
+      : h('div', { class: 'kb-aside-empty', text: 'カードを選ぶと詳細が表示されます。' }));
+  }
+  if (hosts.log) {
+    clear(hosts.log);
+    // カンバンタブと同様、アクティビティログの上に本日達成した件数（進捗）を表示する（issue #67）。
+    hosts.log.appendChild(progressEl());
+    hosts.log.appendChild(logEl());
+  }
 }
 
 function afterRender() {
   if (S.composingCol) {
-    const ta = rootEl.querySelector('.kb-composer');
+    const ta = queryAny('.kb-composer');
     if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   }
   if (S.categorizePick) {
-    const inp = rootEl.querySelector('.kb-cat-input');
+    const inp = queryAny('.kb-cat-input');
     if (inp) inp.focus();
   }
   // 詳細パネルのタイトルは DOM 挿入後（scrollHeight 確定後）に初期高さを確定する。
-  const detTitle = rootEl.querySelector('textarea.kb-detail-title');
+  const detTitle = queryAny('textarea.kb-detail-title');
   if (detTitle) autosize(detTitle);
   if (S.focusNotes) {
     S.focusNotes = false;
@@ -289,7 +394,7 @@ function headerEl() {
     onclick: () => { S.settingsOpen = !S.settingsOpen; renderAll(); },
   }, iconGear(), '設定');
   setWrap.appendChild(setBtn);
-  if (S.settingsOpen) {
+  if (O.settingsPopover && S.settingsOpen) {
     setWrap.appendChild(h('div', {
       class: 'kb-pop-backdrop',
       onclick: () => { S.settingsOpen = false; renderAll(); },
@@ -331,8 +436,8 @@ function headerEl() {
       h('span', { class: 'kb-chip-val', text: `${n} / ${need}` })));
   }
   right.appendChild(planChip);
-  right.appendChild(catChip);
-  right.appendChild(setWrap);
+  if (O.categorizeMode) right.appendChild(catChip);
+  if (O.settingsPopover) right.appendChild(setWrap);
   return h('div', { class: 'kb-head' }, left, right);
 }
 
@@ -472,7 +577,7 @@ function colEl(col) {
       h('span', { class: 'kb-done-hint-sub', text: '完了後は自動でアーカイブ' })));
   }
   if (col.key !== 'DONE') {
-    if (S.categorizePick && S.categorizePick.col === col.key) {
+    if (O.categorizeMode && S.categorizePick && S.categorizePick.col === col.key) {
       // カテゴリ付けモード: 作成直後、「次の入力」の位置にカテゴリピッカーを差し込む。
       list.appendChild(categoryPickerEl(S.categorizePick));
     } else if (S.composingCol === col.key) {
@@ -535,7 +640,7 @@ function cardEl(t) {
   const badge = categoryBadgeEl(t);
   if (badge) card.appendChild(badge);
   if (S.detailId === t.id) card.appendChild(h('div', { class: 'kb-card-sel' }));
-  if (S.completingId === t.id) card.appendChild(completingOverlayEl());
+  if (S.completingId === t.id && O.effects) card.appendChild(completingOverlayEl());
   return card;
 }
 
@@ -695,21 +800,25 @@ async function onDrop(e, colKey, colElm) {
 }
 
 function completeTask(t, x, y) {
-  ensureAudio();
-  playChime('gentle');
-  fireCelebration('gentle', x, y);
+  if (O.effects) {
+    ensureAudio();
+    playChime('gentle');
+    fireCelebration('gentle', x, y);
+  }
   t.status = 'DONE';
   t.done_at = Date.now();
   S.completingId = t.id;
   if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; }
   renderAll();
   api.updateTask(t.id, { status: 'DONE' }).catch((err) => toast(`保存に失敗: ${err.message}`, 'err'));
+  // アーカイブ確定（カードがボードから消えログへ移る）は演出の有無に関わらず同じタイマーで起きる（design D8）。
   setTimeout(() => {
     S.completingId = null;
     renderAll();
     bumpDoneCount();
     fireDonutGlow();
-    if (activeTasks().length === 0) {
+    if (O.onArchived) O.onArchived();
+    if (O.effects && activeTasks().length === 0) {
       playChime('milestone');
       fireCelebration('all', window.innerWidth / 2, window.innerHeight * 0.44);
     }
@@ -723,7 +832,7 @@ function bumpDoneCount() {
   setTimeout(() => el.classList.remove('kb-bump'), 520);
 }
 function fireDonutGlow() {
-  const wrap = rootEl.querySelector('.kb-donut-wrap');
+  const wrap = queryAny('.kb-donut-wrap');
   if (!wrap) return;
   const glow = h('div', { class: 'kb-donut-glow' });
   wrap.appendChild(glow);
@@ -795,7 +904,7 @@ async function commitComposer(keepOpen, openDet) {
       S.composingCol = null;
       S.detailId = t.id;
       S.focusNotes = true;
-    } else if (keepOpen && categorizeMode()) {
+    } else if (keepOpen && O.categorizeMode && categorizeMode()) {
       // カテゴリ付けモード（Enter 作成時）: 次入力の位置に作成タスクのカテゴリ選択を出す（design D5）。
       try { S.groups = await api.getGroups(); } catch { S.groups = S.groups || []; }
       S.composingCol = null;
@@ -809,6 +918,7 @@ async function commitComposer(keepOpen, openDet) {
     if (S.composingCol === col) S.composingCol = null;
   }
   renderAll();
+  if (openDet && S.detailId != null && O.onDetailOpen) O.onDetailOpen();
 }
 
 // --- カテゴリ付けピッカー ------------------------------------------------------
@@ -1020,6 +1130,7 @@ function openDetail(t) {
   S.focusNotes = !(t.notes && t.notes.trim());
   S.dueCalOpen = false;
   renderAll();
+  if (O.onDetailOpen) O.onDetailOpen();
 }
 
 function closeDetail() {

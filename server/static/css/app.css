@@ -721,7 +721,9 @@ textarea.kb-detail-title:focus { outline: none; border: none; }
    CSP(style-src 'self')のためインライン style 属性は使わず全てクラス + CSSOM。
    フォントのみ CSP 制約により system-ui フォールバック可。 */
 body.rf-page { background: #eef1f6; }
-body.rf-page .content { max-width: 1440px; }
+/* 画面いっぱいまで使う（issue #67 フィードバック）。あえて狭める理由が無い＋盤面の見切れも減る。
+   サイドバーは .rf-sidebar 側で幅固定のため、増えた分は左メイン(.rf-main)が吸収する。 */
+body.rf-page .content { max-width: none; }
 
 /* --- ワークスペース(reflection-timeline-workspace): 上=日付ストリップ、下=左メイン+右サイドバー ---
    左右は常時同時に見える2分割。各領域は自領域内でスクロールし、ページ全体は縦に流さない。 */
@@ -748,7 +750,7 @@ body.rf-page .content { max-width: 1440px; }
 .rf-strip-pick { flex: 0 0 auto; font-family: inherit; font-size: 12.5px; color: #5a6678; background: #f6f8fc; border: 1px solid #e4e9f1; border-radius: 8px; padding: 6px 8px; cursor: pointer; }
 
 /* 左メイン: ビュータブ + 横スクロール(scroll-snap)デッキ */
-.rf-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; background: #ffffff; border: 1px solid #e4e9f1; border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(30,45,70,0.05); }
+.rf-main { flex: 3 1 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; background: #ffffff; border: 1px solid #e4e9f1; border-radius: 14px; overflow: hidden; box-shadow: 0 1px 2px rgba(30,45,70,0.05); }
 .rf-viewtabs { display: flex; align-items: center; gap: 4px; padding: 10px 12px; border-bottom: 1px solid #eef1f7; background: #f6f8fc; }
 .rf-viewnav { flex: 0 0 auto; font-family: inherit; font-size: 15px; color: #9aa4b4; background: transparent; border: none; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
 .rf-viewnav:hover { background: #eef2f9; color: #5a6678; }
@@ -756,15 +758,29 @@ body.rf-page .content { max-width: 1440px; }
 .rf-viewtab:hover { background: #eef2f9; }
 .rf-viewtab.active { background: #3b5bb5; color: #ffffff; font-weight: 700; }
 .rf-viewtab-ico { font-size: 13px; }
-.rf-deck { flex: 1; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; min-height: 0; }
-.rf-view { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; overflow-y: auto; padding: 18px 22px 24px; }
+/* 左メイン: アクティブなビューのみを描画する（design D3: scroll-snap デッキは廃止）。
+   ビュー切替はビュータブのみで行い、この中の横スクロールは埋め込みカンバン盤面の
+   見切れた列をめくる操作専用になる。 */
+.rf-view-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rf-view { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 18px 22px 24px; }
 
-/* 右サイドバー: 常時表示・自領域内スクロール */
-.rf-sidebar { flex: 0 0 380px; min-width: 0; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; padding-right: 2px; }
-/* サイドバー内の各カードは内容の高さを保つ（自領域はサイドバー自身がスクロールして吸収する）。
-   .rf-card は overflow:hidden を持つため、指定が無いと flex の自動最小サイズが 0 扱いになり、
+/* 右サイドバー: 常時表示・自領域内スクロール。タブ器（design D2）: journal は常時、
+   detail/log は左メインが「明日の計画」のときのみ現れる（reflection.js が hidden を制御）。 */
+/* 幅は画面に応じて伸びる（issue #67 フィードバック: 固定380pxで狭めない）。
+   ただし本文が読みにくくなり過ぎないよう 560px を上限にする。 */
+.rf-sidebar { flex: 1 1 380px; max-width: 560px; min-width: 320px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; padding-right: 2px; }
+.rf-sb-tabs { display: flex; gap: 4px; flex-shrink: 0; }
+.rf-sb-tabs[hidden] { display: none; }
+.rf-sb-tab { font-family: inherit; font-size: 12.5px; font-weight: 600; color: #5a6678; background: #f1f4f9; border: none; border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.rf-sb-tab:hover { background: #eef2f9; }
+.rf-sb-tab.active { background: #3b5bb5; color: #ffffff; }
+/* サイドバーのタブ内容（journal/detail/log）。非表示中は display:none で完全に外し、
+   1つだけを表示する（design D3 と同じ「アクティブなものだけ描画」方針）。ただし journal は
+   非表示でも編集状態（dirty/カーソル）を保つため DOM 自体は破棄しない。 */
+.rf-sb-pane { display: none; flex-direction: column; gap: 18px; flex-shrink: 0; }
+.rf-sb-pane.active { display: flex; }
+/* .rf-card は overflow:hidden を持つため、指定が無いと flex の自動最小サイズが 0 扱いになり、
    本文エディタだけが極端に潰れて消えたように見えてしまう（issue #61）。 */
-.rf-sidebar > * { flex-shrink: 0; }
 @media (max-width: 900px) { .rf-sidebar { flex: 1 1 auto; } }
 
 .rf-mood-row { display: flex; align-items: center; gap: 16px; margin-bottom: 0; flex-wrap: wrap; }
@@ -878,26 +894,22 @@ body.rf-page .content { max-width: 1440px; }
 .rf-bar-row.gap .rf-bar-val { color: #8b95a7; }
 
 /* --- 明日の計画ビュー (tomorrow-plan-capture): 左メイン第3ビュー --- */
-.rf-plan { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
+/* 明日の計画ビュー(spec: tomorrow-plan-capture / tomorrow-plan-board)。
+   チップ帯（本文からの登録動線）＋埋め込みカンバン盤面（新規登録・表示・調整）。
+   盤面は列幅が広いため max-width で縛らず、.rf-view の幅いっぱいを使わせる。
+   直接入力欄は撤去済み（issue #67）。新規タスクは盤面自身の「＋ 新規タスク」で作る。 */
+.rf-plan { display: flex; flex-direction: column; gap: 14px; }
+.rf-plan-chip-section { display: flex; flex-direction: column; gap: 14px; max-width: 640px; }
 .rf-plan-section-lbl { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #9aa4b4; text-transform: uppercase; }
 .rf-plan-chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .rf-plan-chip { font-family: inherit; font-size: 13.5px; color: #3b5bb5; background: #eef1fb; border: 1px solid #dbe1f5; border-radius: 999px; padding: 8px 16px; cursor: pointer; }
 .rf-plan-chip:hover { background: #dfe5f7; }
 .rf-plan-chip.done { color: #8b95a7; background: #f1f4f9; border-color: #e4e9f1; cursor: default; }
-.rf-plan-input-wrap { }
-.rf-plan-input { width: 100%; font-family: inherit; font-size: 15px; color: #22303f; background: #f6f8fc; border: 1px solid #e4e9f1; border-radius: 12px; padding: 14px 16px; }
-.rf-plan-input:focus { outline: none; border-color: #b9c6ea; background: #ffffff; }
-.rf-plan-list { display: flex; flex-direction: column; gap: 10px; }
-.rf-plan-empty { margin: 10px 2px; font-size: 13px; color: #a6afc0; }
-.rf-plan-item { display: flex; align-items: center; gap: 10px; background: #ffffff; border: 1px solid #e4e9f1; border-radius: 12px; padding: 12px 14px; box-shadow: 0 1px 2px rgba(30,45,70,0.04); cursor: grab; }
-.rf-plan-item.dragging { opacity: .4; }
-.rf-plan-item-handle { color: #c3cbd8; font-size: 14px; }
-.rf-plan-item-dot { width: 8px; height: 8px; border-radius: 50%; background: #3b5bb5; flex: 0 0 auto; }
-.rf-plan-item-title { flex: 1; min-width: 0; font-size: 14px; color: #22303f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rf-plan-item-tag { flex: 0 0 auto; font-size: 11.5px; color: #3b5bb5; background: #eef1fb; border-radius: 999px; padding: 3px 10px; }
-.rf-plan-item-del { flex: 0 0 auto; font-family: inherit; font-size: 15px; color: #9aa4b4; background: transparent; border: none; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
-.rf-plan-item-del:hover { background: #f1f4f9; color: #c25e4d; }
-.rf-plan-drop-indicator { height: 3px; background: #3b5bb5; border-radius: 3px; margin: 0 2px; }
+/* 埋め込みカンバン盤面のホスト。.kb-main は使わない（design Risks: max-width:1100px の縦積み誤発火回避）。
+   .kb-board-scroll（盤面スクロール要素）を直接置き、見切れは横スクロールでめくる（design D4）。 */
+.rf-plan-board { margin-top: 4px; }
+.kb-embed-head { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.kb-aside-empty { color: #9B9A94; font-size: 13px; padding: 12px 4px; }
 
 /* --- Markdown 読み取り専用レンダラ (md-*): markdown.js。kanban のタスクノート等と共用 --- */
 .md-body { line-height: 1.6; font-size: 13.5px; }

@@ -107,6 +107,81 @@
       </aside>
     </div>
   </main>
+
+  <!-- ============================================================ -->
+  <!-- ★変更点（issue #67）: 「明日の計画」ビュー選択時の骨格。
+       日付ストリップは非表示（対象日を持たないビュー）。右サイドバーは
+       本文/詳細/ログのタブ器になり、左メインには登録専用の埋め込みカンバン
+       盤面（kb-* の意匠をそのまま流用・振り返り専用の別意匠を描かない）。 -->
+  <main style="max-width:1440px;margin:24px auto 0;padding:0 40px 40px;display:flex;flex-direction:column;gap:16px;">
+    <div style="font-size:12px;font-weight:700;letter-spacing:0.06em;color:#9aa4b4;text-transform:uppercase;">↓ 明日の計画ビュー選択時（日付ストリップは非表示になる）</div>
+
+    <div style="display:flex;gap:24px;align-items:stretch;height:520px;">
+      <!-- 左メイン: ビュータブ + チップ帯/入力欄 + 埋め込みカンバン盤面 -->
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#fff;border:1px solid #e4e9f1;border-radius:14px;overflow:hidden;box-shadow:0 1px 2px rgba(30,45,70,0.05);">
+        <div style="display:flex;align-items:center;gap:4px;padding:10px 12px;border-bottom:1px solid #eef1f7;background:#f6f8fc;">
+          <span style="padding:4px 8px;color:#9aa4b4;">‹</span>
+          <div style="display:inline-flex;align-items:center;gap:6px;font-size:13.5px;color:#5a6678;padding:8px 14px;">▤ タイムライン（完全版）</div>
+          <div style="display:inline-flex;align-items:center;gap:6px;font-size:13.5px;color:#5a6678;padding:8px 14px;">◑ 一日の配分</div>
+          <div style="display:inline-flex;align-items:center;gap:6px;font-size:13.5px;font-weight:700;color:#fff;background:#3b5bb5;border-radius:9px;padding:8px 14px;">✎ 明日の計画</div>
+          <span style="padding:4px 8px;color:#9aa4b4;">›</span>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:18px 22px;background:#F6F5F2;">
+          <input placeholder="明日やることを入力して Enter で追加…" style="width:100%;box-sizing:border-box;font-size:15px;color:#22303f;background:#f6f8fc;border:1px solid #e4e9f1;border-radius:12px;padding:14px 16px;margin-bottom:14px;" readonly>
+          <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:7px;height:34px;padding:0 13px;background:#fff;border:1px solid #E8E7E3;border-radius:9px;font-size:13px;color:#6B6A65;">
+              <span style="color:#9B9A94;">明日の計画</span>
+              <span style="width:38px;height:22px;border-radius:11px;background:#2E9E63;display:inline-block;position:relative;"><span style="position:absolute;top:2px;left:18px;width:18px;height:18px;border-radius:50%;background:#fff;"></span></span>
+            </div>
+          </div>
+          <!-- 盤面（kb-* の意匠をそのまま流用・design D4: 完了列は見切れて良い） -->
+          <div style="display:flex;gap:14px;overflow-x:hidden;">
+            <div style="width:230px;flex-shrink:0;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <span style="font-size:13px;font-weight:600;color:#6B6A65;">◇ 保留</span><span style="font-size:11px;color:#9B9A94;background:#F0EFEB;border-radius:8px;padding:2px 8px;">1</span>
+              </div>
+              <div style="background:#fff;border:1px solid #EAE9E4;border-radius:10px;padding:10px 12px;">
+                <div style="font-size:11px;color:#9B9A94;margin-bottom:4px;">期限なし</div>
+                <div style="font-size:13.5px;color:#37352F;">OpenWork 面接対策</div>
+              </div>
+            </div>
+            <div style="width:230px;flex-shrink:0;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <span style="font-size:13px;font-weight:600;color:#6B6A65;">◇ 未着手</span><span style="font-size:11px;color:#9B9A94;background:#F0EFEB;border-radius:8px;padding:2px 8px;">1</span>
+              </div>
+              <div style="background:#fff;border:1px solid #EAE9E4;border-radius:10px;padding:10px 12px;">
+                <div style="font-size:11px;color:#9B9A94;margin-bottom:4px;">明日</div>
+                <div style="font-size:13.5px;color:#37352F;">筋トレ</div>
+              </div>
+            </div>
+            <div style="width:230px;flex-shrink:0;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <span style="font-size:13px;font-weight:600;color:#2f6fb0;">◆ 進行中</span><span style="font-size:11px;color:#9B9A94;background:#F0EFEB;border-radius:8px;padding:2px 8px;">0</span>
+              </div>
+            </div>
+            <div style="width:60px;flex-shrink:0;opacity:.4;">
+              <span style="font-size:13px;font-weight:600;color:#2E7D54;">◆ 完了…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右サイドバー: タブ器（明日の計画ビューのときのみ 詳細/ログ が現れる） -->
+      <aside style="flex:0 0 380px;min-width:0;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
+        <div style="display:flex;gap:4px;">
+          <span style="font-size:12.5px;font-weight:700;color:#fff;background:#3b5bb5;border-radius:8px;padding:7px 12px;">本文</span>
+          <span style="font-size:12.5px;font-weight:600;color:#5a6678;background:#f1f4f9;border-radius:8px;padding:7px 12px;">詳細</span>
+          <span style="font-size:12.5px;font-weight:600;color:#5a6678;background:#f1f4f9;border-radius:8px;padding:7px 12px;">ログ</span>
+        </div>
+        <div style="background:#fff;border:1px solid #e4e9f1;border-radius:14px;box-shadow:0 1px 2px rgba(30,45,70,0.05),0 10px 30px -18px rgba(30,45,70,0.22);overflow:hidden;">
+          <div style="padding:20px 24px;font-size:14px;line-height:1.8;color:#22303f;min-height:160px;">
+            明日の段取り：まず9時までに大学、次に筋トレ。タスク確認してから、課題があれば課題／なければ開発＋OpenWork 面接対策。
+          </div>
+        </div>
+        <div style="font-size:11.5px;color:#9aa4b4;">※ カードを選ぶと「詳細」タブへ自動切替。完了すると「ログ」タブへ戻る。</div>
+      </aside>
+    </div>
+  </main>
 </div>
 </body>
 </html>
