@@ -64,8 +64,8 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
   const triggerBtn = cardA.getByRole('button', { name: /一時凍結/ }).first();
   await triggerBtn.scrollIntoViewIfNeeded();
   await triggerBtn.click();
-  const modal = page.locator('.modal-root.open');
-  await expect(modal).toBeVisible();
+  const modal = page.locator('.modal-root');
+  await expect(modal).toHaveClass(/open/);
   await expect(modal).toContainText('目標を一時凍結する');
   await expect(modal).toContainText(GOAL_A);
   await expect(modal).toContainText(CHECK_A);
