@@ -95,7 +95,7 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
       style: { cursor: 'pointer', padding: '8px 12px' },
     },
       radio,
-      h('span', { style: { fontWeight: '600' }, text: g.title }),
+      h('span', { style: { fontWeight: '600' }, text: g.name || g.title || '（無題の目標）' }),
     );
     goalListEl.appendChild(item);
   });

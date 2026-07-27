@@ -65,6 +65,7 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
   const modal = page.locator('.modal-root.open');
   await expect(modal).toBeVisible();
   await expect(modal).toContainText('目標を一時凍結する');
+  await expect(modal).toContainText(GOAL_A);
 
   await modal.locator('textarea').fill(FREEZE_REASON);
   await modal.locator('input[type="date"]').fill(freezeEnd);
