@@ -61,7 +61,9 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
   await expect(freezeBlockA).toContainText('今月の凍結枠は空いています');
 
   // モーダルを起動
-  await cardA.getByRole('button', { name: /一時凍結/ }).first().click();
+  const triggerBtn = cardA.getByRole('button', { name: /一時凍結/ }).first();
+  await triggerBtn.scrollIntoViewIfNeeded();
+  await triggerBtn.click();
   const modal = page.locator('.modal-root.open');
   await expect(modal).toBeVisible();
   await expect(modal).toContainText('目標を一時凍結する');
