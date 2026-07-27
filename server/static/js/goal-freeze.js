@@ -1,10 +1,9 @@
 // 一時凍結の UI 部品（spec: goal-freeze・issue #60）。
-// 操作導線は振り返りタブの目標カードだけに置く（今日タブ・目標タブには置かない）。
 import { h, toast } from './util.js';
 import { api } from './api.js';
 import { shortDay } from './rule-form.js';
 
-/** 月枠の状態を一言で（すべての目標カードに表示・spec: goal-freeze）。 */
+/** 月枠の状態を一言で（spec: goal-freeze）。 */
 function quotaLine(quota, goalId) {
   if (!quota || !quota.used) {
     return h('p', { class: 'muted gf-quota', text: '今月の凍結枠は空いています（アプリ全体で月1回）。' });
@@ -16,37 +15,143 @@ function quotaLine(quota, goalId) {
   });
 }
 
-function reserveForm(goal, quota, onChanged) {
-  const wrap = h('div', { class: 'gf-block' },
-    h('div', { class: 'gf-head' }, h('span', { class: 'gf-title', text: '一時凍結' })),
-    quotaLine(quota, goal.id),
+/** 一時凍結を予約するモーダルを開く (issue #60) */
+export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
+  const activeGoals = (goals || []).filter((g) => g.status === 'active' && (!g.freeze || g.freeze.state === 'none'));
+
+  const closeBtn = h('button', { class: 'icon-btn', type: 'button', text: '✕' });
+
+  const modalPanel = h('div', { class: 'modal-panel', style: { maxWidth: '540px', margin: 'auto' } },
+    h('div', { class: 'modal-header' },
+      h('h3', { text: '目標を一時凍結する' }),
+      closeBtn,
+    ),
+    h('div', { class: 'modal-body' }),
   );
-  if (quota && quota.used) return wrap;
+
+  const backdrop = h('div', { class: 'modal-backdrop' }, modalPanel);
+  const modal = h('div', { class: 'modal-root open' }, backdrop);
+
+  const closeModal = () => {
+    modal.remove();
+  };
+
+  closeBtn.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeModal();
+  });
+
+  const body = modal.querySelector('.modal-body');
+  body.appendChild(quotaLine(quota, defaultGoalId));
+
+  if (quota && quota.used) {
+    body.appendChild(h('div', { class: 'actions' },
+      h('button', { class: 'btn', type: 'button', text: '閉じる', onClick: closeModal }),
+    ));
+    document.body.appendChild(modal);
+    return;
+  }
+
+  if (activeGoals.length === 0) {
+    body.appendChild(h('p', { class: 'muted', text: '凍結可能な進行中の目標がありません。' }));
+    body.appendChild(h('div', { class: 'actions' },
+      h('button', { class: 'btn', type: 'button', text: '閉じる', onClick: closeModal }),
+    ));
+    document.body.appendChild(modal);
+    return;
+  }
+
+  // 入力ステップ: 理由 → 期限 → 対象目標選択
+  const reasonInp = h('textarea', {
+    class: 'pc-textarea',
+    rows: '2',
+    placeholder: '例: 大タスク・出張に集中するため',
+  });
 
   const endInput = h('input', { class: 'pc-input pc-input-date', type: 'date' });
-  const reasonInp = h('textarea', { class: 'pc-textarea', rows: '2', placeholder: '理由（必須）例: OpenWork の大タスクに全振りしたい' });
-  const btn = h('button', { class: 'btn btn-ghost pc-sm', type: 'button', text: '凍結を予約（翌日発効）' });
-  btn.addEventListener('click', async () => {
+
+  // 今日の翌日（最短解凍日）をデフォルト最小値に
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  endInput.min = tomorrow.toISOString().split('T')[0];
+
+  // 対象目標の選択リスト (radio)
+  let selectedGoalId = defaultGoalId && activeGoals.some((g) => g.id === defaultGoalId)
+    ? defaultGoalId
+    : activeGoals[0]?.id;
+
+  const goalListEl = h('div', { class: 'stack', style: { gap: '6px', marginTop: '4px' } });
+  activeGoals.forEach((g) => {
+    const radio = h('input', {
+      type: 'radio',
+      name: 'freeze_target_goal',
+      value: g.id,
+      checked: g.id === selectedGoalId,
+    });
+    radio.addEventListener('change', () => { selectedGoalId = g.id; });
+
+    const item = h('label', {
+      class: 'list-row inline',
+      style: { cursor: 'pointer', padding: '8px 12px' },
+    },
+      radio,
+      h('span', { style: { fontWeight: '600' }, text: g.title }),
+    );
+    goalListEl.appendChild(item);
+  });
+
+  const submitBtn = h('button', { class: 'btn primary', type: 'button', text: '一時凍結を予約（翌日発効）' });
+
+  submitBtn.addEventListener('click', async () => {
     const reason = reasonInp.value.trim();
-    if (!reason) { toast('理由を入力してください', 'error'); return; }
-    if (!endInput.value) { toast('終了日を選んでください', 'error'); return; }
-    btn.disabled = true;
+    if (!reason) {
+      toast('凍結する理由を入力してください', 'error');
+      reasonInp.focus();
+      return;
+    }
+    if (!endInput.value) {
+      toast('凍結の終了日を選択してください', 'error');
+      endInput.focus();
+      return;
+    }
+    if (!selectedGoalId) {
+      toast('凍結する目標を選択してください', 'error');
+      return;
+    }
+
+    submitBtn.disabled = true;
     try {
-      await api.reserveGoalFreeze(goal.id, { endDay: endInput.value, reason });
+      await api.reserveGoalFreeze(selectedGoalId, { endDay: endInput.value, reason });
       toast('凍結を予約しました（翌日発効）', 'ok');
+      closeModal();
       await onChanged();
     } catch (err) {
       toast((err.data && err.data.error) || '予約できませんでした', 'error');
-    } finally {
-      btn.disabled = false;
+      submitBtn.disabled = false;
     }
   });
-  wrap.appendChild(h('div', { class: 'gf-form' },
-    h('label', { class: 'pc-field pc-field-inline' }, h('span', { class: 'pc-field-label', text: '終了日' }), endInput),
+
+  body.appendChild(h('div', { class: 'field' },
+    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '1. 凍結する理由（必須）' }),
     reasonInp,
-    btn,
   ));
-  return wrap;
+
+  body.appendChild(h('div', { class: 'field' },
+    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '2. 凍結終了日' }),
+    endInput,
+  ));
+
+  body.appendChild(h('div', { class: 'field' },
+    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '3. 対象の目標を選択' }),
+    goalListEl,
+  ));
+
+  body.appendChild(h('div', { class: 'actions', style: { marginTop: '12px' } },
+    h('button', { class: 'btn', type: 'button', text: 'キャンセル', onClick: closeModal }),
+    submitBtn,
+  ));
+
+  document.body.appendChild(modal);
 }
 
 function reservedView(goal, freeze, onChanged) {
@@ -121,15 +226,30 @@ function frozenView(goal, freeze, onChanged) {
   return wrap;
 }
 
+function unreservedView(goal, quota, allGoals, onChanged) {
+  const wrap = h('div', { class: 'gf-block' },
+    h('div', { class: 'gf-head' }, h('span', { class: 'gf-title', text: '一時凍結' })),
+    quotaLine(quota, goal.id),
+  );
+  if (quota && quota.used) return wrap;
+
+  const btn = h('button', { class: 'btn btn-ghost pc-sm', type: 'button', text: '❄ 一時凍結する' });
+  btn.addEventListener('click', () => {
+    openFreezeModal(allGoals || [goal], quota, onChanged, goal.id);
+  });
+  wrap.appendChild(btn);
+  return wrap;
+}
+
 /** 振り返りタブの目標カードに置く凍結ブロック（編集可能・spec: goal-freeze）。 */
-export function buildFreezeBlock(goal, quota, onChanged) {
+export function buildFreezeBlock(goal, quota, onChanged, allGoals = []) {
   const freeze = goal.freeze;
   if (freeze && freeze.state === 'reserved') return reservedView(goal, freeze, onChanged);
   if (freeze && freeze.state === 'frozen') return frozenView(goal, freeze, onChanged);
-  return reserveForm(goal, quota, onChanged);
+  return unreservedView(goal, quota, allGoals, onChanged);
 }
 
-/** その目標が今まさに凍結中か（ルールブロックの折りたたみに使う）。 */
+/** その目標が今場所に凍結中か（ルールブロックの折りたたみに使う）。 */
 export function isFrozenNow(goal) {
   return !!(goal.freeze && goal.freeze.state === 'frozen');
 }

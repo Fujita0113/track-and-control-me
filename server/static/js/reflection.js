@@ -433,7 +433,7 @@ function journalCorner(goal, content, date, quota) {
   // デモは閲覧専用なので作成・凍結の操作導線を出さない（spec: demo-mode）。
   if (date === state.today && !isDemo()) {
     const onFreezeChanged = async () => { await loadJournals(date); };
-    corner.appendChild(buildFreezeBlock(goal, quota, onFreezeChanged));
+    corner.appendChild(buildFreezeBlock(goal, quota, onFreezeChanged, ctx.activeGoals));
     // 凍結中はルール操作ブロックを畳む（カード自体・日記・画像は残す・spec: goal-freeze）。
     if (isFrozenNow(goal)) {
       corner.appendChild(h('details', { class: 'gf-rules-collapse' },
