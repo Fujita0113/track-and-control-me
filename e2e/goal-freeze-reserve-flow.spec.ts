@@ -57,7 +57,7 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
   await page.locator('#tabs button[data-target="reflection"]').click();
   const cardA = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_A }) });
   await expect(cardA).toBeVisible();
-  const freezeBlockA = cardA.locator('.gf-block');
+  const freezeBlockA = cardA.locator('.gf-block').first();
   await expect(freezeBlockA).toContainText('今月の凍結枠は空いています');
 
   // モーダルを起動
@@ -66,14 +66,15 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
   await expect(modal).toBeVisible();
   await expect(modal).toContainText('目標を一時凍結する');
   await expect(modal).toContainText(GOAL_A);
+  await expect(modal).toContainText(CHECK_A);
 
   await modal.locator('textarea').fill(FREEZE_REASON);
   await modal.locator('input[type="date"]').fill(freezeEnd);
   await modal.getByRole('button', { name: /一時凍結を予約/ }).click();
 
   await expect(page.locator('.toast')).toContainText('凍結を予約しました');
-  await expect(cardA.locator('.gf-block')).toContainText('一時凍結（予約中）');
-  await expect(cardA.locator('.gf-block')).toContainText(FREEZE_REASON);
+  await expect(cardA.locator('.gf-block').first()).toContainText('一時凍結（予約中）');
+  await expect(cardA.locator('.gf-block').first()).toContainText(FREEZE_REASON);
 
   // --- 3. 予約した当日は今日タブのゲートに変わりが無い（翌日発効・design D5の核） ---
   await page.locator('#tabs button[data-target="today"]').click();
@@ -84,7 +85,7 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
   //        予約ボタンは表示されない ---------------------------
   await page.locator('#tabs button[data-target="reflection"]').click();
   const cardB = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_B }) });
-  const freezeBlockB = cardB.locator('.gf-block');
+  const freezeBlockB = cardB.locator('.gf-block').first();
   await expect(freezeBlockB).toContainText('今月の凍結枠は使用済みです');
   await expect(freezeBlockB).toContainText(GOAL_A);
   await expect(freezeBlockB.getByRole('button', { name: /一時凍結する/ })).toHaveCount(0);

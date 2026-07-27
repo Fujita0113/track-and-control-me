@@ -36,6 +36,7 @@ import {
 } from '../services/goals.js';
 import {
   reserveFreeze,
+  reserveFreezeMulti,
   updateFreeze,
   cancelFreeze,
   releaseFreeze,
@@ -189,6 +190,15 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
   // 静的パス /api/goals/freeze/quota は /api/goals/:id 系と衝突しない（find-my-way は静的優先）。
 
   app.get('/api/goals/freeze/quota', async () => freezeQuota(db));
+
+  app.post('/api/goals/freeze/multi', async (req, reply) => {
+    const b = (req.body ?? {}) as { goalIds?: number[]; endDay?: string; reason?: string };
+    try {
+      return reserveFreezeMulti(db, b.goalIds ?? [], { endDay: b.endDay ?? '', reason: b.reason ?? '' });
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
 
   app.post('/api/goals/:id/freeze', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);

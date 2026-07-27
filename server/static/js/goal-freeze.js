@@ -75,27 +75,41 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
   tomorrow.setDate(tomorrow.getDate() + 1);
   endInput.min = tomorrow.toISOString().split('T')[0];
 
-  // 対象目標の選択リスト (radio)
-  let selectedGoalId = defaultGoalId && activeGoals.some((g) => g.id === defaultGoalId)
-    ? defaultGoalId
-    : activeGoals[0]?.id;
+  // 対象目標の選択リスト (checkbox で複数選択可能・ルール一覧を併記)
+  const selectedGoalIds = new Set();
+  if (defaultGoalId && activeGoals.some((g) => g.id === defaultGoalId)) {
+    selectedGoalIds.add(defaultGoalId);
+  } else {
+    activeGoals.forEach((g) => selectedGoalIds.add(g.id));
+  }
 
-  const goalListEl = h('div', { class: 'stack', style: { gap: '6px', marginTop: '4px' } });
+  const goalListEl = h('div', { class: 'stack', style: { gap: '8px', marginTop: '4px' } });
   activeGoals.forEach((g) => {
-    const radio = h('input', {
-      type: 'radio',
+    const chk = h('input', {
+      type: 'checkbox',
       name: 'freeze_target_goal',
       value: g.id,
-      checked: g.id === selectedGoalId,
+      checked: selectedGoalIds.has(g.id),
     });
-    radio.addEventListener('change', () => { selectedGoalId = g.id; });
+    chk.addEventListener('change', () => {
+      if (chk.checked) selectedGoalIds.add(g.id);
+      else selectedGoalIds.delete(g.id);
+    });
+
+    const rulesText = (g.rules || []).map((r) => r.label || r.target).filter(Boolean).join(', ');
+    const rulesEl = rulesText
+      ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' }, text: `ルール: ${rulesText}` })
+      : h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' }, text: 'ルール: （登録ルールなし）' });
 
     const item = h('label', {
       class: 'list-row inline',
-      style: { cursor: 'pointer', padding: '8px 12px' },
+      style: { cursor: 'pointer', padding: '10px 12px', alignItems: 'flex-start' },
     },
-      radio,
-      h('span', { style: { fontWeight: '600' }, text: g.name || g.title || '（無題の目標）' }),
+      chk,
+      h('div', { style: { flex: '1' } },
+        h('div', { style: { fontWeight: '600' }, text: g.name || g.title || '（無題の目標）' }),
+        rulesEl,
+      ),
     );
     goalListEl.appendChild(item);
   });
@@ -114,15 +128,15 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
       endInput.focus();
       return;
     }
-    if (!selectedGoalId) {
-      toast('凍結する目標を選択してください', 'error');
+    if (selectedGoalIds.size === 0) {
+      toast('凍結する目標を1つ以上選択してください', 'error');
       return;
     }
 
     submitBtn.disabled = true;
     try {
-      await api.reserveGoalFreeze(selectedGoalId, { endDay: endInput.value, reason });
-      toast('凍結を予約しました（翌日発効）', 'ok');
+      await api.reserveGoalFreezeMulti(Array.from(selectedGoalIds), { endDay: endInput.value, reason });
+      toast(`凍結を予約しました（${selectedGoalIds.size}件・翌日発効）`, 'ok');
       closeModal();
       await onChanged();
     } catch (err) {
@@ -142,7 +156,7 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
   ));
 
   body.appendChild(h('div', { class: 'field' },
-    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '3. 対象の目標を選択' }),
+    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '3. 対象の目標を選択（複数選択可）' }),
     goalListEl,
   ));
 

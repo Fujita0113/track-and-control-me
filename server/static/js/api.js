@@ -106,6 +106,7 @@ export const api = {
 
   // 一時凍結（spec: goal-freeze）
   reserveGoalFreeze: (goalId, { endDay, reason }) => req('POST', `/api/goals/${goalId}/freeze`, { endDay, reason }),
+  reserveGoalFreezeMulti: (goalIds, { endDay, reason }) => req('POST', '/api/goals/freeze/multi', { goalIds, endDay, reason }),
   updateGoalFreeze: (goalId, { endDay, reason }) => req('PATCH', `/api/goals/${goalId}/freeze`, { endDay, reason }),
   cancelGoalFreeze: (goalId) => req('DELETE', `/api/goals/${goalId}/freeze`),
   releaseGoalFreeze: (goalId) => req('POST', `/api/goals/${goalId}/freeze/release`),

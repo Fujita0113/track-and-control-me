@@ -223,41 +223,62 @@ export function reserveFreeze(
   input: { endDay: string; reason: string },
   nowMs = Date.now(),
 ): FreezeView {
-  requireGoal(db, goalId);
+  return reserveFreezeMulti(db, [goalId], input, nowMs)[0]!;
+}
+
+/** 複数の目標を同時に一括で凍結予約する（1回の月枠機会で複数選択・design D4/D11）。 */
+export function reserveFreezeMulti(
+  db: DB,
+  goalIds: number[],
+  input: { endDay: string; reason: string },
+  nowMs = Date.now(),
+): FreezeView[] {
+  if (!goalIds || goalIds.length === 0) throw new FreezeValidationError('目標を1つ以上選択してください');
+
   const today = todayKey(db, nowMs);
   const reason = requireReason(input.reason);
   const startDay = addDaysKey(today, 1);
   if (input.endDay < startDay) throw new FreezeValidationError('終了日は発効日以降にしてください');
 
-  const existing = latestFreezeRow(db, goalId);
-  if (existing && freezeStateOn(existing, today) !== 'released') {
-    throw new FreezeStateError('この目標には既に凍結の予約があります');
+  for (const id of goalIds) {
+    requireGoal(db, id);
+    const existing = latestFreezeRow(db, id);
+    if (existing && freezeStateOn(existing, today) !== 'released') {
+      throw new FreezeStateError(`目標 ID ${id} には既に凍結の予約があります`);
+    }
   }
+
   if (quotaRowForMonth(db, startDay.slice(0, 7))) {
     throw new FreezeStateError('今月の凍結枠は使用済みです');
   }
 
-  const tx = db.transaction((): number => {
-    const info = db
-      .prepare(
-        'INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .run(goalId, startDay, input.endDay, reason, nowMs, nowMs);
-    const id = info.lastInsertRowid as number;
-    logChange(db, {
-      goalId,
-      dayKey: today,
-      op: 'reserve',
-      startDay,
-      beforeEndDay: null,
-      afterEndDay: input.endDay,
-      reason,
-      createdAt: nowMs,
-    });
-    return id;
+  const createdIds: number[] = [];
+  const tx = db.transaction(() => {
+    for (const goalId of goalIds) {
+      const info = db
+        .prepare(
+          'INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        )
+        .run(goalId, startDay, input.endDay, reason, nowMs, nowMs);
+      const id = info.lastInsertRowid as number;
+      logChange(db, {
+        goalId,
+        dayKey: today,
+        op: 'reserve',
+        startDay,
+        beforeEndDay: null,
+        afterEndDay: input.endDay,
+        reason,
+        createdAt: nowMs,
+      });
+      createdIds.push(id);
+    }
   });
-  const id = tx();
-  return toFreezeView(db.prepare('SELECT * FROM goal_freeze WHERE id = ?').get(id) as GoalFreezeRow, today);
+  tx();
+
+  return createdIds.map(
+    (id) => toFreezeView(db.prepare('SELECT * FROM goal_freeze WHERE id = ?').get(id) as GoalFreezeRow, today),
+  );
 }
 
 /** 凍結期間を変更する（発効後は後ろへのみ・理由必須・月枠は消費しない）。 */

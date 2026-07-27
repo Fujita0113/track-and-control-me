@@ -109,11 +109,19 @@ describe('凍結の予約は翌日発効', () => {
 // --- 月枠（アプリ全体で月1回）--------------------------------------------------
 
 describe('凍結の枠はアプリ全体で月1回', () => {
-  it('同じ月の2件目は、別の目標でも拒否される', () => {
+  it('同じ予約日（同日発効）であれば、別の目標も一緒に予約できる', () => {
     const a = makeGoal('設計理解をしたい');
     const b = makeGoal('茶色取りたい');
     reserveFreeze(db, a.id, { endDay: '2026-07-14', reason: '大タスク' }, NOW_0710);
-    expect(() => reserveFreeze(db, b.id, { endDay: '2026-07-14', reason: '別件' }, NOW_0710)).toThrow();
+    const f = reserveFreeze(db, b.id, { endDay: '2026-07-14', reason: '大タスク' }, NOW_0710);
+    expect(f.startDay).toBe('2026-07-11');
+  });
+
+  it('別の日（別の予約セッション）での同月2件目は、別の目標でも拒否される', () => {
+    const a = makeGoal('設計理解をしたい');
+    const b = makeGoal('茶色取りたい');
+    reserveFreeze(db, a.id, { endDay: '2026-07-14', reason: '大タスク' }, NOW_0710);
+    expect(() => reserveFreeze(db, b.id, { endDay: '2026-07-20', reason: '別件' }, NOW_0715)).toThrow();
 
     const quota = freezeQuota(db, NOW_0710);
     expect(quota.used).toBe(true);
