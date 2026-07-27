@@ -28,6 +28,7 @@ import { todayKey } from './summary.js';
 import type { ConditionResult } from '../rules/evaluate.js';
 import { resolveGroupDisplay } from './group-identity.js';
 import type { Chronicle } from '@track/contract';
+import { goalFreezeIntervals, effectiveEndDay, getFreezeOn, type FreezeView } from './goal-freeze.js';
 
 /**
  * 30日チャレンジ（目標）のライフサイクル・レポート集計・日記（spec: goal-challenge / goal-report /
@@ -163,9 +164,15 @@ function unresolvedSingleRules(db: DB, goalId: number, today: string): RuleRow[]
   });
 }
 
+/** 凍結日数ぶん前方向へ延長した実効 end_day（design: goal-freeze D2）。 */
+function effectiveEndDayOf(db: DB, goal: GoalRow, today: string): string {
+  return effectiveEndDay(goal.end_day, goalFreezeIntervals(db, goal.id), today);
+}
+
 function deriveStatus(db: DB, today: string, goal: GoalRow): GoalStatus {
+  const endDay = effectiveEndDayOf(db, goal, today);
   if (today < goal.start_day) return 'upcoming';
-  if (today <= goal.end_day) return 'active';
+  if (today <= endDay) return 'active';
   if (unresolvedSingleRules(db, goal.id, today).length > 0) return 'active';
   return 'completed';
 }
@@ -247,11 +254,14 @@ export interface GoalView {
   lifecycleChoice: 'continued' | 'ended' | null;
   lifecycleReason: string | null;
   continuedGoalId: number | null;
+  /** 一時凍結の現在状態（予約中/凍結中/解凍済み）。一度も凍結したことが無ければ null（spec: goal-freeze）。 */
+  freeze: FreezeView | null;
 }
 
 function toGoalView(db: DB, row: GoalRow, today: string, _nowMs: number): GoalView {
   const status = deriveStatus(db, today, row);
-  const dayCount = dayDiff(row.start_day, row.end_day) + 1;
+  const endDay = effectiveEndDayOf(db, row, today);
+  const dayCount = dayDiff(row.start_day, endDay) + 1;
   // 進行中は 1..M（未決着ルールで完走が保留されている間は M で頭打ち）。完走後・開始前は null
   // （目標一覧の表示は「完走」の一言で足り、Day N/M はレポートヘッダが担う）。
   const dayNumber = status === 'active' ? Math.min(dayDiff(row.start_day, today) + 1, dayCount) : null;
@@ -260,7 +270,7 @@ function toGoalView(db: DB, row: GoalRow, today: string, _nowMs: number): GoalVi
     name: row.name,
     purpose: row.purpose,
     startDay: row.start_day,
-    endDay: row.end_day,
+    endDay,
     createdAt: row.created_at,
     status,
     dayNumber,
@@ -273,6 +283,7 @@ function toGoalView(db: DB, row: GoalRow, today: string, _nowMs: number): GoalVi
     lifecycleChoice: row.lifecycle_choice,
     lifecycleReason: row.lifecycle_reason,
     continuedGoalId: row.continued_goal_id,
+    freeze: getFreezeOn(db, row.id, today),
   };
 }
 
@@ -323,17 +334,19 @@ export function addRuleToGoal(
   nowMs = Date.now(),
 ): AddRuleResult {
   const goal = getGoalRow(db, goalId);
-  let startDay = input.startDay ?? todayKey(db, nowMs);
+  const today = todayKey(db, nowMs);
+  const goalEndDay = effectiveEndDayOf(db, goal, today);
+  let startDay = input.startDay ?? today;
   let endDay = input.endDay ?? null;
   let truncated = false;
 
-  if (endDay != null && endDay > goal.end_day) {
-    if (!opts.extend) throw new GoalExtensionRequiredError(endDay, goal.end_day);
+  if (endDay != null && endDay > goalEndDay) {
+    if (!opts.extend) throw new GoalExtensionRequiredError(endDay, goalEndDay);
     if (opts.extend === 'extend') {
       db.prepare('UPDATE goal SET end_day = ? WHERE id = ? AND end_day < ?').run(endDay, goalId, endDay);
     } else {
-      // 'truncate': ルールを目標末尾まで切り詰める（範囲短縮）。単発は目標末尾へ移動。
-      endDay = goal.end_day;
+      // 'truncate': ルールを目標末尾（実効 end_day）まで切り詰める（範囲短縮）。単発は目標末尾へ移動。
+      endDay = goalEndDay;
       if (startDay > endDay) startDay = endDay;
       truncated = true;
     }
@@ -409,15 +422,16 @@ export function updateGoalRule(
   const link = db.prepare('SELECT 1 FROM goal_rule WHERE goal_id = ? AND rule_id = ?').get(goalId, ruleId);
   if (!link) throw new RuleNotFoundError(ruleId);
 
+  const goalEndDay = effectiveEndDayOf(db, goal, todayKey(db, nowMs));
   let startDay = input.startDay;
   let endDay = input.endDay ?? null;
   let truncated = false;
-  if (endDay != null && endDay > goal.end_day) {
-    if (!opts.extend) throw new GoalExtensionRequiredError(endDay, goal.end_day);
+  if (endDay != null && endDay > goalEndDay) {
+    if (!opts.extend) throw new GoalExtensionRequiredError(endDay, goalEndDay);
     if (opts.extend === 'extend') {
       db.prepare('UPDATE goal SET end_day = ? WHERE id = ? AND end_day < ?').run(endDay, goalId, endDay);
     } else {
-      endDay = goal.end_day;
+      endDay = goalEndDay;
       if (startDay > endDay) startDay = endDay;
       truncated = true;
     }
@@ -522,7 +536,7 @@ export function saveJournal(
     throw new JournalNotWritableError(
       status === 'completed' ? '完走した目標の日記は編集できません' : '開始前の目標には記入できません',
     );
-  if (dayKey < row.start_day || dayKey > row.end_day)
+  if (dayKey < row.start_day || dayKey > effectiveEndDayOf(db, row, today))
     throw new JournalNotWritableError('目標期間外の日には記入できません');
   const now = nowMs;
   db.prepare(
@@ -616,7 +630,7 @@ export function addJournalImage(
   nowMs = Date.now(),
 ): JournalImageMeta {
   const row = getGoalRow(db, goalId); // 存在確認（無ければ 404）。status は問わない。
-  if (dayKey < row.start_day || dayKey > row.end_day)
+  if (dayKey < row.start_day || dayKey > effectiveEndDayOf(db, row, todayKey(db, nowMs)))
     throw new JournalImageError('目標期間外の日には追加できません');
   const { mime, bytes } = parseDataUrl(input.dataUrl);
   if (!IMAGE_MIME_ALLOW.has(mime))
@@ -683,6 +697,8 @@ export interface ReportDayCell {
   future: boolean;
   /** このルールがその日ゲートに含まれていなかった（開始前・削除後）＝**対象外**。未達成に数えない。 */
   inactive: boolean;
+  /** その日、目標が凍結中だった＝**対象外**。`inactive` とは視覚的に区別する（spec: goal-report / design: goal-freeze D7）。 */
+  frozen: boolean;
 }
 export interface ReportRule {
   ruleId: number;
@@ -751,6 +767,8 @@ export interface GoalReport {
     lifecycleChoice: 'continued' | 'ended' | null;
     lifecycleReason: string | null;
     continuedGoalId: number | null;
+    /** 一時凍結の現在状態。ヘッダの「凍結中」表示に使う（spec: goal-freeze / goal-report）。 */
+    freeze: FreezeView | null;
   };
   rules: ReportRule[];
   hasTimeType: boolean;
@@ -782,9 +800,12 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
   const status = deriveStatus(db, today, goal);
   if (status === 'upcoming') throw new GoalReportNotReadyError();
   const completed = status === 'completed';
-  const dayCount = dayDiff(goal.start_day, goal.end_day) + 1;
+  const endDay = effectiveEndDayOf(db, goal, today);
+  const dayCount = dayDiff(goal.start_day, endDay) + 1;
   // 事実が確定している日数（＝未到来でない日）。完走後は全日。
   const elapsedDays = completed ? dayCount : Math.min(dayCount, dayDiff(goal.start_day, today) + 1);
+  const freezeIntervals = goalFreezeIntervals(db, goal.id);
+  const frozenOn = (dayKey: string): boolean => freezeIntervals.some((iv) => dayKey >= iv.startDay && dayKey <= iv.endDay);
 
   const rules = linkedRules(db, id);
   const ruleChanges = rules.length
@@ -816,11 +837,12 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
   const dayKeys: string[] = [];
   for (let i = 0; i < dayCount; i++) dayKeys.push(addDaysKey(goal.start_day, i));
 
-  // 各日の per_condition_results（rule:<id> または legacy_condition_key で解決）。
+  // 各日の per_condition_results（rule:<id> または legacy_condition_key で解決）。凍結延長ぶんの
+  // 末尾日（実効 end_day まで）も含める（凍結で追加された日は通常どおり評価される実日のため）。
   const evalByDay = new Map<string, ConditionResult[]>();
   for (const row of db
     .prepare('SELECT day_key, per_condition_results FROM unlock_evaluation WHERE day_key BETWEEN ? AND ?')
-    .all(goal.start_day, goal.end_day) as { day_key: string; per_condition_results: string }[]) {
+    .all(goal.start_day, endDay) as { day_key: string; per_condition_results: string }[]) {
     try {
       evalByDay.set(row.day_key, JSON.parse(row.per_condition_results) as ConditionResult[]);
     } catch {
@@ -828,20 +850,23 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
     }
   }
 
-  // ① ルールごとの M日カレンダー（欠測・キー不在は未達成／未到来は空白／対象外期間は inactive）。
+  // ① ルールごとの M日カレンダー（欠測・キー不在は未達成／未到来は空白／対象外期間は inactive／凍結日は frozen）。
   const reportRules: ReportRule[] = rules.map((r) => {
     const cells: ReportDayCell[] = dayKeys.map((dk, i) => {
       const future = dk > today;
-      const inactive = !future && !wasActiveOn(r, dk);
-      const entry = future || inactive ? undefined : resolveByStableOrLegacy(evalByDay.get(dk) ?? [], r);
+      const frozen = !future && frozenOn(dk);
+      const inactive = !future && !frozen && !wasActiveOn(r, dk);
+      const skip = future || inactive || frozen;
+      const entry = skip ? undefined : resolveByStableOrLegacy(evalByDay.get(dk) ?? [], r);
       return {
         dayKey: dk,
         dayNumber: i + 1,
-        met: !future && !inactive && entry?.met === true,
-        actualSeconds: future || inactive ? null : (entry?.actualSeconds ?? null),
-        thresholdSeconds: future || inactive ? null : (entry?.thresholdSeconds ?? null),
+        met: !skip && entry?.met === true,
+        actualSeconds: skip ? null : (entry?.actualSeconds ?? null),
+        thresholdSeconds: skip ? null : (entry?.thresholdSeconds ?? null),
         future,
         inactive,
+        frozen,
       };
     });
     return {
@@ -854,17 +879,18 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
     };
   });
 
-  // ヘッダ達成日数 = その日ゲートにあった（inactive でない）ルールが1つ以上あり、全て met の日数。
+  // ヘッダ達成日数 = その日ゲートにあった（inactive でも frozen でもない）ルールが1つ以上あり、全て met の日数。
+  // 凍結日は分母にも分子にも入らない（design: goal-freeze D7）。
   let achievedDays = 0;
   for (let i = 0; i < elapsedDays; i++) {
-    const applicable = reportRules.filter((r) => !r.cells[i]!.inactive);
+    const applicable = reportRules.filter((r) => !r.cells[i]!.inactive && !r.cells[i]!.frozen);
     if (applicable.length > 0 && applicable.every((r) => r.cells[i]!.met)) achievedDays++;
   }
 
   // ② 時間型ルールの閾値変更マーカー（②時間推移グラフの注釈・design D2）。写真/質問ルールの
   // 追加・削除など一般のルール操作履歴は⑤沿革が読み手（ここでは二重に載せない）。
   const reportRuleChanges: ReportRuleChange[] = ruleChanges
-    .filter((c) => c.day_key >= goal.start_day && c.day_key <= goal.end_day && c.op === 'update')
+    .filter((c) => c.day_key >= goal.start_day && c.day_key <= endDay && c.op === 'update')
     .filter((c) => {
       const rule = rules.find((r) => r.id === c.rule_id);
       return rule && TIME_TARGETS.has(rule.target);
@@ -938,7 +964,7 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
       name: goal.name,
       purpose: goal.purpose,
       startDay: goal.start_day,
-      endDay: goal.end_day,
+      endDay,
       dayCount,
       achievedDays,
       status,
@@ -950,6 +976,7 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
       lifecycleChoice: goal.lifecycle_choice,
       lifecycleReason: goal.lifecycle_reason,
       continuedGoalId: goal.continued_goal_id,
+      freeze: getFreezeOn(db, goal.id, today),
     },
     rules: reportRules,
     hasTimeType: reportRules.some((r) => r.isTimeType),

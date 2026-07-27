@@ -15,6 +15,9 @@ import {
   DEMO_GOAL2_ID,
   DEMO_START_DAY,
   DEMO_END_DAY,
+  DEMO_EFFECTIVE_END_DAY,
+  DEMO_FREEZE_START_DAY,
+  DEMO_FREEZE_END_DAY,
   DEMO_PRE_START_DAY,
   DEMO_AFTER_END_DAY,
   DEMO_GOAL2_START_DAY,
@@ -81,22 +84,29 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_START_DAY)).goal.status).toBe('active');
 
     const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-    // ヘッダ: 達成 24/30。
-    expect(rep.goal.dayCount).toBe(30);
-    expect(rep.goal.achievedDays).toBe(24);
-    // ① 永続ルール4つ（総作業 / 振り返り / 明日タスク / 筋トレ手動チェック）＋⑤沿革の写真/質問ルール4つ・各30マス。
+    // ヘッダ: 達成 26/32（Day11-12 の一時凍結ぶん実効 end_day が2日延び、凍結2日は分母から抜ける
+    // ・延長された Day31-32 は全達成・spec: goal-freeze / goal-report）。
+    expect(rep.goal.dayCount).toBe(32);
+    expect(rep.goal.achievedDays).toBe(26);
+    expect(rep.goal.endDay).toBe(DEMO_EFFECTIVE_END_DAY);
+    // ① 永続ルール4つ（総作業 / 振り返り / 明日タスク / 筋トレ手動チェック）＋⑤沿革の写真/質問ルール4つ・各32マス。
     expect(rep.rules.length).toBe(8);
-    for (const p of rep.rules) expect(p.cells.length).toBe(30);
+    for (const p of rep.rules) expect(p.cells.length).toBe(32);
     // 手動チェックルール（筋トレ）が非時間型として乗る。
     const kin = rep.rules.find((p) => p.conditionKey === `rule:${RULE_KIN_ID}`)!;
     expect(kin).toBeDefined();
     expect(kin.target).toBe('MANUAL_CHECK');
     expect(kin.isTimeType).toBe(false);
     expect(kin.label).toBe('筋トレ');
-    // 谷の一部（Day11,12,16）で未達成、それ以外は達成。達成日数 24/30 は維持。
-    expect(kin.cells[10]!.met).toBe(false); // Day11
+    // Day11-12 は凍結（対象外）、Day16 は凍結していない谷で未達成、それ以外は達成。
+    expect(kin.cells[10]!.met).toBe(false); // Day11（凍結）
+    expect(kin.cells[10]!.frozen).toBe(true);
+    expect(kin.cells[11]!.frozen).toBe(true); // Day12（凍結）
     expect(kin.cells[0]!.met).toBe(true); // Day1
+    expect(kin.cells[0]!.frozen).toBe(false);
     expect(kin.cells[29]!.met).toBe(true); // Day30
+    expect(kin.cells[30]!.met).toBe(true); // Day31（凍結延長ぶん）
+    expect(kin.cells[31]!.met).toBe(true); // Day32（凍結延長ぶん）
     // ② 時間型（総作業）あり＋Day13 の閾値変更（4h→3h・理由つき）。
     expect(rep.hasTimeType).toBe(true);
     expect(rep.ruleChanges.length).toBe(1);
@@ -104,8 +114,8 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(rep.ruleChanges[0]!.before).toEqual({ thresholdSeconds: 14400 });
     expect(rep.ruleChanges[0]!.after).toEqual({ thresholdSeconds: 10800 });
     expect(rep.ruleChanges[0]!.reason).toContain('課題週間');
-    // ③④ 30日ぶんの日記が全て埋まっている（Before/After 含む）。
-    expect(rep.days.length).toBe(30);
+    // ③④ 32日ぶんの日記が全て埋まっている（Before/After＋凍結延長の Day31-32 含む）。
+    expect(rep.days.length).toBe(32);
     expect(rep.days.every((d) => d.source === 'journal' && d.text.trim().length > 0)).toBe(true);
     expect(rep.days[0]!.text).toContain('はじめて');
     expect(rep.days[29]!.text).toContain('30日を終えて');
@@ -114,12 +124,39 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
   it('中盤の谷（未達成日）が存在し、後半は持ち直す', () => {
     const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
     const total = rep.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
-    // Day11（谷）は総作業未達成、Day30（後半）は達成。
-    expect(total.cells[10]!.met).toBe(false); // Day11
+    // Day11（凍結・対象外）は総作業も未達成扱いにならず frozen、Day30（後半）は達成。
+    expect(total.cells[10]!.met).toBe(false); // Day11（凍結）
+    expect(total.cells[10]!.frozen).toBe(true);
     expect(total.cells[29]!.met).toBe(true); // Day30
     // 閾値の引き下げが時系列に反映（Day1 は 4h、Day30 は 3h 基準）。
     expect(total.cells[0]!.thresholdSeconds).toBe(14400);
     expect(total.cells[29]!.thresholdSeconds).toBe(10800);
+  });
+
+  describe('一時凍結のサンプル（spec: goal-freeze・issue #60）', () => {
+    it('目標の実効 end_day が凍結2日ぶん延びる', () => {
+      const g = listGoals(db, vnow(DEMO_AFTER_END_DAY)).find((x) => x.id === DEMO_GOAL_ID)!;
+      expect(g.endDay).toBe(DEMO_EFFECTIVE_END_DAY);
+      expect(g.dayCount).toBe(32);
+      expect(g.freeze).not.toBeNull();
+      expect(g.freeze!.state).toBe('released');
+      expect(g.freeze!.startDay).toBe(DEMO_FREEZE_START_DAY);
+      expect(g.freeze!.endDay).toBe(DEMO_FREEZE_END_DAY);
+    });
+
+    it('凍結中の仮想日付では目標カードに凍結中と出る', () => {
+      const g = listGoals(db, vnow(DEMO_FREEZE_START_DAY)).find((x) => x.id === DEMO_GOAL_ID)!;
+      expect(g.status).toBe('active');
+      expect(g.freeze!.state).toBe('frozen');
+    });
+
+    it('沿革に予約・発効が理由つきで残る', () => {
+      const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
+      const freezes = rep.chronicle.freezes;
+      expect(freezes.map((f) => f.kind)).toEqual(['reserve', 'activate']);
+      expect(freezes[0]!.reason).toContain('差し込み案件');
+      expect(freezes[1]!.startDay).toBe(DEMO_FREEZE_START_DAY);
+    });
   });
 
   it('日記は日付単位で引ける（getJournal）', () => {
@@ -208,9 +245,9 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
       expect(rep.reportImages.filter((i) => i.caption === '朝の机')).toHaveLength(1);
     });
 
-    it('沿革の写真/質問ルールは①にも乗るが、達成日数 24/30 の筋書きは崩れない（谷日にサボりを寄せてある）', () => {
+    it('沿革の写真/質問ルールは①にも乗るが、達成日数の筋書きは崩れない（谷日に凍結・サボりを寄せてある）', () => {
       const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-      expect(rep.goal.achievedDays).toBe(24);
+      expect(rep.goal.achievedDays).toBe(26);
       // 沿革専用の写真/質問ルールも goal_rule で紐づくため①の行に乗る（4つの永続ルール＋4つの沿革ルール）。
       expect(rep.rules).toHaveLength(8);
     });

@@ -90,6 +90,9 @@ function goalCard(g, root) {
   if (g.status === 'active') meta.appendChild(h('span', { class: 'badge accent', text: `Day ${g.dayNumber}/${g.dayCount}` }));
   else if (g.status === 'upcoming') meta.appendChild(h('span', { class: 'badge', text: `${g.startDay} 開始` }));
   else meta.appendChild(h('span', { class: 'badge ok', text: '完走' }));
+  // 一時凍結の状態（凍結中・予約中）を badge で示す（spec: goal-freeze）。
+  if (g.freeze && g.freeze.state === 'frozen') meta.appendChild(h('span', { class: 'badge gf-badge', text: '❄ 凍結中' }));
+  else if (g.freeze && g.freeze.state === 'reserved') meta.appendChild(h('span', { class: 'badge gf-badge', text: '凍結予約中' }));
 
   const head = h('div', { class: 'row' },
     h('h3', { text: g.name }),
@@ -310,14 +313,16 @@ async function renderReport(root, goalId) {
 
   // ヘッダ。進行中は「完走」ではなく現在の Day を出す（まだ途中の姿であることを一目で伝える）。
   const running = rep.goal.status === 'active';
+  const frozenNow = rep.goal.freeze && rep.goal.freeze.state === 'frozen';
   page.appendChild(h('header', { class: 'gr-header' },
-    h('div', { class: 'gr-eyebrow', text: running ? `Day ${rep.goal.dayNumber}/${rep.goal.dayCount}` : '完走' }),
+    h('div', { class: 'gr-eyebrow', text: running ? `Day ${rep.goal.dayNumber}/${rep.goal.dayCount}` : '完走' },
+      frozenNow ? h('span', { class: 'badge gf-badge', style: { marginLeft: '8px' }, text: '❄ 凍結中' }) : null),
     h('h1', { class: 'gr-h1', text: rep.goal.name }),
     rep.goal.purpose ? h('p', { class: 'gr-purpose-line', text: rep.goal.purpose }) : null,
     h('div', { class: 'gr-header-meta' },
       h('span', { text: `${rep.goal.startDay} 〜 ${rep.goal.endDay}` }),
       h('span', { class: 'gr-dot', text: '·' }),
-      // 進行中の達成日数は「その時点まで」の事実（分母は現時点までの日数）。
+      // 進行中の達成日数は「その時点まで」の事実（分母は現時点までの日数。凍結日は分母にも分子にも入らない）。
       h('span', { class: 'gr-achieved', text: running
         ? `達成 ${rep.goal.achievedDays}/${rep.goal.elapsedDays}（現時点）`
         : `達成 ${rep.goal.achievedDays}/${rep.goal.dayCount}` }),
@@ -406,17 +411,57 @@ function blockLifecycleFork(rep, root) {
 function blockChronicle(rep, imgBase) {
   const card = grCard('⑤ 沿革');
   const entries = (rep.chronicle && rep.chronicle.entries) || [];
-  if (!entries.length) {
+  const freezes = (rep.chronicle && rep.chronicle.freezes) || [];
+  if (!entries.length && !freezes.length) {
     card.appendChild(h('p', { class: 'gr-empty', text: 'まだルールの変更はありません。振り返りタブの目標コーナーでルールを足すと、ここに積み上がります。' }));
     return card;
   }
+  // ルール操作と一時凍結イベントを sortKey で安定併合する（design: goal-freeze D6）。
+  const merged = [
+    ...entries.map((e) => ({ sortKey: e.sortKey, el: chronicleEntry(e, imgBase) })),
+    ...freezes.map((f) => ({ sortKey: f.sortKey, el: freezeEntryEl(f) })),
+  ].sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
   const list = h('div', { class: 'gr-chr' });
-  for (const e of entries) list.appendChild(chronicleEntry(e, imgBase));
+  for (const m of merged) list.appendChild(m.el);
   if (rep.chronicle.endedNote) {
     list.appendChild(chronicleEndedNote(rep, rep.chronicle.endedNote));
   }
   card.appendChild(list);
   return card;
+}
+
+/** b - a の日数差＋1（凍結解除の「凍結 N 日」表示用。b が a より前なら 0）。 */
+function freezeDayCount(startDay, endDay) {
+  if (!startDay || !endDay || endDay < startDay) return 0;
+  const toUtc = (k) => { const [y, m, d] = k.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+  return Math.round((toUtc(endDay) - toUtc(startDay)) / 86400000) + 1;
+}
+
+const FREEZE_KIND_LABEL = {
+  reserve: '凍結を予約',
+  cancel: '凍結の予約を取消',
+  activate: '凍結が発効',
+  extend: '凍結を延長',
+  release: '凍結を解除',
+};
+
+/**
+ * 一時凍結イベント1件を沿革の1エントリとして組む（spec: goal-chronicle / goal-freeze）。
+ * 合否・スコアに相当する語や演出は使わない（起きた事実と理由だけを静かに示す）。
+ */
+function freezeEntryEl(f) {
+  const dateCol = h('div', { class: 'gr-chr-date' },
+    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
+    h('div', { class: 'gr-chr-day-num', text: String(f.dayNumber) }),
+    h('div', { class: 'gr-chr-date-sub', text: shortDay(f.dayKey) }),
+  );
+  let text = FREEZE_KIND_LABEL[f.kind] || f.kind;
+  if (f.kind === 'reserve' || f.kind === 'activate') text += `（${shortDay(f.startDay)}〜${shortDay(f.afterEndDay)}）`;
+  else if (f.kind === 'extend') text += `（${shortDay(f.beforeEndDay)} → ${shortDay(f.afterEndDay)}）`;
+  else if (f.kind === 'release') text += `（凍結 ${freezeDayCount(f.startDay, f.afterEndDay)} 日）`;
+  const stmt = h('p', { class: 'gr-chr-stmt', text: `❄ ${text}` });
+  if (f.reason) stmt.appendChild(h('span', { class: 'gr-chr-reason', text: f.reason }));
+  return h('article', { class: 'gr-chr-entry gr-chr-freeze' }, dateCol, h('div', { class: 'gr-chr-main' }, stmt));
 }
 
 /** update 操作の変更前後を短い一文へ（閾値・グループ差し替え・スケジュール変更）。 */
@@ -525,15 +570,17 @@ function blockCalendar(rep, rs) {
 
   // ルールごとの行。未到来（future）は空白マスにする＝走行中プレビューで残りを黒星で埋めない。
   // 対象外（inactive・開始前／削除後）も同様に空白マスにする（design: goal-report）。
+  // 凍結（frozen）は対象外の一種だが、開始前・削除後とは見分けがつく見た目で描く（spec: goal-report）。
   for (const p of rep.rules) {
     grid.appendChild(h('div', { class: 'gr-cal-label', text: `${ruleKindIcon(p.target)} ${ruleNiceLabel(p.target, p.label)}`, title: p.label }));
     for (const cell of p.cells) {
       const blank = cell.future || cell.inactive;
-      const kind = blank ? 'future' : cell.met ? 'done' : 'miss';
+      const kind = cell.frozen ? 'frozen' : blank ? 'future' : cell.met ? 'done' : 'miss';
+      const label = cell.frozen ? '凍結中（対象外）' : blank ? 'まだ来ていない／対象外' : cell.met ? 'やった' : 'やってない';
       const el = h('button', {
         class: `gr-cell ${kind}`,
         type: 'button',
-        title: `Day ${cell.dayNumber}: ${blank ? 'まだ来ていない／対象外' : cell.met ? 'やった' : 'やってない'}`,
+        title: `Day ${cell.dayNumber}: ${label}`,
       });
       el.addEventListener('click', () => rs.renderReader(cell.dayNumber));
       if (!rs.cellsByDay.has(cell.dayNumber)) rs.cellsByDay.set(cell.dayNumber, []);
@@ -550,6 +597,8 @@ function blockCalendar(rep, rs) {
   // 未到来・対象外が1マスでもあるときだけ凡例に足す。完走レポートの凡例は従来どおり2値。
   if (rep.rules.some((p) => p.cells.some((c) => c.future || c.inactive)))
     legend.appendChild(h('span', {}, h('span', { class: 'gr-cell future gr-legend-swatch' }), 'まだ来ていない／対象外'));
+  if (rep.rules.some((p) => p.cells.some((c) => c.frozen)))
+    legend.appendChild(h('span', {}, h('span', { class: 'gr-cell frozen gr-legend-swatch' }), '凍結（対象外）'));
   card.appendChild(legend);
   return card;
 }

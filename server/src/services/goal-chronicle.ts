@@ -1,6 +1,6 @@
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
-import type { Chronicle, ChronicleEntry, RuleAnswer, RuleChangeEntry } from '@track/contract';
+import type { Chronicle, ChronicleEntry, FreezeEntry, FreezeEntryKind, RuleAnswer, RuleChangeEntry } from '@track/contract';
 import { dayKeyFor } from '../aggregation/index.js';
 import { GoalNotFoundError } from './goal-errors.js';
 import { dayDiff } from './day-key.js';
@@ -46,6 +46,75 @@ function dayNumberOf(startDay: string, dayKey: string): number {
   return dayDiff(startDay, dayKey) + 1;
 }
 
+interface FreezeChangeRow {
+  id: number;
+  goal_id: number;
+  day_key: string;
+  op: 'reserve' | 'cancel' | 'extend' | 'release';
+  start_day: string;
+  before_end_day: string | null;
+  after_end_day: string | null;
+  reason: string | null;
+  created_at: number;
+}
+interface GoalFreezeLiveRow {
+  id: number;
+  start_day: string;
+  end_day: string;
+  created_at: number;
+}
+
+/** `dayKey → createdAt → id` の三段で決定的に並べる（design: goal-freeze D6）。 */
+function buildSortKey(dayKey: string, createdAt: number, id: number): string {
+  return `${dayKey}|${String(createdAt).padStart(20, '0')}|${String(id).padStart(10, '0')}`;
+}
+
+/**
+ * 目標の凍結イベント（予約・取消・延長・解除は `goal_freeze_change` のログをそのまま読み、
+ * `activate`（発効）だけはログに書かず生きている `goal_freeze` の `start_day` から合成する
+ * （cron が無いので「発効した瞬間に書く」ことができない・design D6）。
+ */
+function freezeEntriesFor(db: DB, goalId: number, startDay: string, untilDayKey?: string): FreezeEntry[] {
+  const entries: FreezeEntry[] = [];
+
+  const changes = db
+    .prepare('SELECT * FROM goal_freeze_change WHERE goal_id = ? ORDER BY day_key, id')
+    .all(goalId) as FreezeChangeRow[];
+  for (const c of changes) {
+    if (untilDayKey && c.day_key > untilDayKey) continue;
+    entries.push({
+      kind: c.op as FreezeEntryKind,
+      dayKey: c.day_key,
+      dayNumber: dayNumberOf(startDay, c.day_key),
+      startDay: c.start_day,
+      beforeEndDay: c.before_end_day,
+      afterEndDay: c.after_end_day,
+      reason: c.reason,
+      sortKey: buildSortKey(c.day_key, c.created_at, c.id),
+    });
+  }
+
+  const liveRows = db
+    .prepare('SELECT id, start_day, end_day, created_at FROM goal_freeze WHERE goal_id = ? ORDER BY id')
+    .all(goalId) as GoalFreezeLiveRow[];
+  for (const row of liveRows) {
+    if (untilDayKey && row.start_day > untilDayKey) continue;
+    entries.push({
+      kind: 'activate',
+      dayKey: row.start_day,
+      dayNumber: dayNumberOf(startDay, row.start_day),
+      startDay: row.start_day,
+      beforeEndDay: null,
+      afterEndDay: row.end_day,
+      reason: null,
+      sortKey: buildSortKey(row.start_day, row.created_at, row.id),
+    });
+  }
+
+  entries.sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
+  return entries;
+}
+
 /** goal.lifecycle_decided_at（epoch ms）を day_key へ解決する（app_config の tz/day_boundary 準拠）。 */
 function endedDayKey(db: DB, goal: GoalRow): string {
   const cfg = getConfig(db);
@@ -79,6 +148,10 @@ function toChangeEntry(r: RuleChangeRow, startDay: string, untilDayKey?: string)
     reason: r.reason,
     createdAt: r.created_at,
   };
+}
+
+function entrySortKey(change: RuleChangeEntry): string {
+  return buildSortKey(change.dayKey, change.createdAt, change.id);
 }
 
 function toAnswer(r: RuleAnswerRow, startDay: string): RuleAnswer {
@@ -142,9 +215,11 @@ export function getChronicle(db: DB, goalId: number, untilDayKey?: string): Chro
               .filter((a) => !untilDayKey || a.day_key <= untilDayKey)
               .map((a) => toAnswer(a, goal.start_day))
           : [];
-      entries.push({ ruleId: r.rule_id, target, label: ruleLabel(db, rule), change, answers });
+      entries.push({ ruleId: r.rule_id, target, label: ruleLabel(db, rule), change, answers, sortKey: entrySortKey(change) });
     }
   }
+
+  const freezes = freezeEntriesFor(db, goalId, goal.start_day, untilDayKey);
 
   const endedNote =
     goal.lifecycle_choice === 'ended' && goal.lifecycle_reason && goal.lifecycle_reason.trim()
@@ -154,5 +229,5 @@ export function getChronicle(db: DB, goalId: number, untilDayKey?: string): Chro
         }
       : null;
 
-  return { goalId, entries, endedNote };
+  return { goalId, entries, freezes, endedNote };
 }

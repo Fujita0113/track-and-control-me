@@ -34,6 +34,15 @@ import {
   type NewGoalRuleInput,
   type GoalStart,
 } from '../services/goals.js';
+import {
+  reserveFreeze,
+  updateFreeze,
+  cancelFreeze,
+  releaseFreeze,
+  freezeQuota,
+  FreezeValidationError,
+  FreezeStateError,
+} from '../services/goal-freeze.js';
 import { getChronicle } from '../services/goal-chronicle.js';
 import {
   RuleNotFoundError,
@@ -79,7 +88,8 @@ function replyGoalError(err: unknown, reply: { code: (n: number) => void }): Rec
     err instanceof RuleImmutableFieldError ||
     err instanceof GoalLifecycleError ||
     err instanceof GoalDeleteWindowError ||
-    err instanceof JournalNotWritableError
+    err instanceof JournalNotWritableError ||
+    err instanceof FreezeStateError
   ) {
     reply.code(409);
     return { error: err.message };
@@ -93,7 +103,8 @@ function replyGoalError(err: unknown, reply: { code: (n: number) => void }): Rec
     err instanceof ReasonRequiredError ||
     err instanceof RuleValidationError ||
     err instanceof JournalImageError ||
-    err instanceof RuleAnswerError
+    err instanceof RuleAnswerError ||
+    err instanceof FreezeValidationError
   ) {
     reply.code(400);
     return { error: err.message };
@@ -174,6 +185,49 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     }
   });
 
+  // --- 一時凍結（spec: goal-freeze）-----------------------------------------
+  // 静的パス /api/goals/freeze/quota は /api/goals/:id 系と衝突しない（find-my-way は静的優先）。
+
+  app.get('/api/goals/freeze/quota', async () => freezeQuota(db));
+
+  app.post('/api/goals/:id/freeze', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const b = (req.body ?? {}) as { endDay?: string; reason?: string };
+    try {
+      return reserveFreeze(db, id, { endDay: b.endDay ?? '', reason: b.reason ?? '' });
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  app.patch('/api/goals/:id/freeze', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const b = (req.body ?? {}) as { endDay?: string; reason?: string };
+    try {
+      return updateFreeze(db, id, { endDay: b.endDay ?? '', reason: b.reason ?? '' });
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  app.delete('/api/goals/:id/freeze', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return { canceled: cancelFreeze(db, id) };
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  app.post('/api/goals/:id/freeze/release', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return releaseFreeze(db, id);
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
   // --- 目標コーナーのルール CRUD（今日タブの書き込み動線は無い・spec: editable-rule-registry）---
 
   app.post('/api/goals/:id/rules', async (req, reply) => {
@@ -213,7 +267,7 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
   app.get('/api/goals/:id/chronicle', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     try {
-      return getChronicle(db, id);
+      return getChronicle(db, id, todayKey(db, Date.now()));
     } catch (err) {
       return replyGoalError(err, reply);
     }

@@ -287,6 +287,9 @@ export type RuleAnswer = z.infer<typeof RuleAnswerSchema>;
 /**
  * 沿革1件＝ルール操作とその理由。写真ルール・質問ルールの `op='add'` エントリには、
  * そのルールの答え合わせ全件がぶら下がる（design: goal-chronicle）。
+ *
+ * `sortKey`（`dayKey` → `createdAt` → `id` の三段）は、目標の凍結イベント（`FreezeEntry`）と
+ * 同じ時系列へ安定的に併合するための決定的な並び順キー（design: goal-freeze D6）。
  */
 export const ChronicleEntrySchema = z.object({
   ruleId: z.number().int(),
@@ -294,6 +297,7 @@ export const ChronicleEntrySchema = z.object({
   label: z.string(),
   change: RuleChangeSchema,
   answers: z.array(RuleAnswerSchema),
+  sortKey: z.string(),
 });
 export type ChronicleEntry = z.infer<typeof ChronicleEntrySchema>;
 
@@ -303,13 +307,69 @@ export const ChronicleEndedNoteSchema = z.object({
   dayNumber: z.number().int(),
 });
 
-/** 沿革（⑤）＝ルール操作の年表（`day_key` 昇順・同日内は記録順）。日記は含めない。 */
+/** 目標の一時凍結イベント種別（spec: goal-freeze）。`activate`（発効）はログではなく導出して合成される。 */
+export const FreezeEntryKindSchema = z.enum(['reserve', 'cancel', 'activate', 'extend', 'release']);
+export type FreezeEntryKind = z.infer<typeof FreezeEntryKindSchema>;
+
+/**
+ * 沿革1件＝目標の凍結イベント（予約・取消・発効・延長・解除・design: goal-freeze D4・D6）。
+ * 理由テキストがあるのは `reserve`/`extend` のみ（`cancel`/`activate`/`release` は null）。
+ */
+export const FreezeEntrySchema = z.object({
+  kind: FreezeEntryKindSchema,
+  dayKey: DayKeySchema,
+  dayNumber: z.number().int(),
+  startDay: DayKeySchema,
+  beforeEndDay: DayKeySchema.nullable(),
+  afterEndDay: DayKeySchema.nullable(),
+  reason: z.string().nullable(),
+  sortKey: z.string(),
+});
+export type FreezeEntry = z.infer<typeof FreezeEntrySchema>;
+
+/** 沿革（⑤）＝ルール操作＋目標の凍結イベントの年表（`sortKey` 昇順）。日記は含めない。 */
 export const ChronicleSchema = z.object({
   goalId: z.number().int(),
   entries: z.array(ChronicleEntrySchema),
+  freezes: z.array(FreezeEntrySchema),
   endedNote: ChronicleEndedNoteSchema.nullable(),
 });
 export type Chronicle = z.infer<typeof ChronicleSchema>;
+
+/** 目標の一時凍結の状態（予約中/凍結中/解凍済み）（spec: goal-freeze D1）。 */
+export const FreezeStateSchema = z.enum(['reserved', 'frozen', 'released']);
+export type FreezeState = z.infer<typeof FreezeStateSchema>;
+
+/** 目標の現在の凍結（`GoalView.freeze`）。一度も凍結したことが無ければ null（server 側で表現）。 */
+export const FreezeViewSchema = z.object({
+  id: z.number().int(),
+  goalId: z.number().int(),
+  startDay: DayKeySchema,
+  endDay: DayKeySchema,
+  reason: z.string(),
+  state: FreezeStateSchema,
+});
+export type FreezeView = z.infer<typeof FreezeViewSchema>;
+
+/** 凍結の月枠（アプリ全体で月1回・design: goal-freeze D4）。 */
+export const FreezeQuotaSchema = z.object({
+  month: z.string(),
+  used: z.boolean(),
+  goalId: z.number().int().nullable(),
+  goalName: z.string().nullable(),
+  startDay: DayKeySchema.nullable(),
+  endDay: DayKeySchema.nullable(),
+  /** 枠が回復する月（YYYY-MM）。 */
+  recoversOn: z.string(),
+});
+export type FreezeQuota = z.infer<typeof FreezeQuotaSchema>;
+
+/** 凍結の予約・延長の入力（`endDay`・理由必須）。 */
+export const FreezeInputSchema = z.object({
+  endDay: DayKeySchema,
+  reason: NonEmptyText,
+});
+export type FreezeInput = z.infer<typeof FreezeInputSchema>;
 
 // --- 今日の不足ルール（今日タブ・初回トースト）------------------------------
 

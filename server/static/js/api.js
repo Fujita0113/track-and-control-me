@@ -104,6 +104,13 @@ export const api = {
   // ⑤沿革（ルール操作の年表。日記は含まない）
   getGoalChronicle: (id) => req('GET', `/api/goals/${id}/chronicle`),
 
+  // 一時凍結（spec: goal-freeze）
+  reserveGoalFreeze: (goalId, { endDay, reason }) => req('POST', `/api/goals/${goalId}/freeze`, { endDay, reason }),
+  updateGoalFreeze: (goalId, { endDay, reason }) => req('PATCH', `/api/goals/${goalId}/freeze`, { endDay, reason }),
+  cancelGoalFreeze: (goalId) => req('DELETE', `/api/goals/${goalId}/freeze`),
+  releaseGoalFreeze: (goalId) => req('POST', `/api/goals/${goalId}/freeze/release`),
+  getFreezeQuota: () => req('GET', '/api/goals/freeze/quota'),
+
   // 目標日記の画像添付（バイナリ表示は URL 直指定: /api/goals/:id/journal/images/:imageId）
   listGoalJournalImages: (id, date) => req('GET', `/api/goals/${id}/journal/${date}/images`),
   addGoalJournalImage: (id, date, { dataUrl, caption }) =>
@@ -131,7 +138,8 @@ export const api = {
     today: (now) => req('GET', `/api/demo/today?${q({ now })}`),
     allocation: (date) => req('GET', `/api/demo/timeline/${date}/allocation`),
     dueRules: (now) => req('GET', `/api/demo/due-rules?${q({ now })}`),
-    chronicle: (id) => req('GET', `/api/demo/goals/${id}/chronicle`),
+    chronicle: (id, now) => req('GET', `/api/demo/goals/${id}/chronicle?${q({ now })}`),
+    freezeQuota: (now) => req('GET', `/api/demo/goals/freeze/quota?${q({ now })}`),
     // now = 呼び出し側が渡す state.demo.virtualDay（api.js は state.js を import しない設計のため明示で受け取る）。
     addGoalRule: (goalId, input, now) => req('POST', `/api/demo/goals/${goalId}/rules`, { ...input, now }),
     updateGoalRule: (goalId, ruleId, input, now) => req('PATCH', `/api/demo/goals/${goalId}/rules/${ruleId}`, { ...input, now }),

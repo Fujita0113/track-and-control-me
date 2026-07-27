@@ -1221,4 +1221,38 @@ DROP TABLE IF EXISTS practice_threshold_change;
       }
     },
   },
+  {
+    version: 24,
+    name: 'goal-freeze',
+    // 目標の一時凍結（spec: goal-freeze・issue #60）。凍結の状態（予約中/凍結中/解凍済み）は保存せず
+    // `start_day`/`end_day` と対象日から都度導出する（design D1）。`goal_freeze` は生きている凍結
+    // （取消で削除・解除は end_day 切り詰め）、`goal_freeze_change` は追記専用の事実ログで、
+    // `goal_freeze` へ FK を張らない（行が消えても沿革は残る・design D4）。
+    sql: /* sql */ `
+CREATE TABLE goal_freeze (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  start_day TEXT NOT NULL,
+  end_day TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_goal_freeze_goal ON goal_freeze(goal_id, id);
+CREATE INDEX idx_goal_freeze_start ON goal_freeze(start_day);
+
+CREATE TABLE goal_freeze_change (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER NOT NULL,
+  day_key TEXT NOT NULL,
+  op TEXT NOT NULL,
+  start_day TEXT NOT NULL,
+  before_end_day TEXT,
+  after_end_day TEXT,
+  reason TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_goal_freeze_change_goal ON goal_freeze_change(goal_id, day_key, id);
+`,
+  },
 ];

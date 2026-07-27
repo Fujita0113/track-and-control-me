@@ -176,6 +176,8 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
 .badge.warn { background: var(--warn-weak); color: var(--warn); }
 .badge.err { background: var(--err-weak); color: var(--err); }
 .badge.accent { background: var(--accent-weak); color: var(--accent); }
+/* 一時凍結の状態バッジ（目標カード・レポートヘッダ共通・spec: goal-freeze）。 */
+.badge.gf-badge { background: #e3edf7; color: #2f5f8f; }
 .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
 
 /* --- Lists / tables --- */
@@ -986,6 +988,11 @@ body.rf-page .content { max-width: none; }
 /* 未到来（day_key > today）＝空白。走行中プレビューで残り日数を未達成マスで埋めないための3値目。
    「欠測＝未達成（.miss の塗り）」と視覚的に取り違えないよう、塗らず薄い破線の枠だけにする。 */
 .gr-cell.future { background: transparent; border: 1px dashed #d7dde6; cursor: default; }
+/* 凍結（対象外）＝開始前・削除後の対象外（.future の破線）とは見分けがつく塗り分け（spec: goal-report）。 */
+.gr-cell.frozen {
+  background-image: repeating-linear-gradient(45deg, #cfe0f2 0 3px, #e9f1fa 3px 6px);
+  border: 1px solid #b9d2ea; cursor: default;
+}
 .gr-cell.sel { outline: 2px solid #26303f; outline-offset: 1px; }
 .gr-legend { display: flex; gap: 18px; margin-top: 14px; font-size: 12px; color: #6b7686; }
 .gr-legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -1131,6 +1138,18 @@ body.rf-page .content { max-width: none; }
 .demobar-btn.ghost { color: var(--muted); border-color: var(--line); }
 .demobar-btn.ghost:hover { background: var(--panel-2); color: var(--text); }
 
+/* --- 一時凍結ブロック（振り返りタブの目標コーナー・spec: goal-freeze）------- */
+.gf-block { margin: 10px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2, #fafbfd); }
+.gf-block.gf-frozen { border-color: #b9d2ea; background: #eef4fb; }
+.gf-block.gf-readonly { opacity: .9; }
+.gf-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.gf-title { font-size: 13px; font-weight: 700; color: #46505f; }
+.gf-quota { margin: 0; font-size: 12px; }
+.gf-form { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.gf-rules-collapse { margin: 10px 0 14px; }
+.gf-rules-collapse summary { cursor: pointer; font-size: 12.5px; color: var(--muted); padding: 4px 0; }
+.gf-rules-collapse .pc-block { margin-top: 6px; }
+
 /* --- Plan / Check（振り返りタブの目標コーナー・spec: goal-plan-check）------- */
 .pc-block { margin: 10px 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2, #fafbfd); }
 .pc-head { display: flex; align-items: baseline; gap: 8px; }
@@ -1177,7 +1196,13 @@ body.rf-page .content { max-width: none; }
 
 /* --- 今日タブ: Check の不足条件行（spec: goal-check-gate）------------------- */
 .cond-check .cond-sub { color: var(--muted-2); font-size: 12px; }
-.cond-check .cond-plan { margin-top: 2px; }
+/* 長期目標 → ルール → 回答のツリー表示（issue #70）。
+   DOM順は既存 e2e 互換のため変えず（状態行が `.cond-sub` の1件目）、
+   `order` で目標名（.cond-plan）だけを視覚的に先頭へ出し、ルール・回答は1段インデントする。 */
+.cond-check .cond-main { display: flex; flex-direction: column; }
+.cond-check .cond-plan { order: -1; font-weight: 600; }
+.cond-check .cond-title.cond-nested,
+.cond-check .cond-sub.cond-nested { padding-left: 14px; }
 .cond-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .cond-btn { font-size: 12.5px; padding: 4px 10px; cursor: pointer; }
 .cond-file { display: none; }
@@ -1213,6 +1238,9 @@ body.rf-page .content { max-width: none; }
 }
 .gr-chr-stmt { margin: 0; max-width: 30em; font-size: 16.5px; line-height: 1.95; letter-spacing: .02em; color: var(--text); }
 .gr-chr-entry.off .gr-chr-stmt { color: var(--muted); }
+/* 一時凍結イベント（予約/取消/発効/延長/解除）。ルール操作と同じ年表に並ぶが起点の色だけ変える
+   （合否・スコアに相当する演出は付けない・spec: goal-chronicle / goal-freeze）。 */
+.gr-chr-freeze .gr-chr-main::before { background: #6f9bc9; }
 .gr-chr-reason { display: block; margin-top: 11px; font-size: 13px; line-height: 1.75; color: var(--muted); }
 
 /* 証拠（写真／問い）：細罫の見出し＋内容 */

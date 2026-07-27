@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { openDb, getConfig, type DB } from '../db/index.js';
 import { registerApiRoutes } from './index.js';
 import { resetDemoDb } from '../services/demo-db.js';
+import { DEMO_AFTER_END_DAY } from '../services/demo-seed.js';
 
 /**
  * ガードレール受け入れ（tasks 5.3 / spec: 本番非干渉）。
@@ -13,7 +14,7 @@ import { resetDemoDb } from '../services/demo-db.js';
 
 const REVEAL_DATE = '2026-07-15';
 const DEMO_ACHIEVED_DAY = '2026-06-16'; // Day6（全条件 met = 解錠済み）
-const DEMO_COMPLETED_DAY = '2026-07-11'; // end + 1（完走）
+const DEMO_COMPLETED_DAY = DEMO_AFTER_END_DAY; // 実効 end + 1（完走・一時凍結ぶんの延長を含む）
 
 let app: FastifyInstance;
 let db: DB;

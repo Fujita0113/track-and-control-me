@@ -199,3 +199,79 @@ describe('PHOTO 単発ルールの繰り越し', () => {
     expect(after.perCondition.find((c) => c.ruleId === rule.id)).toBeUndefined();
   });
 });
+
+describe('QUESTION 達成後の回答テキスト（issue #70）', () => {
+  it('達成した質問ルールの ConditionResult に当日の answer_text が入る', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '燃えないゴミの日いつ？',
+      startDay: DAY,
+      endDay: DAY,
+      reason: 'r',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(rule.id, DAY, '木曜日', jst(2026, 7, 20, 9, 0));
+
+    const result = evaluateDay(db, DAY, jst(2026, 7, 20, 9, 30));
+    const cond = result.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond.met).toBe(true);
+    expect(cond.answerText).toBe('木曜日');
+  });
+
+  it('未達の質問ルールは answerText を持たない', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '燃えないゴミの日いつ？',
+      startDay: DAY,
+      endDay: DAY,
+      reason: 'r',
+    });
+
+    const result = evaluateDay(db, DAY, jst(2026, 7, 20, 9, 30));
+    const cond = result.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond.met).toBe(false);
+    expect(cond.answerText).toBeUndefined();
+  });
+
+  it('範囲ルールで前日回答済みでも、当日の answerText には前日分が出ない', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '今日の調子は？',
+      startDay: '2026-07-14',
+      endDay: '2026-07-20',
+      reason: 'r',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(rule.id, '2026-07-14', '木曜日', jst(2026, 7, 14, 9, 0));
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(rule.id, '2026-07-15', '金曜日', jst(2026, 7, 15, 9, 0));
+
+    const day15 = evaluateDay(db, '2026-07-15', jst(2026, 7, 15, 9, 30));
+    const cond15 = day15.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond15.met).toBe(true);
+    expect(cond15.answerText).toBe('金曜日');
+  });
+
+  // 単発ルールは carry ポリシー（提出日以降ずっと met）なので、提出日を過ぎても
+  // answerText が「回答済み」フォールバックへ落ちてはならない（apply 中に見つけた繰り越し時の抜け）。
+  it('単発ルールは提出日の翌日以降も同じ answerText を保つ（繰り越し）', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '前髪・正面はどう変わった？',
+      startDay: '2026-07-18',
+      endDay: '2026-07-18',
+      reason: 'r',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(rule.id, '2026-07-25', 'ボリュームが出た', jst(2026, 7, 25, 9, 30));
+
+    const next = evaluateDay(db, '2026-07-26', jst(2026, 7, 26, 9, 0));
+    const cond = next.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond.met).toBe(true);
+    expect(cond.answerText).toBe('ボリュームが出た');
+  });
+});

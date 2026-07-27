@@ -1,6 +1,7 @@
 import type { DB } from '../db/index.js';
 import { todayKey } from './summary.js';
 import { dayDiff } from './day-key.js';
+import { frozenGoalIdsOn } from './goal-freeze.js';
 
 /**
  * 解錠ルールの第一級レジストリ（spec: editable-rule-registry / design.md D1・D3・D4）。
@@ -301,12 +302,32 @@ export function isRuleActiveOn(
   return dayKey <= rule.end_day;
 }
 
-/** dayKey に「有効」＝実効ゲートへ合流するルール（design D3）。 */
+/** ルールに紐づく目標 id の一覧（design D6・M:N を前提に正しく書く）。 */
+function ruleGoalIds(db: DB, ruleId: number): number[] {
+  return (db.prepare('SELECT goal_id FROM goal_rule WHERE rule_id = ?').all(ruleId) as { goal_id: number }[]).map(
+    (r) => r.goal_id,
+  );
+}
+
+/**
+ * dayKey に凍結中の目標にだけ紐づくルールか（spec: goal-check-gate / design D3）。
+ * 紐づく目標が**すべて**凍結中のときにのみ true（1つでも凍結中でない目標に紐づけば false）。
+ * 紐づく目標が無い（想定外）ときは除外しない。
+ */
+function isFullyFrozen(db: DB, ruleId: number, frozenGoalIds: Set<number>): boolean {
+  const goalIds = ruleGoalIds(db, ruleId);
+  return goalIds.length > 0 && goalIds.every((id) => frozenGoalIds.has(id));
+}
+
+/** dayKey に「有効」＝実効ゲートへ合流するルール（design D3）。凍結中の目標のルールは除く。 */
 export function listActiveRules(db: DB, dayKey: string): RuleRow[] {
   const candidates = db
     .prepare(`SELECT * FROM rule WHERE status = 'active' AND start_day <= ? ORDER BY id`)
     .all(dayKey) as RuleRow[];
-  return candidates.filter((r) => isRuleActiveOn(r, dayKey));
+  const active = candidates.filter((r) => isRuleActiveOn(r, dayKey));
+  const frozenGoalIds = frozenGoalIdsOn(db, dayKey);
+  if (frozenGoalIds.size === 0) return active;
+  return active.filter((r) => !isFullyFrozen(db, r.id, frozenGoalIds));
 }
 
 export function listAllRules(db: DB): RuleRow[] {

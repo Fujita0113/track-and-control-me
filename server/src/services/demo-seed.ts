@@ -14,10 +14,22 @@ import { resolveIdentity, renameIdentity } from './group-identity.js';
 
 // --- 固定期間（design-brief）--------------------------------------------------
 export const DEMO_START_DAY = '2026-06-11'; // Day1
-export const DEMO_END_DAY = '2026-07-10'; // Day30（start + 29）
+export const DEMO_END_DAY = '2026-07-10'; // Day30（凍結前の素の終了日・start + 29）
 export const DEMO_PRE_START_DAY = addDaysKey(DEMO_START_DAY, -1); // 開始前（start − 1）
-export const DEMO_AFTER_END_DAY = addDaysKey(DEMO_END_DAY, 1); // 完走（end + 1）
 export const DEMO_GOAL_ID = 1; // 主目標・空 DB への最初の挿入なので rowid=1。
+
+// --- 一時凍結サンプル（既存の谷 Day11-12 に重ねる・spec: goal-freeze / design D10）------------
+// Day11-12 の谷（作業・計画・振り返りが崩れる）を「急な差し込み案件」による一時凍結として説明する。
+// 凍結日は達成日数の分母から抜けるため、既存の谷日へ重ねれば達成日数の期待値は変わらないか
+// 増える方向にしか動かない（プロジェクト必須ルール: 日数が関わる機能はデモモードで成果を明示）。
+const DEMO_FREEZE_RESERVE_DAY = addDaysKey(DEMO_START_DAY, 9); // Day10 に予約（翌日発効）＝2026-06-20
+export const DEMO_FREEZE_START_DAY = addDaysKey(DEMO_START_DAY, 10); // Day11 発効＝2026-06-21
+export const DEMO_FREEZE_END_DAY = addDaysKey(DEMO_START_DAY, 11); // Day12 まで＝2026-06-22
+const DEMO_FREEZE_DAYS = 2; // 経過凍結日数（Day11-12 の2日）。実効 end_day はこの分だけ後ろへ延びる。
+const DEMO_FREEZE_REASON = '急な差し込み案件（納期の迫った大型リリース対応）に数日ぶん全振りする必要が出た。';
+/** 凍結ぶん延長された実効 end_day（Day31-32 が追加される・design: goal-freeze D2）。 */
+export const DEMO_EFFECTIVE_END_DAY = addDaysKey(DEMO_END_DAY, DEMO_FREEZE_DAYS); // 2026-07-12
+export const DEMO_AFTER_END_DAY = addDaysKey(DEMO_EFFECTIVE_END_DAY, 1); // 完走（実効 end + 1）
 
 const GOAL_DAYS = 30;
 const GOAL_NAME = 'メンタルを安定させる';
@@ -343,9 +355,17 @@ export function seedDemo(db: DB): void {
        VALUES (?, ?, ?, ?, ?)`,
     );
 
-    for (let i = 0; i < GOAL_DAYS; i++) {
+    // Day31-32 は凍結（Day11-12）ぶんの延長で追加される日。谷を抜けた後の続きとして全達成にする
+    // （凍結は既存の谷に重ねてあるため、達成日数の期待値は変わらないか増える方向にしか動かない）。
+    const TAIL_PLAN: DayPlan = { workMin: 245, refl: true, tmr: true };
+    const TAIL_JOURNAL: Record<number, string> = {
+      31: '凍結が明けた。差し込み案件は思ったより早く片付いた。作業を再開する。',
+      32: '凍結分を含めても、ペースは落ちていない。谷を「無かったこと」にできるのは、地味に助かる。',
+    };
+
+    for (let i = 0; i < GOAL_DAYS + DEMO_FREEZE_DAYS; i++) {
       const dayKey = addDaysKey(DEMO_START_DAY, i);
-      const plan = PLAN[i]!;
+      const plan = PLAN[i] ?? TAIL_PLAN;
       const threshold = i + 1 >= THRESH_CHANGE_DAY ? THRESH_LOW : THRESH_HIGH;
       const workSec = plan.workMin * 60;
       const metTotal = workSec >= threshold;
@@ -364,11 +384,25 @@ export function seedDemo(db: DB): void {
       // 焼き込む（レポート①が欠測=未達成として誤判定しないよう・resolveByStableOrLegacy が読む列）。
       const dayNum = i + 1;
       if (dayNum >= 14) per.push({ conditionKey: rk(RULE_PHOTO_MORNING_ID), target: 'PHOTO', met: true, label: '朝の机' }); // 単発・D14 提出以降ずっと met
-      if (dayNum >= 15) per.push({ conditionKey: rk(RULE_QUESTION_FOCUS_ID), target: 'QUESTION', met: true, label: '前倒しで集中は変わったか' }); // 単発・D15 提出以降ずっと met
+      // 単発（carry）: D15 提出以降ずっと met で、今日タブは「回答済み」ではなく回答文面を出す（issue #70）。
+      if (dayNum >= 15)
+        per.push({
+          conditionKey: rk(RULE_QUESTION_FOCUS_ID), target: 'QUESTION', met: true, label: '前倒しで集中は変わったか',
+          answerText: '朝は入りが速い。前夜に眠れないと崩れる。',
+        });
       if (dayNum >= 14 && dayNum <= 20)
         per.push({ conditionKey: rk(RULE_PHOTO_SKY_ID), target: 'PHOTO', met: ![16, 20].includes(dayNum), label: 'その日の空' }); // 範囲・サボりは既存の谷日のみ
-      if (dayNum >= 21 && dayNum <= 22)
-        per.push({ conditionKey: rk(RULE_QUESTION_PHONE_ID), target: 'QUESTION', met: true, label: 'スマホを見ずに寝られたか' }); // 削除(D23)前の2日は met
+      // 範囲（daily）: 前日の回答が翌日に漏れないよう、日ごとに実際にその日提出した回答文面を出す（issue #70）。
+      if (dayNum === 21)
+        per.push({
+          conditionKey: rk(RULE_QUESTION_PHONE_ID), target: 'QUESTION', met: true, label: 'スマホを見ずに寝られたか',
+          answerText: '見ずに寝られた。朝の目覚めは軽い。',
+        });
+      if (dayNum === 22)
+        per.push({
+          conditionKey: rk(RULE_QUESTION_PHONE_ID), target: 'QUESTION', met: true, label: 'スマホを見ずに寝られたか',
+          answerText: 'ベッドで30分見てしまった。手の届く場所にあるのが因。',
+        });
       insEval.run({
         day: dayKey,
         status: allMet ? 'UNLOCKED' : 'LOCKED',
@@ -384,9 +418,21 @@ export function seedDemo(db: DB): void {
       insTotals.run({ day: dayKey, group: 'demo-study', ms: studyMs, now: SEED_TS });
       insTotals.run({ day: dayKey, group: 'demo-make', ms: makeMs, now: SEED_TS });
 
-      // 目標日記（30日ぶん）。
-      insJournal.run(DEMO_GOAL_ID, dayKey, JOURNAL[i] ?? '', SEED_TS, SEED_TS);
+      // 目標日記（30日ぶん＋凍結延長の Day31-32）。
+      insJournal.run(DEMO_GOAL_ID, dayKey, JOURNAL[i] ?? TAIL_JOURNAL[i + 1] ?? '', SEED_TS, SEED_TS);
     }
+
+    // 一時凍結の予約（Day10 に予約・翌日 Day11 発効・design: goal-freeze D10）。
+    // 生きている凍結（goal_freeze）と、事実のログ（goal_freeze_change・op='reserve'）を両方置く。
+    // 'activate'（発効）はログに書かず、この生きている行から都度合成される（design D6）。
+    db.prepare(
+      `INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(DEMO_GOAL_ID, DEMO_FREEZE_START_DAY, DEMO_FREEZE_END_DAY, DEMO_FREEZE_REASON, SEED_TS, SEED_TS);
+    db.prepare(
+      `INSERT INTO goal_freeze_change (goal_id, day_key, op, start_day, before_end_day, after_end_day, reason, created_at)
+       VALUES (?, ?, 'reserve', ?, NULL, ?, ?, ?)`,
+    ).run(DEMO_GOAL_ID, DEMO_FREEZE_RESERVE_DAY, DEMO_FREEZE_START_DAY, DEMO_FREEZE_END_DAY, DEMO_FREEZE_REASON, SEED_TS);
 
     // サンプル画像（③④の見え方確認用・design D8）。
     // 「作業スペース」= 初日/中間/最終日の3枚（③デフォルトは初日↔最終日、全比較は3枚）、

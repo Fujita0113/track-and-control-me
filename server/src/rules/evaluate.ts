@@ -7,6 +7,7 @@ import {
   ruleConditionKey,
   ruleSchedule,
   isRuleMetOn,
+  carryoverPolicy,
   rangeDayNumber,
   rangeSpanDays,
   type RuleRow,
@@ -51,6 +52,8 @@ export interface ConditionResult {
   /** このルールを追う目標（紐づく最初の1件・design D6）。無ければグローバル扱い。 */
   goalId?: number;
   goalName?: string;
+  /** QUESTION が met のとき、当日 dayKey の回答文面（issue #70・今日タブの達成後表示用）。 */
+  answerText?: string;
 }
 
 export interface EvalResult {
@@ -90,6 +93,25 @@ function answerDayKeysFor(db: DB, ruleId: number): string[] {
   return (
     db.prepare('SELECT day_key FROM rule_answer WHERE rule_id = ?').all(ruleId) as { day_key: string }[]
   ).map((r) => r.day_key);
+}
+
+/**
+ * QUESTION の達成後表示用の回答文面（issue #70）。carryoverPolicy と対にする:
+ *   daily（範囲・永続） … dayKey ちょうどの回答のみ（前日の回答が翌日に漏れない）
+ *   carry（単発） … 提出日が dayKey 以前ならその回答（met と同じ「提出日以降ずっと」の考え方に揃える。
+ *     単発は答えられる day_key が実質1つだけなので、ここも1件を返す）
+ */
+function answerTextForDay(db: DB, ruleId: number, schedule: RuleSchedule, dayKey: string): string | undefined {
+  const policy = carryoverPolicy('QUESTION', schedule);
+  const row =
+    policy === 'carry'
+      ? (db
+          .prepare('SELECT answer_text FROM rule_answer WHERE rule_id = ? AND day_key <= ? ORDER BY day_key LIMIT 1')
+          .get(ruleId, dayKey) as { answer_text: string | null } | undefined)
+      : (db
+          .prepare('SELECT answer_text FROM rule_answer WHERE rule_id = ? AND day_key = ?')
+          .get(ruleId, dayKey) as { answer_text: string | null } | undefined);
+  return row?.answer_text ?? undefined;
 }
 
 function evaluateRule(db: DB, rule: RuleRow, dayKey: string, totalWorkSeconds: number): ConditionResult {
@@ -180,12 +202,14 @@ function evaluateRule(db: DB, rule: RuleRow, dayKey: string, totalWorkSeconds: n
     case 'PHOTO':
     case 'QUESTION': {
       const answerDayKeys = answerDayKeysFor(db, rule.id);
+      const met = isRuleMetOn(rule.target, schedule, answerDayKeys, dayKey);
       return {
         ...base,
         label: rule.target === 'PHOTO' ? rule.caption : rule.question_text,
-        met: isRuleMetOn(rule.target, schedule, answerDayKeys, dayKey),
+        met,
         rangeDayNumber: rangeDayNumber(rule.start_day, rule.end_day, dayKey),
         spanDays: rangeSpanDays(rule.start_day, rule.end_day),
+        answerText: rule.target === 'QUESTION' && met ? answerTextForDay(db, rule.id, schedule, dayKey) : undefined,
       };
     }
   }

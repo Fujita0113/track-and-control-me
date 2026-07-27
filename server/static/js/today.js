@@ -118,7 +118,7 @@ async function renderGate(region) {
     h('div', { class: 'lock-icon', text: unlocked ? '🔓' : '🔒' }),
     h('div', { class: 'lock-text' },
       h('div', { class: 'st', text: unlocked ? 'UNLOCKED — 達成済み' : 'LOCKED — 未達成' }),
-      h('div', { class: 'sub', text: unlock.hasRuleSet ? `${date} のルールを評価` : `${date} のルール未設定 (達成不能)` }),
+      h('div', { class: 'sub', text: unlock.hasRuleSet ? `${date} のルールを評価` : `${date} は有効なルールがありません。振り返りタブの目標コーナーで新しいルールか目標を作ると、その日から解錠できます。` }),
     ),
   ));
 
@@ -249,16 +249,24 @@ function ruleAnswerRow(c, date) {
 
   // 状態の一言。範囲ルールは「7/18〜7/24 の1日目」と、その日が期間の何日目かまで出す
   // （各日が独立して要求される仕様なので、「何日目の分か」が分からないと意味が取れない）。
-  const status = met ? (c.target === 'PHOTO' ? '提出済み' : '回答済み') : c.target === 'PHOTO' ? '写真がまだ' : '未回答';
+  // 質問ルールが達成された行は「回答済み」ではなく実際の回答テキストを出す（issue #70）。
+  // answerText が無い場合（データ欠落時）のみ従来どおり「回答済み」にフォールバックする。
+  const status = met
+    ? (c.target === 'PHOTO' ? '提出済み' : (c.answerText || '回答済み'))
+    : (c.target === 'PHOTO' ? '写真がまだ' : '未回答');
   let when = '';
   if (c.schedule === 'range' && c.rangeDayNumber) {
     when = `（${shortDay(c.startDay)}〜${shortDay(c.endDay)} の${c.rangeDayNumber}日目）`;
   }
 
+  // issue #70 のコメントを受け、見た目の並びを「長期目標 → ルール → 回答」のツリー状にする
+  // （旧: タイトル→状態→└目標名の順だと、目標名が末尾で埋もれて見づらかった）。
+  // DOM の子要素順は変えず（既存 e2e が `.cond-sub` の1件目=状態行を前提にしている）、
+  // CSS の order で目標名だけを視覚的に先頭へ出す（.cond-plan は既存 e2e が参照するクラス名）。
   const main = h('div', { class: 'cond-main' },
-    h('div', { class: 'cond-title', text: `${icon} ${c.label || ''}` }),
-    h('div', { class: 'cond-sub', text: `${status}${when}` }),
-    c.goalName ? h('div', { class: 'cond-sub cond-plan', text: `└ ${c.goalName}` }) : null,
+    h('div', { class: `cond-title ${c.goalName ? 'cond-nested' : ''}`, text: `${c.goalName ? '└ ' : ''}${icon} ${c.label || ''}` }),
+    h('div', { class: `cond-sub ${c.goalName ? 'cond-nested' : ''}`, text: `${status}${when}` }),
+    c.goalName ? h('div', { class: 'cond-sub cond-plan', text: `長期目標：${c.goalName}` }) : null,
   );
   row.appendChild(main);
   row.appendChild(h('span', { class: `mark ${met ? 'yes' : 'no'}`, text: met ? '✓' : '✗' }));

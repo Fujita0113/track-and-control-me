@@ -10,6 +10,7 @@ import { createMarkdownEditor } from './md-editor.js';
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
 import { buildGoalRulesBlock } from './rule-form.js';
+import { buildFreezeBlock, isFrozenNow, buildFreezeReadOnly } from './goal-freeze.js';
 import { shrinkImage, isImageFile } from './images.js';
 import * as timeline from './timeline.js';
 import * as planView from './tomorrow-plan.js';
@@ -119,6 +120,9 @@ async function showDemo(root) {
   ));
   let fullGoal = g;
   try { fullGoal = await api.demo.goal(g.id, vd); } catch { /* noop: 取得失敗時はメタのみで続行 */ }
+  // 一時凍結は閲覧専用で表示する（操作導線は出さない・spec: goal-freeze / demo-mode）。
+  const quota = await api.demo.freezeQuota(vd).catch(() => null);
+  wrap.appendChild(buildFreezeReadOnly(fullGoal, quota));
   wrap.appendChild(buildGoalRulesBlock(fullGoal, vd, null));
 }
 
@@ -403,7 +407,7 @@ async function setActiveDate(d) {
 }
 
 /** 目標の日記コーナー（見出し + ライブ Markdown エディタ + 画像ゾーン）。本文保存は振り返りと同じ動線に相乗り。 */
-function journalCorner(goal, content, date) {
+function journalCorner(goal, content, date, quota) {
   const entry = { goalId: goal.id, dirty: false, editor: null };
   const ph = h('div', { class: 'rf-ph', text: `${goal.name} の今日の記録。Markdown で自由にどうぞ。` });
   const editor = createMarkdownEditor({
@@ -424,11 +428,22 @@ function journalCorner(goal, content, date) {
       h('span', { class: 'rf-journal-tag', text: `Day ${goal.dayNumber}/${goal.dayCount}` }),
     ),
   );
-  // ルール一覧＋追加・変更・削除を日記の**上**に置く。ルール操作はこのブロック内で即時保存し、
-  // 日記本文の dirty/flush には相乗りしない（spec: editable-rule-registry）。
-  // 対象日が今日のときだけ出す（過去日を遡ってルールを足すことはできない）。
-  // デモは閲覧専用なので作成導線を出さない（spec: demo-mode）。
-  if (date === state.today && !isDemo()) corner.appendChild(buildGoalRulesBlock(goal, date, null));
+  // 一時凍結ブロック＋ルール一覧＋追加・変更・削除を日記の**上**に置く（spec: goal-freeze /
+  // editable-rule-registry）。対象日が今日のときだけ出す（過去日を遡って操作することはできない）。
+  // デモは閲覧専用なので作成・凍結の操作導線を出さない（spec: demo-mode）。
+  if (date === state.today && !isDemo()) {
+    const onFreezeChanged = async () => { await loadJournals(date); };
+    corner.appendChild(buildFreezeBlock(goal, quota, onFreezeChanged));
+    // 凍結中はルール操作ブロックを畳む（カード自体・日記・画像は残す・spec: goal-freeze）。
+    if (isFrozenNow(goal)) {
+      corner.appendChild(h('details', { class: 'gf-rules-collapse' },
+        h('summary', { text: 'ルール（凍結中は編集できません）' }),
+        buildGoalRulesBlock(goal, date, null),
+      ));
+    } else {
+      corner.appendChild(buildGoalRulesBlock(goal, date, null));
+    }
+  }
   // 日記エディタは今までどおりその下に。
   corner.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, editor.el));
   // 画像ゾーン（追加導線＋サムネイル一覧）。画像操作は本文の dirty/flush と独立（reflection_done 非汚染）。
@@ -553,13 +568,22 @@ async function loadJournals(date) {
   if (!ctx) return;
   clear(ctx.journalsHost);
   ctx.journals = [];
+  // 対象日が今日なら目標一覧を取り直す（凍結の予約/延長/解除で status/freeze/endDay が変わるため）。
+  if (date === state.today && !isDemo()) {
+    ctx.activeGoals = (await api.getGoals().catch(() => ctx.activeGoals)).filter((g) => g.status === 'active');
+  }
   const goals = (ctx.activeGoals || []).filter((g) => g.startDay <= date && date <= g.endDay);
   if (!goals.length) return;
   ctx.journalsHost.appendChild(h('h2', { class: 'rf-journal-h2', text: '目標の日記' }));
+  // 月枠はアプリ全体で1つ（すべての目標カードに表示・spec: goal-freeze）。1回だけ取得して使い回す。
+  let quota = null;
+  if (date === state.today && !isDemo()) {
+    quota = await api.getFreezeQuota().catch(() => null);
+  }
   for (const g of goals) {
     let content = '';
     try { const r = await api.getGoalJournal(g.id, date); content = r.content || ''; } catch { /* noop */ }
-    ctx.journalsHost.appendChild(journalCorner(g, content, date));
+    ctx.journalsHost.appendChild(journalCorner(g, content, date, quota));
   }
 }
 

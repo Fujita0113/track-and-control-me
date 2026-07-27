@@ -26,6 +26,7 @@ import {
   RuleValidationError,
 } from '../services/rule-registry.js';
 import { getChronicle } from '../services/goal-chronicle.js';
+import { freezeQuota } from '../services/goal-freeze.js';
 import { daySummary } from '../services/summary.js';
 import { getDayAllocation } from '../services/day-allocation.js';
 import { getDemoDb, resetDemoDb } from '../services/demo-db.js';
@@ -99,12 +100,13 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
     }
   });
 
-  // GET /api/demo/goals/:id/chronicle — ⑤沿革（デモ DB・読み取り専用）。
+  // GET /api/demo/goals/:id/chronicle?now=<dayKey> — ⑤沿革（デモ DB・読み取り専用）。
   app.get('/api/demo/goals/:id/chronicle', async (req, reply) => {
     const db = getDemoDb();
     const id = Number((req.params as { id: string }).id);
+    const now = resolveNow((req.query as { now?: string }).now);
     try {
-      return getChronicle(db, id);
+      return getChronicle(db, id, now);
     } catch (err) {
       if (err instanceof GoalNotFoundError) {
         reply.code(404);
@@ -112,6 +114,13 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
       }
       throw err;
     }
+  });
+
+  // GET /api/demo/goals/freeze/quota?now=<dayKey> — 凍結の月枠（読み取り専用・操作導線は出さない）。
+  app.get('/api/demo/goals/freeze/quota', async (req) => {
+    const db = getDemoDb();
+    const now = resolveNow((req.query as { now?: string }).now);
+    return freezeQuota(db, virtualNowMs(db, now));
   });
 
   // GET /api/demo/goals/:id/report?now=<dayKey> — 完走レポート4ブロック。

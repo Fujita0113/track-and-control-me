@@ -1,0 +1,5 @@
+{
+  "agent": "gemini",
+  "project": "track-and-control-me",
+  "customizationRoot": ".agents"
+}

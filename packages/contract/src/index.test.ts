@@ -196,6 +196,7 @@ describe('沿革の round-trip', () => {
         answers: [
           { id: 100, ruleId: 10, dayKey: '2026-07-18', dayNumber: 6, imageId: 5, answerText: null, createdAt: 1_770_000_000_000 },
         ],
+        sortKey: '2026-07-15|00000001770000000000|0000000001',
       },
       {
         ruleId: 11,
@@ -213,8 +214,10 @@ describe('沿革の round-trip', () => {
           createdAt: 1_770_000_000_000,
         },
         answers: [],
+        sortKey: '2026-07-20|00000001770000000000|0000000002',
       },
     ],
+    freezes: [],
     endedNote: null,
   };
 
