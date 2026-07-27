@@ -1,7 +1,7 @@
 // 一時凍結の UI 部品（spec: goal-freeze・issue #60）。
 import { h, toast } from './util.js';
 import { api } from './api.js';
-import { shortDay } from './rule-form.js';
+import { shortDay, ruleDisplayLabel, ruleKindIcon } from './rule-form.js';
 
 /** 月枠の状態を一言で（spec: goal-freeze）。 */
 function quotaLine(quota, goalId) {
@@ -96,10 +96,22 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
       else selectedGoalIds.delete(g.id);
     });
 
-    const rulesText = (g.rules || []).map((r) => r.label || r.target).filter(Boolean).join(', ');
-    const rulesEl = rulesText
-      ? h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' }, text: `ルール: ${rulesText}` })
-      : h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' }, text: 'ルール: （登録ルールなし）' });
+    const rules = g.rules || [];
+    let rulesEl;
+    if (rules.length > 0) {
+      const listItems = rules.map((r) => {
+        const icon = ruleKindIcon(r.target);
+        const labelText = ruleDisplayLabel(r);
+        const text = icon ? `${icon} ${labelText}` : labelText;
+        return h('li', { text });
+      });
+      rulesEl = h('ul', {
+        class: 'muted',
+        style: { margin: '4px 0 0 18px', padding: '0', fontSize: '12px', lineHeight: '1.4' },
+      }, ...listItems);
+    } else {
+      rulesEl = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' }, text: 'ルール: （登録ルールなし）' });
+    }
 
     const item = h('label', {
       class: 'list-row inline',
