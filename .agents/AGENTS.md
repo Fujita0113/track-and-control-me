@@ -65,8 +65,10 @@ stash 側が通ってしまったら、その spec は今回の変更につい�
 判断がつかないときの答えは**「変更しない」**。赤いまま残して見せるほうが、
 書き換えて緑にするより安全。
 
-## opsx:archive では必ず delta spec を sync する（必須・確認不要）
+## opsx:archive では必ず delta spec を sync し、git commit も行う（必須・確認不要）
 
-`/opsx:archive`（OpenSpec 変更のアーカイブ）を行うときは、delta spec が存在すれば
-**常にメインスペック（`openspec/specs/<capability>/spec.md`）へ sync してからアーカイブする**こと。
-sync するかどうかをユーザーに質問してはならない（デフォルト＝必ず sync）。
+`/opsx:archive`（OpenSpec 変更のアーカイブ）を行うときは:
+1. delta spec が存在すれば**常にメインスペック（`openspec/specs/<capability>/spec.md`）へ sync してからアーカイブする**こと。
+2. アーカイブ完了後、変更分（メインスペックの更新およびアーカイブディレクトリへの移動）を **git commit（メッセージ例: `docs: archive <change-name> change and sync specs`）までセットで行う**こと。
+
+sync や commit を行うかどうかをユーザーに質問してはならない（デフォルト＝必ず実行）。
