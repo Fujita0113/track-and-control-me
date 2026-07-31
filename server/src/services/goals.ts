@@ -11,6 +11,8 @@ import {
   listActiveRules,
   ruleConditionKey,
   ruleSchedule,
+  ruleAnswerDayKeys,
+  isCarryStale,
   carryoverPolicy,
   isRuleMetOn,
   rangeDayNumber,
@@ -213,16 +215,23 @@ export interface GoalRuleView {
   questionText: string | null;
   /** 壊れたルール（GROUP で identity 未解決）。task 7.3「⚠ 参照が壊れています」。 */
   needsReset: boolean;
+  /** 提出済みの単発ルールを表示上隠すフラグ（issue #73 / 凍結モーダル用）。 */
+  carryStale: boolean;
 }
 
-function toRuleView(db: DB, rule: RuleRow): GoalRuleView {
+function toRuleView(db: DB, rule: RuleRow, today: string): GoalRuleView {
   const needsReset = rule.target === 'GROUP' && resolveGroupDisplay(db, rule).needsReset;
+  const schedule = ruleSchedule(rule.start_day, rule.end_day);
+  const carryStale =
+    (rule.target === 'PHOTO' || rule.target === 'QUESTION') && schedule === 'single'
+      ? isCarryStale(rule.target, schedule, ruleAnswerDayKeys(db, rule.id), today)
+      : false;
   return {
     ruleId: rule.id,
     conditionKey: ruleConditionKey(rule.id),
     target: rule.target,
     label: ruleLabel(db, rule),
-    schedule: ruleSchedule(rule.start_day, rule.end_day),
+    schedule,
     startDay: rule.start_day,
     endDay: rule.end_day,
     thresholdSeconds: rule.threshold_seconds,
@@ -232,6 +241,7 @@ function toRuleView(db: DB, rule: RuleRow): GoalRuleView {
     caption: rule.caption,
     questionText: rule.question_text,
     needsReset,
+    carryStale,
   };
 }
 
@@ -278,7 +288,7 @@ function toGoalView(db: DB, row: GoalRow, today: string, _nowMs: number): GoalVi
     canDelete: dayKeyOf(db, row.created_at) === today,
     rules: linkedRules(db, row.id)
       .filter((r) => r.status === 'active')
-      .map((r) => toRuleView(db, r)),
+      .map((r) => toRuleView(db, r, today)),
     showLifecycleFork: status === 'completed' && row.lifecycle_choice === null,
     lifecycleChoice: row.lifecycle_choice,
     lifecycleReason: row.lifecycle_reason,

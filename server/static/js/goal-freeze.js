@@ -96,7 +96,8 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
       else selectedGoalIds.delete(g.id);
     });
 
-    const rules = g.rules || [];
+    const rawRules = g.rules || [];
+    const rules = rawRules.filter((r) => !r.carryStale);
     let rulesEl;
     if (rules.length > 0) {
       const listItems = rules.map((r) => {
@@ -109,6 +110,8 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
         class: 'muted',
         style: { margin: '4px 0 0 18px', padding: '0', fontSize: '12px', lineHeight: '1.4' },
       }, ...listItems);
+    } else if (rawRules.length > 0) {
+      rulesEl = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' }, text: 'ルール: （達成済み単発ルールのみ）' });
     } else {
       rulesEl = h('div', { class: 'muted', style: { fontSize: '12px', marginTop: '2px' }, text: 'ルール: （登録ルールなし）' });
     }

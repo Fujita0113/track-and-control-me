@@ -383,12 +383,23 @@ export function seedDemo(db: DB): void {
       // ⑤沿革サンプルの写真/質問ルール（Day14〜 に発効）も、有効な日は per_condition_results へ
       // 焼き込む（レポート①が欠測=未達成として誤判定しないよう・resolveByStableOrLegacy が読む列）。
       const dayNum = i + 1;
-      if (dayNum >= 14) per.push({ conditionKey: rk(RULE_PHOTO_MORNING_ID), target: 'PHOTO', met: true, label: '朝の机' }); // 単発・D14 提出以降ずっと met
+      if (dayNum >= 14)
+        per.push({
+          conditionKey: rk(RULE_PHOTO_MORNING_ID),
+          target: 'PHOTO',
+          met: true,
+          label: '朝の机',
+          ...(dayNum > 14 ? { carryStale: true } : {}),
+        }); // 単発・D14 提出以降ずっと met（D15 以降は carryStale=true）
       // 単発（carry）: D15 提出以降ずっと met で、今日タブは「回答済み」ではなく回答文面を出す（issue #70）。
       if (dayNum >= 15)
         per.push({
-          conditionKey: rk(RULE_QUESTION_FOCUS_ID), target: 'QUESTION', met: true, label: '前倒しで集中は変わったか',
+          conditionKey: rk(RULE_QUESTION_FOCUS_ID),
+          target: 'QUESTION',
+          met: true,
+          label: '前倒しで集中は変わったか',
           answerText: '朝は入りが速い。前夜に眠れないと崩れる。',
+          ...(dayNum > 15 ? { carryStale: true } : {}),
         });
       if (dayNum >= 14 && dayNum <= 20)
         per.push({ conditionKey: rk(RULE_PHOTO_SKY_ID), target: 'PHOTO', met: ![16, 20].includes(dayNum), label: 'その日の空' }); // 範囲・サボりは既存の谷日のみ

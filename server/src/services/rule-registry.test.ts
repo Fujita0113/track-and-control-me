@@ -12,6 +12,8 @@ import {
   rangeSpanDays,
   ruleSchedule,
   carryoverPolicy,
+  isCarryStale,
+  ruleAnswerDayKeys,
   resolveByStableOrLegacy,
   ReasonRequiredError,
   RuleValidationError,
@@ -323,6 +325,58 @@ describe('isRuleActiveOn / isRuleMetOn / rangeDayNumber', () => {
     });
     const ids = listActiveRules(db, '2026-07-25').map((r) => r.id);
     expect(ids).toContain(rule.id);
+  });
+});
+
+describe('isCarryStale (issue #73: 達成済み単発ルールの表示除外)', () => {
+  it('単発が提出日を過ぎて met のときのみ true', () => {
+    expect(isCarryStale('PHOTO', 'single', ['2026-07-18'], '2026-07-25')).toBe(true);
+    expect(isCarryStale('QUESTION', 'single', ['2026-07-18'], '2026-07-25')).toBe(true);
+  });
+
+  it('提出した当日は false（当日は表示され続ける）', () => {
+    expect(isCarryStale('PHOTO', 'single', ['2026-07-18'], '2026-07-18')).toBe(false);
+  });
+
+  it('未提出（met=false）のときは false', () => {
+    expect(isCarryStale('PHOTO', 'single', [], '2026-07-25')).toBe(false);
+  });
+
+  it('範囲・永続（carryoverPolicy!=="carry"）は met でも常に false', () => {
+    expect(isCarryStale('QUESTION', 'range', ['2026-07-18'], '2026-07-25')).toBe(false);
+    expect(isCarryStale('PHOTO', 'permanent', ['2026-07-18'], '2026-07-25')).toBe(false);
+  });
+
+  it('時間型・非時間型（PHOTO/QUESTION以外）は常に false', () => {
+    expect(isCarryStale('TOTAL_WORK', 'single', ['2026-07-18'], '2026-07-25')).toBe(false);
+    expect(isCarryStale('MANUAL_CHECK', 'single', ['2026-07-18'], '2026-07-25')).toBe(false);
+  });
+});
+
+describe('ruleAnswerDayKeys', () => {
+  it('rule_answer に保存された day_key を全件返す', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '調子は？',
+      startDay: '2026-07-18',
+      endDay: '2026-07-18',
+      reason: '単発',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, image_id, answer_text, created_at) VALUES (?, ?, NULL, ?, ?)',
+    ).run(rule.id, '2026-07-18', '良い', Date.now());
+    expect(ruleAnswerDayKeys(db, rule.id)).toEqual(['2026-07-18']);
+  });
+
+  it('回答が無ければ空配列', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '調子は？',
+      startDay: '2026-07-18',
+      endDay: '2026-07-18',
+      reason: '単発',
+    });
+    expect(ruleAnswerDayKeys(db, rule.id)).toEqual([]);
   });
 });
 

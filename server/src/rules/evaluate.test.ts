@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
 import { createRule, updateRule, ruleConditionKey } from '../services/rule-registry.js';
-import { evaluateDay } from './evaluate.js';
+import { evaluateDay, filterForDisplay } from './evaluate.js';
 import { resolveIdentity, renameIdentity } from '../services/group-identity.js';
 import { daySummary } from '../services/summary.js';
 
@@ -273,5 +273,101 @@ describe('QUESTION 達成後の回答テキスト（issue #70）', () => {
     const cond = next.perCondition.find((c) => c.ruleId === rule.id)!;
     expect(cond.met).toBe(true);
     expect(cond.answerText).toBe('ボリュームが出た');
+  });
+});
+
+describe('carryStale（issue #73: 達成済み単発ルールの表示除外）', () => {
+  it('単発ルールは提出した当日は carryStale=false', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '燃えないゴミの日いつ？',
+      startDay: '2026-07-18',
+      endDay: '2026-07-18',
+      reason: 'r',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(rule.id, '2026-07-18', '木曜日', jst(2026, 7, 18, 9, 0));
+
+    const sameDay = evaluateDay(db, '2026-07-18', jst(2026, 7, 18, 9, 30));
+    const cond = sameDay.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond.met).toBe(true);
+    expect(cond.carryStale).toBe(false);
+  });
+
+  it('単発ルールは提出日の翌日以降は carryStale=true（met は変わらず true のまま）', () => {
+    const rule = createRule(db, {
+      target: 'PHOTO',
+      caption: '朝の机',
+      startDay: '2026-07-18',
+      endDay: '2026-07-18',
+      reason: 'r',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(rule.id, '2026-07-18', null, jst(2026, 7, 18, 9, 0));
+
+    const later = evaluateDay(db, '2026-07-25', jst(2026, 7, 25, 9, 0));
+    const cond = later.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond.met).toBe(true);
+    expect(cond.carryStale).toBe(true);
+  });
+
+  it('未提出の単発ルールは carryStale=false（まだ不足条件として出す必要がある）', () => {
+    const rule = createRule(db, {
+      target: 'PHOTO',
+      caption: '朝の机',
+      startDay: '2026-07-18',
+      endDay: '2026-07-18',
+      reason: 'r',
+    });
+    const result = evaluateDay(db, '2026-07-25', jst(2026, 7, 25, 9, 0));
+    const cond = result.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond.met).toBe(false);
+    expect(cond.carryStale).toBe(false);
+  });
+
+  it('範囲ルールは当日回答済みでも carryStale=false（毎日実測なので除外しない）', () => {
+    const rule = createRule(db, {
+      target: 'QUESTION',
+      questionText: '今日の調子は？',
+      startDay: '2026-07-14',
+      endDay: '2026-07-20',
+      reason: 'r',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(rule.id, '2026-07-15', '良い', jst(2026, 7, 15, 9, 0));
+
+    const day15 = evaluateDay(db, '2026-07-15', jst(2026, 7, 15, 9, 30));
+    const cond = day15.perCondition.find((c) => c.ruleId === rule.id)!;
+    expect(cond.met).toBe(true);
+    expect(cond.carryStale).toBe(false);
+  });
+
+  it('filterForDisplay は carryStale な条件だけを取り除き、evaluateDay の判定結果には影響しない', () => {
+    const stale = createRule(db, {
+      target: 'PHOTO',
+      caption: '朝の机',
+      startDay: '2026-07-18',
+      endDay: '2026-07-18',
+      reason: 'r',
+    });
+    db.prepare(
+      'INSERT INTO rule_answer (rule_id, day_key, answer_text, created_at) VALUES (?, ?, ?, ?)',
+    ).run(stale.id, '2026-07-18', null, jst(2026, 7, 18, 9, 0));
+
+    // 有効ルールはこの単発ルール1件のみ。提出済みなので conditionsMet=true・UNLOCKED になる
+    // （既存仕様どおり）。filterForDisplay は表示配列だけを空にし、この判定には手を触れない。
+    const result = evaluateDay(db, '2026-07-25', jst(2026, 7, 25, 9, 0));
+    expect(result.perCondition).toHaveLength(1);
+    expect(result.conditionsMet).toBe(true);
+    expect(result.status).toBe('UNLOCKED');
+
+    const displayed = filterForDisplay(result.perCondition);
+    expect(displayed).toHaveLength(0);
+    // 表示から消えても、元の評価結果は変わらない。
+    expect(result.conditionsMet).toBe(true);
+    expect(result.status).toBe('UNLOCKED');
   });
 });

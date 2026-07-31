@@ -4,7 +4,7 @@ import { getConfig, updateConfig, type AppConfigRow } from '../db/index.js';
 import { daySummary, rangeSummary, listGroups, todayKey } from '../services/summary.js';
 import { listRecentGroupIdentities } from '../services/group-identity.js';
 import { isExtensionOutdated, MIN_EXTENSION_VERSION } from '../services/ext-version.js';
-import { evaluateDay } from '../rules/evaluate.js';
+import { evaluateDay, filterForDisplay } from '../rules/evaluate.js';
 import { listChecks, setCheck } from '../rules/checks.js';
 import { revealPasswords } from '../password/reveal.js';
 import { listManualCategories } from '../services/manual-categories.js';
@@ -109,13 +109,20 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
     const evaluation = evaluateDay(db, date);
     // 達成瞬間の自動 reveal は pipeline 側で扱うため、ここでは評価のみ。
     deps.runPipeline();
-    return evaluation;
+    return {
+      ...evaluation,
+      perCondition: filterForDisplay(evaluation.perCondition),
+    };
   });
 
   // --- アンロック評価 -----------------------------------------------------
   app.get('/api/unlock/:date', async (req) => {
     const { date } = req.params as { date: string };
-    return evaluateDay(db, date);
+    const evaluation = evaluateDay(db, date);
+    return {
+      ...evaluation,
+      perCondition: filterForDisplay(evaluation.perCondition),
+    };
   });
 
   // --- パスワード reveal（達成時のみ）------------------------------------

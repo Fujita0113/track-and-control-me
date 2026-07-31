@@ -308,6 +308,56 @@ describe('写真/質問ルールへの回答（今日タブ・design D5）', () 
   });
 });
 
+describe('GoalRuleView.carryStale（issue #73: 凍結モーダルの表示除外）', () => {
+  it('未提出の単発ルールは carryStale=false', () => {
+    const g = createGoal(
+      db,
+      { name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    expect(getGoal(db, g.id, NOW_NEXT).rules[0]!.carryStale).toBe(false);
+  });
+
+  it('提出した当日は carryStale=false', () => {
+    const g = createGoal(
+      db,
+      { name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    const ruleId = g.rules[0]!.ruleId;
+    answerRuleQuestion(db, ruleId, START, '泡立ちは良い', NOW_NEXT); // NOW_NEXT の day_key は START と同じ
+    expect(getGoal(db, g.id, NOW_NEXT).rules[0]!.carryStale).toBe(false);
+  });
+
+  it('提出日の翌日以降は carryStale=true（met は変わらず、凍結モーダルの一覧からのみ外す）', () => {
+    const g = createGoal(
+      db,
+      { name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      NOW_TODAY,
+    );
+    const ruleId = g.rules[0]!.ruleId;
+    answerRuleQuestion(db, ruleId, START, '泡立ちは良い', NOW_NEXT);
+    const laterNowMs = zonedTimeToEpoch(2026, 7, 12, 12, 0, 0, 'Asia/Tokyo');
+    expect(getGoal(db, g.id, laterNowMs).rules[0]!.carryStale).toBe(true);
+  });
+
+  it('範囲・時間型ルールは常に carryStale=false', () => {
+    const g = createGoal(
+      db,
+      {
+        name: 'A',
+        rules: [
+          { target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' },
+          { target: 'QUESTION', questionText: '調子は？', startDay: START, endDay: END, reason: 'r' },
+        ],
+        start: 'tomorrow',
+      },
+      NOW_TODAY,
+    );
+    for (const r of getGoal(db, g.id, NOW_NEXT).rules) expect(r.carryStale).toBe(false);
+  });
+});
+
 describe('目標日記（明日開始）', () => {
   it('進行中の日は保存でき、reflection_done を汚染しない', () => {
     const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);

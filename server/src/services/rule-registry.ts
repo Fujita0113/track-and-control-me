@@ -368,6 +368,32 @@ export function isRuleMetOn(
   return answerDayKeys.some((d) => d === dayKey);
 }
 
+/**
+ * 該当ルールの回答一覧の day_key 配列を返す（evaluate.ts / goals.ts 共有クエリ）。
+ */
+export function ruleAnswerDayKeys(db: DB, ruleId: number): string[] {
+  return (
+    db.prepare('SELECT day_key FROM rule_answer WHERE rule_id = ?').all(ruleId) as { day_key: string }[]
+  ).map((r) => r.day_key);
+}
+
+/**
+ * 提出済みの単発ルールを表示上除外するか判定する（issue #73）。
+ * carryoverPolicy === 'carry' かつ達成済み（isRuleMetOn）、ただし当日提出（answerDayKeys に当日の day_key が含まれる）のものは除外しない。
+ */
+export function isCarryStale(
+  target: RuleTarget,
+  schedule: RuleSchedule,
+  answerDayKeys: readonly string[],
+  dayKey: string,
+): boolean {
+  return (
+    carryoverPolicy(target, schedule) === 'carry' &&
+    isRuleMetOn(target, schedule, answerDayKeys, dayKey) &&
+    !answerDayKeys.includes(dayKey)
+  );
+}
+
 /** 範囲ルールの「N日中の何日目か」（1始まり）。範囲外・単発・永続は null。今日タブの表示に使う。 */
 export function rangeDayNumber(startDay: string, endDay: string | null, dayKey: string): number | null {
   if (endDay == null || startDay === endDay) return null; // 永続・単発は対象外

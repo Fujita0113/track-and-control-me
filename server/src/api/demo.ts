@@ -37,6 +37,8 @@ import {
   DEMO_AFTER_END_DAY,
 } from '../services/demo-seed.js';
 
+import { filterForDisplay } from '../rules/evaluate.js';
+
 /**
  * デモ（お試し）モードの読み取り専用ルータ（spec: demo-mode / design.md D3）。
  * デモ DB のみを参照し、本物の解禁処理・パスワード生成コマンド・本番 DB 書き込み関数の
@@ -181,6 +183,9 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
     const db = getDemoDb();
     const now = resolveNow((req.query as { now?: string }).now);
     const summary = daySummary(db, now);
+    if (summary.unlock?.perCondition) {
+      summary.unlock.perCondition = filterForDisplay(summary.unlock.perCondition);
+    }
     // 本物の解禁経路には到達しない。解錠時に見せる値は固定のダミー。
     return { ...summary, virtualDay: now, dummyPassword: 'デモ用 123456' };
   });

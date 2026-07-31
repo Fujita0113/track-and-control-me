@@ -7,6 +7,8 @@ import {
   ruleConditionKey,
   ruleSchedule,
   isRuleMetOn,
+  ruleAnswerDayKeys,
+  isCarryStale,
   carryoverPolicy,
   rangeDayNumber,
   rangeSpanDays,
@@ -34,6 +36,8 @@ export interface ConditionResult {
   ruleId: number;
   target: RuleTarget;
   met: boolean;
+  /** 単発の PHOTO/QUESTION で提出済みの過去日ルールを表示上隠すフラグ（issue #73）。 */
+  carryStale?: boolean;
   actualSeconds?: number;
   thresholdSeconds?: number | null;
   label?: string | null;
@@ -87,12 +91,6 @@ function primaryGoalForRule(db: DB, ruleId: number): { id: number; name: string 
     )
     .get(ruleId) as { id: number; name: string } | undefined;
   return row;
-}
-
-function answerDayKeysFor(db: DB, ruleId: number): string[] {
-  return (
-    db.prepare('SELECT day_key FROM rule_answer WHERE rule_id = ?').all(ruleId) as { day_key: string }[]
-  ).map((r) => r.day_key);
 }
 
 /**
@@ -201,18 +199,28 @@ function evaluateRule(db: DB, rule: RuleRow, dayKey: string, totalWorkSeconds: n
       return { ...base, met: resolvePlanningSignal(db, dayKey, rule.signal_key) };
     case 'PHOTO':
     case 'QUESTION': {
-      const answerDayKeys = answerDayKeysFor(db, rule.id);
+      const answerDayKeys = ruleAnswerDayKeys(db, rule.id);
       const met = isRuleMetOn(rule.target, schedule, answerDayKeys, dayKey);
+      const carryStale = isCarryStale(rule.target, schedule, answerDayKeys, dayKey);
       return {
         ...base,
         label: rule.target === 'PHOTO' ? rule.caption : rule.question_text,
         met,
+        carryStale,
         rangeDayNumber: rangeDayNumber(rule.start_day, rule.end_day, dayKey),
         spanDays: rangeSpanDays(rule.start_day, rule.end_day),
         answerText: rule.target === 'QUESTION' && met ? answerTextForDay(db, rule.id, schedule, dayKey) : undefined,
       };
     }
   }
+}
+
+/**
+ * perCondition 配列から carryStale: true の条件を取り除いた配列を返す純関数（issue #73 / spec: goal-check-gate）。
+ * 表示専用のフィルタであり、evaluateDay の status や conditionsMet には影響を与えない。
+ */
+export function filterForDisplay(perCondition: readonly ConditionResult[]): ConditionResult[] {
+  return perCondition.filter((c) => !c.carryStale);
 }
 
 export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalResult {
