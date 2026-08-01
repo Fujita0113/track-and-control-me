@@ -1,27 +1,51 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import Fastify from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
-import { loadRuntimeConfig } from './config.js';
+import { loadPreBindConfig, findAvailablePort, resolveDbPath, ensureDbDir } from './config.js';
 import { openDb, getConfig } from './db/index.js';
 import { registerIngestRoute } from './ingest/ws.js';
 import { runPipeline } from './services/pipeline.js';
 import { registerApiRoutes } from './api/index.js';
 import { startRollover } from './services/rollover.js';
+import { seedDevSample } from './services/dev-seed.js';
 
 const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'";
 
 async function main(): Promise<void> {
-  const rc = loadRuntimeConfig();
-  const db = openDb(rc.dbPath);
+  // 起動順（design.md D1・D2・D4）: (1) 候補ポート確定 → (2) 実ポート確定 →
+  // (3) dbPath 確定 → (4) 開発用DBを新規作成する場合はサンプル投入対象としてフラグを立てる →
+  // (5) openDb（新規なら直後に seedDevSample）。
+  const pre = loadPreBindConfig();
+  let port: number;
+  try {
+    port = await findAvailablePort(pre.basePort, pre.host);
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+  const fellBack = port !== pre.basePort;
+  const dbPath = resolveDbPath({
+    explicitDbPath: pre.explicitDbPath,
+    fileDbPath: pre.fileDbPath,
+    serverRoot: pre.serverRoot,
+    basePort: pre.basePort,
+    actualPort: port,
+  });
+  ensureDbDir(dbPath);
+  const isDevDb = dbPath !== ':memory:' && dbPath === join(pre.serverRoot, 'data', 'track.dev.sqlite');
+  const needsDevSeed = isDevDb && !existsSync(dbPath);
+
+  const db = openDb(dbPath);
+  if (needsDevSeed) seedDevSample(db);
 
   // 静的配信ディレクトリを保証（F5 の実体が無くても起動できるように）。
-  if (!existsSync(rc.staticDir)) {
-    mkdirSync(rc.staticDir, { recursive: true });
+  if (!existsSync(pre.staticDir)) {
+    mkdirSync(pre.staticDir, { recursive: true });
     writeFileSync(
-      join(rc.staticDir, 'index.html'),
+      join(pre.staticDir, 'index.html'),
       '<!doctype html><meta charset="utf-8"><title>Track & Control Me</title><p>dashboard は F5 で実装されます。</p>',
     );
   }
@@ -64,7 +88,7 @@ async function main(): Promise<void> {
   await registerApiRoutes(app, { db, runPipeline: () => runPipeline(db) });
 
   // ダッシュボード静的配信。
-  await app.register(fastifyStatic, { root: rc.staticDir, prefix: '/' });
+  await app.register(fastifyStatic, { root: pre.staticDir, prefix: '/' });
 
   // 日次ロールオーバー（croner, 04:00）。
   const stopRollover = startRollover(db, (m) => app.log.info(m));
@@ -78,8 +102,13 @@ async function main(): Promise<void> {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  await app.listen({ host: rc.host, port: rc.port });
-  app.log.info(`backend 起動: http://${rc.host}:${rc.port}  db=${rc.dbPath}`);
+  await app.listen({ host: pre.host, port });
+  app.log.info(`backend 起動: http://${pre.host}:${port}  db=${dbPath}`);
+
+  // pino の JSON 1行ログは目視しづらいため、平文バナーも出す（design.md D5）。
+  const dbFileName = dbPath === ':memory:' ? ':memory:' : basename(dbPath);
+  const fallbackLabel = fellBack ? 'fallback port; ' : '';
+  console.log(`▶ track-and-control-me backend: http://${pre.host}:${port}  [${fallbackLabel}db: ${dbFileName}]`);
 
   // 起動直後に一度パイプラインを回して当日状態を最新化。
   try {
