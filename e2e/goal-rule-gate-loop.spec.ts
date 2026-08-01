@@ -57,7 +57,9 @@ test('ルールを足す → 今日タブで詰まり → 写真で開き → �
 
   // --- 1. 振り返りタブ: 目標コーナーで 📷×単発・💬×範囲 のルールを足す ---------
   await page.locator('#tabs button[data-target="reflection"]').click();
-  const block = page.locator('.pc-block');
+  // 他specが同じ共有DBに作ったgoalも同時に .pc-block を持つため、自分のgoalのカードへ絞る。
+  const journal = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_NAME }) });
+  const block = journal.locator('.pc-block');
   await expect(block).toBeVisible();
 
   // 1つ目: 📷×単発（今日）。当日ゲートへ効かせる。

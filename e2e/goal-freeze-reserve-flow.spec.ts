@@ -26,7 +26,7 @@ const CHECK_A = '素振り';
 const CHECK_B = '腹筋';
 const FREEZE_REASON = 'OpenWork の大タスクに数日ぶん全振りする';
 
-async function seedGoal(request: APIRequestContext, name: string, checkLabel: string, dayKey: string): Promise<void> {
+async function seedGoal(request: APIRequestContext, name: string, checkLabel: string, dayKey: string): Promise<number> {
   const res = await request.post('/api/goals', {
     data: {
       name,
@@ -36,65 +36,74 @@ async function seedGoal(request: APIRequestContext, name: string, checkLabel: st
     },
   });
   expect(res.ok()).toBeTruthy();
+  const { id } = (await res.json()) as { id: number };
+  return id;
 }
 
 test('凍結を予約しても当日のゲートは変わらず、月枠は他の目標にも及び、取消すると戻る', async ({ page, request }) => {
   const { dayKey } = await (await request.get('/api/summary')).json();
   const freezeEnd = addDays(dayKey, 5);
 
-  await seedGoal(request, GOAL_A, CHECK_A, dayKey);
-  await seedGoal(request, GOAL_B, CHECK_B, dayKey);
+  const goalIdA = await seedGoal(request, GOAL_A, CHECK_A, dayKey);
+  const goalIdB = await seedGoal(request, GOAL_B, CHECK_B, dayKey);
+  // このspecが作るルールは意図的に未達成のまま残る（凍結の見た目だけを見るため）。
+  // 「今日タブの解錠ゲート」はアプリ全体で1つの共有状態なので、後始末せずに残すと
+  // 同じ共有DBで走る他specの解錠判定を永久にブロックしてしまう（issue #75）。
+  try {
+    await page.goto('/');
+    await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
 
-  await page.goto('/');
-  await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
+    // --- 1. 今日タブ: 凍結前は両方のルールがゲートに現れる（前提の確認） ---------
+    await page.locator('#tabs button[data-target="today"]').click();
+    await expect(page.locator('.cond', { hasText: CHECK_A }).first()).toBeVisible();
+    await expect(page.locator('.cond', { hasText: CHECK_B }).first()).toBeVisible();
 
-  // --- 1. 今日タブ: 凍結前は両方のルールがゲートに現れる（前提の確認） ---------
-  await page.locator('#tabs button[data-target="today"]').click();
-  await expect(page.locator('.cond', { hasText: CHECK_A }).first()).toBeVisible();
-  await expect(page.locator('.cond', { hasText: CHECK_B }).first()).toBeVisible();
+    // --- 2. 振り返りタブ: モーダルから目標Aの凍結を予約する -------------------------
+    await page.locator('#tabs button[data-target="reflection"]').click();
+    const cardA = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_A }) });
+    await expect(cardA).toBeVisible();
+    const freezeBlockA = cardA.locator('.gf-block').first();
+    await expect(freezeBlockA).toContainText('今月の凍結枠は空いています');
 
-  // --- 2. 振り返りタブ: モーダルから目標Aの凍結を予約する -------------------------
-  await page.locator('#tabs button[data-target="reflection"]').click();
-  const cardA = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_A }) });
-  await expect(cardA).toBeVisible();
-  const freezeBlockA = cardA.locator('.gf-block').first();
-  await expect(freezeBlockA).toContainText('今月の凍結枠は空いています');
+    // モーダルを起動
+    const triggerBtn = cardA.getByRole('button', { name: /一時凍結/ }).first();
+    await triggerBtn.scrollIntoViewIfNeeded();
+    await triggerBtn.click();
+    const modal = page.locator('.modal-root').filter({ hasText: '目標を一時凍結する' });
+    await expect(modal).toContainText(GOAL_A);
+    await expect(modal.locator('li', { hasText: CHECK_A })).toBeVisible();
 
-  // モーダルを起動
-  const triggerBtn = cardA.getByRole('button', { name: /一時凍結/ }).first();
-  await triggerBtn.scrollIntoViewIfNeeded();
-  await triggerBtn.click();
-  const modal = page.locator('.modal-root').filter({ hasText: '目標を一時凍結する' });
-  await expect(modal).toContainText(GOAL_A);
-  await expect(modal.locator('li', { hasText: CHECK_A })).toBeVisible();
+    await modal.locator('textarea').fill(FREEZE_REASON);
+    await modal.locator('input[type="date"]').fill(freezeEnd);
+    await modal.getByRole('button', { name: /一時凍結を予約/ }).click();
 
-  await modal.locator('textarea').fill(FREEZE_REASON);
-  await modal.locator('input[type="date"]').fill(freezeEnd);
-  await modal.getByRole('button', { name: /一時凍結を予約/ }).click();
+    await expect(page.locator('.toast')).toContainText('凍結を予約しました');
+    await expect(cardA.locator('.gf-block').first()).toContainText('一時凍結（予約中）');
+    await expect(cardA.locator('.gf-block').first()).toContainText(FREEZE_REASON);
 
-  await expect(page.locator('.toast')).toContainText('凍結を予約しました');
-  await expect(cardA.locator('.gf-block').first()).toContainText('一時凍結（予約中）');
-  await expect(cardA.locator('.gf-block').first()).toContainText(FREEZE_REASON);
+    // --- 3. 予約した当日は今日タブのゲートに変わりが無い（翌日発効・design D5の核） ---
+    await page.locator('#tabs button[data-target="today"]').click();
+    await expect(page.locator('.cond', { hasText: CHECK_A }).first()).toBeVisible();
+    await expect(page.locator('.cond', { hasText: CHECK_B }).first()).toBeVisible();
 
-  // --- 3. 予約した当日は今日タブのゲートに変わりが無い（翌日発効・design D5の核） ---
-  await page.locator('#tabs button[data-target="today"]').click();
-  await expect(page.locator('.cond', { hasText: CHECK_A }).first()).toBeVisible();
-  await expect(page.locator('.cond', { hasText: CHECK_B }).first()).toBeVisible();
+    // --- 4. 月枠はアプリ全体で1つ。目標Bのカードにも使用済みである旨が出て、
+    //        予約ボタンは表示されない ---------------------------
+    await page.locator('#tabs button[data-target="reflection"]').click();
+    const cardB = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_B }) });
+    const freezeBlockB = cardB.locator('.gf-block').first();
+    await expect(freezeBlockB).toContainText('今月の凍結枠は使用済みです');
+    await expect(freezeBlockB).toContainText(GOAL_A);
+    await expect(freezeBlockB.getByRole('button', { name: /一時凍結する/ })).toHaveCount(0);
 
-  // --- 4. 月枠はアプリ全体で1つ。目標Bのカードにも使用済みである旨が出て、
-  //        予約ボタンは表示されない ---------------------------
-  await page.locator('#tabs button[data-target="reflection"]').click();
-  const cardB = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_B }) });
-  const freezeBlockB = cardB.locator('.gf-block').first();
-  await expect(freezeBlockB).toContainText('今月の凍結枠は使用済みです');
-  await expect(freezeBlockB).toContainText(GOAL_A);
-  await expect(freezeBlockB.getByRole('button', { name: /一時凍結する/ })).toHaveCount(0);
-
-  // --- 5. 発効前の取消で枠が戻る（両方の目標カードに反映される） --------------
-  page.once('dialog', (d) => d.accept());
-  await freezeBlockA.getByRole('button', { name: '取消' }).click();
-  await expect(page.locator('.toast')).toContainText('取り消しました');
-  await expect(cardA.locator('.gf-block')).toContainText('今月の凍結枠は空いています');
-  await expect(cardB.locator('.gf-block')).toContainText('今月の凍結枠は空いています');
+    // --- 5. 発効前の取消で枠が戻る（両方の目標カードに反映される） --------------
+    page.once('dialog', (d) => d.accept());
+    await freezeBlockA.getByRole('button', { name: '取消' }).click();
+    await expect(page.locator('.toast')).toContainText('取り消しました');
+    await expect(cardA.locator('.gf-block')).toContainText('今月の凍結枠は空いています');
+    await expect(cardB.locator('.gf-block')).toContainText('今月の凍結枠は空いています');
+  } finally {
+    await request.delete(`/api/goals/${goalIdA}`);
+    await request.delete(`/api/goals/${goalIdB}`);
+  }
 });
 

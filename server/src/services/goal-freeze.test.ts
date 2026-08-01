@@ -163,6 +163,24 @@ describe('凍結の枠はアプリ全体で月1回', () => {
     const f = reserveFreeze(db, b.id, { endDay: '2026-08-25', reason: '8月の事情' }, NOW_0806);
     expect(f.startDay).toBe('2026-08-07');
   });
+
+  it('月末（today の翌日が翌月）に予約した直後は、翌月（発効月）の使用済みとして返る（issue #75）', () => {
+    const NOW_0731 = jst(2026, 7, 31);
+    const a = makeGoal('設計理解をしたい');
+    const b = makeGoal('茶色取りたい');
+    // today=7/31 で予約すると発効日は 8/1＝8月枠。
+    const f = reserveFreeze(db, a.id, { endDay: '2026-08-10', reason: '大タスク' }, NOW_0731);
+    expect(f.startDay).toBe('2026-08-01');
+
+    // 予約直後（today はまだ7月）に quota を尋ねても、発効月（8月）を基準に使用済みと分かる。
+    const quota = freezeQuota(db, NOW_0731);
+    expect(quota.month).toBe('2026-08');
+    expect(quota.used).toBe(true);
+    expect(quota.goalId).toBe(a.id);
+
+    // 実際に別目標から同じ枠へ予約しようとすると拒否される（表示と重複チェックが一致する）。
+    expect(() => reserveFreeze(db, b.id, { endDay: '2026-08-15', reason: '別件' }, NOW_0731)).toThrow();
+  });
 });
 
 // --- 発効前の変更・取消 --------------------------------------------------------

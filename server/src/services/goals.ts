@@ -409,12 +409,31 @@ export function getGoal(db: DB, id: number, nowMs = Date.now()): GoalView {
   return toGoalView(db, getGoalRow(db, id), todayKey(db, nowMs), nowMs);
 }
 
-/** 作成当日限りの削除（誤作成の救済）。CASCADE で紐づけ・日記も消える（ルール本体は残る）。 */
+/**
+ * 作成当日限りの削除（誤作成の救済）。CASCADE で紐づけ・日記も消える（ルール本体は残る）。
+ * 削除対象にのみ紐づいていた（他のどの目標からも参照されなくなる）ルールは、`removeRule()` で
+ * `status='removed'` に遷移させ、解錠ゲートの評価対象から外す（design: goal-challenge D2）。
+ * まだ他の目標が参照しているルールには触れない。
+ */
 export function deleteGoal(db: DB, id: number, nowMs = Date.now()): boolean {
   const row = getGoalRow(db, id);
   const today = todayKey(db, nowMs);
   if (dayKeyOf(db, row.created_at) !== today) throw new GoalDeleteWindowError();
-  return db.prepare('DELETE FROM goal WHERE id = ?').run(id).changes > 0;
+  const ruleIds = (
+    db.prepare('SELECT rule_id FROM goal_rule WHERE goal_id = ?').all(id) as { rule_id: number }[]
+  ).map((r) => r.rule_id);
+
+  const tx = db.transaction((): boolean => {
+    const deleted = db.prepare('DELETE FROM goal WHERE id = ?').run(id).changes > 0;
+    if (deleted) {
+      for (const ruleId of ruleIds) {
+        const stillReferenced = db.prepare('SELECT 1 FROM goal_rule WHERE rule_id = ?').get(ruleId);
+        if (!stillReferenced) removeRule(db, ruleId, '目標の削除に伴い自動的に削除', nowMs);
+      }
+    }
+    return deleted;
+  });
+  return tx();
 }
 
 // --- 目標コーナー: ルールの編集・削除（spec: editable-rule-registry / goal-challenge）----------

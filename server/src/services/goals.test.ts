@@ -32,6 +32,7 @@ import {
   GoalLifecycleError,
 } from './goals.js';
 import { resolveIdentity } from './group-identity.js';
+import { listActiveRules } from './rule-registry.js';
 
 /** テスト用 data URL（バイト内容は検証しないので任意バイト列でよい）。 */
 const dataUrl = (mime = 'image/png', bytes: number[] = [1, 2, 3]): string =>
@@ -138,6 +139,35 @@ describe('削除猶予（作成当日のみ）', () => {
   it('翌日以降は削除できない', () => {
     const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     expect(() => deleteGoal(db, g.id, NOW_NEXT)).toThrow(GoalDeleteWindowError);
+  });
+
+  it('削除後、他goalと共有していなかったルールは removed になり、解錠評価から外れる（issue #75）', () => {
+    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const ruleId = g.rules[0]!.ruleId;
+    expect(deleteGoal(db, g.id, NOW_TODAY)).toBe(true);
+
+    const rule = db.prepare('SELECT status FROM rule WHERE id = ?').get(ruleId) as { status: string };
+    expect(rule.status).toBe('removed');
+
+    // 他に有効な条件が無くても、削除済みルールは未達成条件として残らずゲートが評価できる。
+    const active = listActiveRules(db, START);
+    expect(active.map((r) => r.id)).not.toContain(ruleId);
+  });
+
+  it('削除しても、他goalとまだ共有しているルールの status は変えない（issue #75）', () => {
+    const shared = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const ruleId = shared.rules[0]!.ruleId;
+    // 別goalへ同じルールを紐づけて共有状態を作る（goal-lifecycle-fork の引き継ぎと同じ形）。
+    db.prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run('B', '', START, END, NOW_TODAY);
+    const otherGoalId = (db.prepare('SELECT id FROM goal WHERE name = ?').get('B') as { id: number }).id;
+    db.prepare('INSERT OR IGNORE INTO goal_rule (goal_id, rule_id) VALUES (?, ?)').run(otherGoalId, ruleId);
+
+    expect(deleteGoal(db, shared.id, NOW_TODAY)).toBe(true);
+
+    const rule = db.prepare('SELECT status FROM rule WHERE id = ?').get(ruleId) as { status: string };
+    expect(rule.status).toBe('active');
+    expect(listActiveRules(db, START).map((r) => r.id)).toContain(ruleId);
   });
 });
 

@@ -70,6 +70,11 @@ function todayKey(db: DB, nowMs: number): string {
   return dayKeyFor(nowMs, cfg.tz, cfg.day_boundary_minutes);
 }
 
+/** 月枠の判定基準（翌日＝発効日の月）。予約の重複チェックと表示APIで共有する。 */
+export function quotaMonthOf(today: string): string {
+  return addDaysKey(today, 1).slice(0, 7);
+}
+
 function nextMonthOf(month: string): string {
   const [y, m] = month.split('-').map(Number);
   const d = new Date(Date.UTC(y ?? 0, (m ?? 1) - 1 + 1, 1));
@@ -192,7 +197,7 @@ function quotaRowForMonth(
 /** 今月の凍結枠の状態（使用済みか・使った目標・回復する月）。 */
 export function freezeQuota(db: DB, nowMs = Date.now()): FreezeQuota {
   const today = todayKey(db, nowMs);
-  const month = today.slice(0, 7);
+  const month = quotaMonthOf(today);
   const row = quotaRowForMonth(db, month);
   return {
     month,
@@ -248,7 +253,7 @@ export function reserveFreezeMulti(
     }
   }
 
-  if (quotaRowForMonth(db, startDay.slice(0, 7))) {
+  if (quotaRowForMonth(db, quotaMonthOf(today))) {
     throw new FreezeStateError('今月の凍結枠は使用済みです');
   }
 
