@@ -146,4 +146,4 @@
 - [x] 9.3 目標時間・証拠写真を持つ目標が1つも無いとき、今日タブ・ゲート・レポート・凍結の挙動が変更前と完全に一致することを確認する。
 - [x] 9.3b **`git diff -- server/src/services/goals.ts` のレポート③生成部が空であること**を確認する（証拠写真は既存のキャプション機構に乗るだけで、③の実装を触らない）。
 - [x] 9.4 `openspec validate goal-target-hours-and-open-period --strict` が通ることを確認する。
-- [ ] 9.5 `/opsx:archive` で delta spec（`goal-target-hours` / `goal-history` / `goal-challenge` / `goal-lifecycle-fork` / `goal-report`）をメインspecへ sync してからアーカイブする。
+- [x] 9.5 `/opsx:archive` で delta spec（`goal-target-hours` / `goal-history` / `goal-challenge` / `goal-lifecycle-fork` / `goal-report`）をメインspecへ sync してからアーカイブする。
