@@ -1,5 +1,26 @@
 # track-and-control-me プロジェクトルール (Gemini Agent)
 
+## ルールファイルは3つある。足したら必ず3つとも直す（必須）
+
+このプロジェクトは **Claude Code と Gemini（Antigravity / Gemini CLI）が同じリポジトリを触る**。
+プロジェクトルールは読み手ごとに3ファイルへ置かれているが、**中身は同一**でなければならない:
+
+| ファイル | 読み手 |
+|---|---|
+| `CLAUDE.md` | Claude Code |
+| `GEMINI.md` | Gemini CLI |
+| `.agents/AGENTS.md` | Antigravity / Gemini Agent（`.gemini/config.json` の `customizationRoot: ".agents"` 経由） |
+
+- ルールを追加・変更・削除したら、**3ファイルすべてを同じコミットで**直す。1つだけ直してはならない。
+- 許される差異は**1行目のタイトル行だけ**。同期の確認（出力が空＝同期済み）:
+  ```pwsh
+  Compare-Object (Get-Content CLAUDE.md | Select-Object -Skip 1) (Get-Content GEMINI.md | Select-Object -Skip 1)
+  Compare-Object (Get-Content CLAUDE.md | Select-Object -Skip 1) (Get-Content .agents\AGENTS.md | Select-Object -Skip 1)
+  ```
+- スキルも同じ理由で対になっている（`.claude/skills/` ⇔ `.agents/skills/`）。片方だけに足さない。
+- ユーザー個人のグローバル設定（`~/.claude/CLAUDE.md` 等）はリポジトリ外なので同期対象ではない。
+  片方のエージェントしか知らない前提は、ここへ書き写して初めて両者の共有物になる。
+
 ## 日数が関わる機能はデモモードで成果を明示する（必須）
 
 日付・日数が絡む機能（30日チャレンジ／完走レポート／タイムライン／振り返り等）を作る・変えるときは、
@@ -72,3 +93,14 @@ stash 側が通ってしまったら、その spec は今回の変更につい�
 2. アーカイブ完了後、変更分（メインスペックの更新およびアーカイブディレクトリへの移動）を **git commit（メッセージ例: `docs: archive <change-name> change and sync specs`）までセットで行う**こと。
 
 sync や commit を行うかどうかをユーザーに質問してはならない（デフォルト＝必ず実行）。
+
+## 既存ファイルの書式に合わせる（必須）
+
+コードを編集するとき、**触っていない行の書式を変えてはならない**。
+とくに `server/static/css/app.css` は「1ルール1行」のコンパクト書式で書かれている。
+prettier 等のフォーマッタを一括でかけると全面差分になり、変更の中身がレビューできなくなる
+（実測: 1行の修正のつもりが 5,700 行差分になり、別エージェントのコミットと混ざった）。
+
+- フォーマッタをファイル全体にかけない（このリポジトリに整形設定は意図的に置いていない）
+- 書式の一括変更が必要なときは、機能変更と混ぜず単独のコミットにする
+- 編集後に `git diff --stat` を見て、想定より桁が大きければ整形が混入したと考える
