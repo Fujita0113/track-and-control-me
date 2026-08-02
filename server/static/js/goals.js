@@ -388,6 +388,7 @@ function openEndDialog(g, onDone) {
     h('button', { class: 'btn', text: 'キャンセル', type: 'button', onclick: closeModal }),
     save,
   ));
+  ctrlEnterToSave(body, save, '終える');
   openModal(body, '目標を終える');
 }
 

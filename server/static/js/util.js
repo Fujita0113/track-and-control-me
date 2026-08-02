@@ -300,8 +300,11 @@ export function isTypingTarget(e) {
  * 既存の素の Enter 送信（enter-submit-ime-guard）とは別系統。
  * IME 変換確定（isComposing / keyCode===229）はスキップし、saveBtn が disabled 中は二重送信しない。
  */
-export function ctrlEnterToSave(root, saveBtn) {
+export function ctrlEnterToSave(root, saveBtn, tooltipLabel) {
   if (!root || !saveBtn) return;
+  if (tooltipLabel) {
+    attachTooltip(saveBtn, { label: tooltipLabel, keys: ['Ctrl', 'Enter'] });
+  }
   root.addEventListener('keydown', (e) => {
     if (e.isComposing || e.keyCode === 229) return;
     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
