@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { listGoals, getGoalReport, getJournal, GoalReportNotReadyError } from './goals.js';
+import { listGoals, getGoal, getGoalReport, getJournal, GoalReportNotReadyError } from './goals.js';
+import { goalHistory } from './goal-history.js';
 import { getDayAllocation } from './day-allocation.js';
 import { daySummary } from './summary.js';
 import { getTimeline } from './timeline.js';
@@ -13,6 +14,10 @@ import {
   seedDemo,
   DEMO_GOAL_ID,
   DEMO_GOAL2_ID,
+  DEMO_GOAL3_ID,
+  DEMO_GOAL3_START_DAY,
+  DEMO_GOAL3_END_DAY,
+  DEMO_GOAL3_ENDED_DAY,
   DEMO_START_DAY,
   DEMO_END_DAY,
   DEMO_EFFECTIVE_END_DAY,
@@ -254,9 +259,9 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
   });
 
   it('手動チェックのみの目標（DEMO_GOAL2）は①のみで②時間の推移が出ない', () => {
-    // 一覧では主目標（後の期間）が先、手動チェックのみ目標が後に並ぶ。
+    // 一覧には主目標・手動チェックのみ目標・目標時間つきで終えた目標の3件が並ぶ。
     const goals = listGoals(db, vnow(DEMO_AFTER_END_DAY));
-    expect(goals.length).toBe(2);
+    expect(goals.length).toBe(3);
     const g2 = goals.find((g) => g.id === DEMO_GOAL2_ID)!;
     expect(g2.name).toBe('朝の散歩を習慣にする');
 
@@ -283,6 +288,56 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(walk.cells[0]!.thresholdSeconds).toBeNull();
     // ③④ Before/After の日記が引ける。
     expect(getJournal(db, DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY).content).toContain('朝散歩を始める');
+  });
+});
+
+describe('目標時間・大きい沿革のサンプル（spec: goal-target-hours / goal-history・issue #76）', () => {
+  it('主目標は目標時間（5h/日）と証拠写真を持ち、完走してもペースが安定して読める', () => {
+    const g = getGoal(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
+    expect(g.targetHours).not.toBeNull();
+    expect(g.targetHours!.kind).toBe('TOTAL_WORK');
+    expect(g.targetHours!.secondsPerDay).toBe(5 * 3600);
+    expect(g.pace).not.toBeNull();
+    expect(g.outcomeCaption).toBe('作業スペース');
+    expect(g.outcomeMet).toBe(true);
+  });
+
+  it('3つ目の目標は目標時間つきで進行中に理由つきで終えている（大きい沿革の主役）', () => {
+    const g = getGoal(db, DEMO_GOAL3_ID, vnow(DEMO_AFTER_END_DAY));
+    expect(g.status).toBe('ended');
+    expect(g.endedDayKey).toBe(DEMO_GOAL3_ENDED_DAY);
+    expect(g.targetHours!.kind).toBe('GROUP_SET');
+    expect(g.targetHours!.labels).toEqual(['AtCoder']);
+    // 期限（7日）より前、Day5 で終えている。
+    expect(g.endDay).toBe(DEMO_GOAL3_END_DAY);
+    expect(g.startDay).toBe(DEMO_GOAL3_START_DAY);
+  });
+
+  it('大きい沿革に3件の目標（作成・作成・作成）と、終えた目標の行に3つ（到達判定・答え・Before→After）が並ぶ', () => {
+    const h = goalHistory(db, vnow(DEMO_AFTER_END_DAY));
+    const created = h.filter((e) => e.kind === 'created');
+    expect(created.length).toBe(3);
+    expect(created.some((e) => e.name === 'AtCoderのレーティングを上げる')).toBe(true);
+
+    const ended = h.find((e) => e.kind === 'ended' && e.goalId === DEMO_GOAL3_ID)!;
+    expect(ended).toBeDefined();
+    expect(ended.reason).toContain('試験勉強はもう大丈夫');
+    // ① 数字（目標時間の到達/未達）: 時間は目標(2h/日)に届かなかった。
+    expect(ended.pace).not.toBeNull();
+    expect(ended.pace!.met).toBe(false);
+    // ② 自己申告: めざした状態には届いた（数字だけでは読めない事実・design D7 の主役）。
+    expect(ended.outcomeMet).toBe(true);
+    // ③ 証拠写真（Before→After）。
+    expect(ended.photos.before).not.toBeNull();
+    expect(ended.photos.after).not.toBeNull();
+    expect(ended.photos.before!.dayKey).toBe(DEMO_GOAL3_START_DAY);
+    expect(ended.photos.after!.dayKey).toBe(DEMO_GOAL3_ENDED_DAY);
+
+    // 完走した主目標（DEMO_GOAL_ID）は 'completed' として載り、目標時間の到達も読める。
+    const completedMain = h.find((e) => e.kind === 'completed' && e.goalId === DEMO_GOAL_ID)!;
+    expect(completedMain).toBeDefined();
+    expect(completedMain.pace).not.toBeNull();
+    expect(completedMain.outcomeMet).toBe(true);
   });
 });
 
@@ -364,9 +419,9 @@ describe('本番非干渉ガードレール（5.1）', () => {
     const before = (prod.prepare('SELECT COUNT(*) AS c FROM goal').get() as { c: number }).c;
     expect(before).toBe(0);
 
-    // デモ DB を構築・リセット・読み取り（主目標＋手動チェックのみ目標の2件）。
+    // デモ DB を構築・リセット・読み取り（主目標＋手動チェックのみ目標＋終えた目標の3件）。
     const demo = getDemoDb();
-    expect(listGoals(demo, vnow(DEMO_AFTER_END_DAY)).length).toBe(2);
+    expect(listGoals(demo, vnow(DEMO_AFTER_END_DAY)).length).toBe(3);
     resetDemoDb();
     getGoalReport(getDemoDb(), DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
 

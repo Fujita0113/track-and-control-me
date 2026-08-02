@@ -40,11 +40,18 @@ export async function show(root) {
   // 本物の reveal / ルール編集（本番書き込み）は動かさない。
   if (isDemo()) { await showDemo(root); return; }
 
+  // ペース行（目標時間を持つ進行中の目標の導線・overviewRegion より前・spec: goal-target-hours）。
+  // 既存のゲート表示（gate-hero / 条件の進捗 / パスワード）の DOM 構造・意味は変更しない。
+  const paceRegion = h('div', { class: 'stack' });
+  root.appendChild(paceRegion);
+
   // 2 領域を用意し、それぞれ独立に描画・更新する。
   const overviewRegion = h('div', { class: 'stack' });
   const gateRegion = h('div', { class: 'stack', style: { marginTop: '18px' } });
   root.appendChild(overviewRegion);
   root.appendChild(gateRegion);
+
+  await renderPaceRow(paceRegion).catch(() => undefined); // 導線なので失敗しても静かに諦める。
 
   // 概況(重い / チャート)は初回のみ描画。
   await renderOverview(overviewRegion).catch((e) => toast(`概況の読み込み失敗: ${e.message}`, 'err'));
@@ -56,6 +63,39 @@ export async function show(root) {
   };
   await refreshGate();
   timer = setInterval(refreshGate, 30000);
+}
+
+// --- ペース行（目標時間を持つ進行中の目標の導線・spec: goal-target-hours）---------------
+//
+// 今日タブ最上部の1行は導線であり本体ではない。詳細・操作は目標タブに置く。既存のゲート表示
+// （gate-hero / 条件の進捗 / パスワード）より前に置き、それらの DOM 構造・意味は変更しない。
+// 該当する目標が1つも無ければ何も描かない。
+function goToGoalsTab() {
+  const btn = document.querySelector('.tab[data-target="goals"]');
+  if (btn) btn.click();
+}
+
+function paceRowLine(g) {
+  const p = g.pace;
+  const label = g.targetHours.labels.join(' or ');
+  const remain = p && !p.met ? `今日 あと ${fmtDur(p.todayRemainSeconds)}` : p ? '✓ 到達' : '';
+  const nums = p ? `平均 ${fmtDur(p.averageSeconds)} / ${fmtDur(p.targetSecondsPerDay)}` : `目標 ${fmtDur(g.targetHours.secondsPerDay)}/日`;
+  const row = h('button', { class: 'gr-today-pace-row', type: 'button' },
+    h('span', { class: 'gr-today-pace-name', text: `${g.name} — ${label}` }),
+    h('span', { class: 'gr-today-pace-nums', text: [nums, remain].filter(Boolean).join('・') }),
+  );
+  row.addEventListener('click', goToGoalsTab);
+  return row;
+}
+
+async function renderPaceRow(region) {
+  clear(region);
+  const goals = (isDemo() ? (await api.demo.goals(state.demo.virtualDay)).goals : await api.getGoals());
+  const withTarget = goals.filter((g) => g.status === 'active' && g.targetHours);
+  if (!withTarget.length) return;
+  const card = h('div', { class: 'card gr-today-pace' });
+  for (const g of withTarget) card.appendChild(paceRowLine(g));
+  region.appendChild(card);
 }
 
 // --- (1) 作業概況 --------------------------------------------------------
@@ -381,10 +421,13 @@ function pwEntry(e) {
 async function showDemo(root) {
   clear(root);
   destroyCharts();
+  const pace = h('div', { class: 'stack' });
   const overview = h('div', { class: 'stack' });
   const gate = h('div', { class: 'stack', style: { marginTop: '18px' } });
+  root.appendChild(pace);
   root.appendChild(overview);
   root.appendChild(gate);
+  await renderPaceRow(pace).catch(() => undefined);
   overview.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
 
   let data;

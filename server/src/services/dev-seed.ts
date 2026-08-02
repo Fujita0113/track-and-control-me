@@ -1,6 +1,7 @@
 import type { DB } from '../db/index.js';
 import { createTask } from './tasks.js';
-import { createGoal } from './goals.js';
+import { createGoal, addDaysKey } from './goals.js';
+import { todayKey } from './summary.js';
 
 /**
  * 開発用DB（フォールバックポート起動時の `track.dev.sqlite`）を新規作成した回に限り投入する
@@ -16,6 +17,8 @@ export function seedDevSample(db: DB): void {
   createGoal(db, {
     name: '開発用サンプル目標',
     purpose: 'フォールバック起動時のダッシュボード確認用サンプルデータ。',
+    startReason: '開発用DBの動作確認のため',
+    endDay: addDaysKey(todayKey(db), 29),
     start: 'today',
     rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600, reason: '開発用サンプルの初期ルール' }],
   });

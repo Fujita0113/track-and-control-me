@@ -24,6 +24,8 @@ import {
 const TZ = 'Asia/Tokyo';
 const jst = (y: number, mo: number, d: number, h = 12, mi = 0) => zonedTimeToEpoch(y, mo, d, h, mi, 0, TZ);
 
+/** 目標は 2026-07-01 開始・2026-07-30 終了（30日）。 */
+const GOAL_END = '2026-07-30';
 const NOW_0701 = jst(2026, 7, 1);
 const NOW_0710 = jst(2026, 7, 10);
 const NOW_0711 = jst(2026, 7, 11);
@@ -41,11 +43,15 @@ beforeEach(() => {
   db = openDb(':memory:');
 });
 
-/** 2026-07-01 開始・2026-07-30 終了の目標を、総作業時間ルール1本つきで作る。 */
-function makeGoal(name = '設計理解をしたい', nowMs = NOW_0701): GoalView {
+/**
+ * 総作業時間ルール1本つきの目標を作る（既定は 2026-07-01 開始・30日間）。
+ * `endDay` は既定で `GOAL_END`（2026-07-30）だが、`nowMs` を変えて別の開始日で作る場合は
+ * 明示的に渡す（期限は必須・30日固定は撤廃済み・spec: goal-challenge）。
+ */
+function makeGoal(name = '設計理解をしたい', nowMs = NOW_0701, endDay = GOAL_END): GoalView {
   return createGoal(
     db,
-    {
+    { startReason: '始める理由', endDay,
       name,
       purpose: '設計を読めるようになる',
       start: 'today',
@@ -159,7 +165,7 @@ describe('凍結の枠はアプリ全体で月1回', () => {
     expect(freezeQuota(db, NOW_0801).month).toBe('2026-08');
     expect(freezeQuota(db, NOW_0801).used).toBe(false);
 
-    const b = makeGoal('茶色取りたい', NOW_0806);
+    const b = makeGoal('茶色取りたい', NOW_0806, '2026-09-04');
     const f = reserveFreeze(db, b.id, { endDay: '2026-08-25', reason: '8月の事情' }, NOW_0806);
     expect(f.startDay).toBe('2026-08-07');
   });
@@ -319,10 +325,11 @@ describe('凍結中の目標のルールはゲートから外れる', () => {
   it('単発ルールの繰り越しは凍結中だけ止まる', () => {
     const g = createGoal(
       db,
-      {
+      { startReason: '始める理由',
         name: '髪質を改善する',
         purpose: '前髪を見る',
         start: 'today',
+        endDay: GOAL_END,
         rules: [
           {
             target: 'PHOTO',

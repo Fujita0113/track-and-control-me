@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
+import { thirtyDayEnd } from './goal-input.js';
 
 /**
  * 目標ルールのループの通し E2E（goal-rule-lifecycle / issue #59 後の背骨）。
@@ -42,7 +43,9 @@ async function seedGoal(request: APIRequestContext): Promise<string> {
     data: {
       name: GOAL_NAME,
       purpose: '髪で悩まない',
+      startReason: 'e2e のため',
       start: 'today',
+      endDay: thirtyDayEnd(dayKey),
       rules: [{ target: 'MANUAL_CHECK', label: CHECK_LABEL, startDay: dayKey, endDay: null, reason: '毎日振り返る' }],
     },
   });

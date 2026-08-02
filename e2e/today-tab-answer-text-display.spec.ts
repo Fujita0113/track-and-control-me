@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
+import { thirtyDayEnd } from './goal-input.js';
 
 /**
  * issue #70 / today-tab-answer-text-display の通し E2E。
@@ -23,7 +24,9 @@ async function seedQuestionRule(request: APIRequestContext): Promise<string> {
     data: {
       name: 'ゴミ出しを忘れない',
       purpose: '部屋をきれいにする',
+      startReason: 'e2e のため',
       start: 'tomorrow', // upcoming 扱いにして振り返りタブの .pc-block を増やさない（他 e2e との共存）。
+      endDay: thirtyDayEnd(dayKey),
       rules: [{ target: 'QUESTION', questionText: QUESTION, startDay: dayKey, endDay: dayKey, reason: REASON }],
     },
   });

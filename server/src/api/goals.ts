@@ -32,8 +32,10 @@ import {
   GoalLifecycleError,
   RuleAnswerError,
   type NewGoalRuleInput,
+  type NewGoalTargetHoursInput,
   type GoalStart,
 } from '../services/goals.js';
+import { goalHistory } from '../services/goal-history.js';
 import {
   reserveFreeze,
   reserveFreezeMulti,
@@ -123,15 +125,25 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     const b = (req.body ?? {}) as {
       name?: string;
       purpose?: string;
+      startReason?: string;
+      endDay?: string;
       rules?: NewGoalRuleInput[];
       start?: string;
+      targetHours?: NewGoalTargetHoursInput | null;
+      outcomeCaption?: string | null;
+      outcomeImage?: { dataUrl: string } | null;
     };
     try {
       return createGoal(db, {
         name: b.name ?? '',
-        purpose: b.purpose,
+        purpose: b.purpose ?? '',
+        startReason: b.startReason ?? '',
+        endDay: b.endDay ?? '',
         rules: b.rules ?? [],
         start: normalizeStart(b.start),
+        targetHours: b.targetHours ?? null,
+        outcomeCaption: b.outcomeCaption ?? null,
+        outcomeImage: b.outcomeImage ?? null,
       });
     } catch (err) {
       return replyGoalError(err, reply);
@@ -178,13 +190,21 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
 
   app.post('/api/goals/:id/end', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const b = (req.body ?? {}) as { reason?: string };
+    const b = (req.body ?? {}) as {
+      reason?: string;
+      outcomeMet?: boolean;
+      photo?: { dataUrl: string; width?: number | null; height?: number | null };
+    };
     try {
-      return endGoal(db, id, b.reason);
+      return endGoal(db, id, { reason: b.reason ?? '', outcomeMet: b.outcomeMet, photo: b.photo });
     } catch (err) {
       return replyGoalError(err, reply);
     }
   });
+
+  // --- 大きい沿革（目標の年表・spec: goal-history）--------------------------
+
+  app.get('/api/goals/history', async () => goalHistory(db));
 
   // --- 一時凍結（spec: goal-freeze）-----------------------------------------
   // 静的パス /api/goals/freeze/quota は /api/goals/:id 系と衝突しない（find-my-way は静的優先）。

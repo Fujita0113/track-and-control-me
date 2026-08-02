@@ -28,9 +28,18 @@ import type { DueRule, RuleAnswer } from '@track/contract';
 import { getReflection } from './reflection.js';
 import { todayKey } from './summary.js';
 import type { ConditionResult } from '../rules/evaluate.js';
-import { resolveGroupDisplay } from './group-identity.js';
+import { resolveGroupDisplay, getIdentity, listAliases } from './group-identity.js';
 import type { Chronicle } from '@track/contract';
-import { goalFreezeIntervals, effectiveEndDay, getFreezeOn, type FreezeView } from './goal-freeze.js';
+import {
+  goalFreezeIntervals,
+  effectiveEndDay,
+  getFreezeOn,
+  cancelFreeze,
+  frozenDaysUpTo,
+  type FreezeInterval,
+  type FreezeView,
+} from './goal-freeze.js';
+import { totalWorkSecondsForDay } from './categories.js';
 
 /**
  * 30日チャレンジ（目標）のライフサイクル・レポート集計・日記（spec: goal-challenge / goal-report /
@@ -40,11 +49,10 @@ import { goalFreezeIntervals, effectiveEndDay, getFreezeOn, type FreezeView } fr
  * で紐づき、ルールの中身は常に `rule` テーブルから live に解決する（改名・閾値変更がそのまま反映される）。
  */
 
-export type GoalStatus = 'upcoming' | 'active' | 'completed';
+export type GoalStatus = 'upcoming' | 'active' | 'ended' | 'completed';
 /** 目標の開始日選択（既定=今日）。今日開始は当日を Day1 として即「進行中」（spec: goal-challenge / D3）。 */
 export type GoalStart = 'today' | 'tomorrow';
 
-const GOAL_DAYS = 30; // 既定の目標期間（30日固定→前方向にのみ延長されうる・design D7）。
 // 時間型（②時間推移の対象）。MANUAL_CHECK / PLANNING / PHOTO / QUESTION は非時間型。
 const TIME_TARGETS = new Set<RuleTarget>(['TOTAL_WORK', 'GROUP', 'TIMELINE']);
 
@@ -126,6 +134,12 @@ interface GoalRow {
   lifecycle_reason: string | null;
   lifecycle_decided_at: number | null;
   continued_goal_id: number | null;
+  start_reason: string;
+  ended_day_key: string | null;
+  end_reason: string | null;
+  final_pace_json: string | null;
+  outcome_caption: string | null;
+  outcome_met: number | null;
 }
 
 export { addDaysKey } from './day-key.js';
@@ -172,6 +186,7 @@ function effectiveEndDayOf(db: DB, goal: GoalRow, today: string): string {
 }
 
 function deriveStatus(db: DB, today: string, goal: GoalRow): GoalStatus {
+  if (goal.ended_day_key != null && today >= goal.ended_day_key) return 'ended';
   const endDay = effectiveEndDayOf(db, goal, today);
   if (today < goal.start_day) return 'upcoming';
   if (today <= endDay) return 'active';
@@ -245,6 +260,190 @@ function toRuleView(db: DB, rule: RuleRow, today: string): GoalRuleView {
   };
 }
 
+// --- 目標時間（spec: goal-target-hours / design D1-D4）---------------------
+
+export type TargetHoursKind = 'TOTAL_WORK' | 'GROUP_SET' | 'TIMELINE';
+
+interface TargetHoursRow {
+  goal_id: number;
+  kind: TargetHoursKind;
+  seconds_per_day: number;
+  label_snapshot: string | null;
+  created_at: number;
+}
+
+export interface GoalTargetHoursView {
+  kind: TargetHoursKind;
+  secondsPerDay: number;
+  /** 束ねた対象の表示名（現在値から都度解決・改名しても動く）。決定的な並び。 */
+  labels: string[];
+  /** 束ねた対象の安定参照（`group:<identityId>` / `timeline:<ラベル>`）。 */
+  refs: string[];
+  /** GROUP_SET のときの group identity id 一覧（labels/refs と同じ並び）。それ以外は空。 */
+  groupIdentityIds: number[];
+}
+
+export interface NewGoalTargetHoursInput {
+  kind: TargetHoursKind;
+  secondsPerDay: number;
+  /** kind=GROUP_SET のとき1件以上・重複不可。 */
+  groupIdentityIds?: number[];
+  /** kind=TIMELINE のときのカテゴリラベル。 */
+  timelineLabel?: string;
+}
+
+export interface GoalPaceView {
+  /** start_day から min(today, 実効 end_day) までの経過日数（今日を含む・凍結日を除く）。 */
+  elapsedDays: number;
+  accumulatedSeconds: number;
+  averageSeconds: number;
+  targetSecondsPerDay: number;
+  /** average >= targetSecondsPerDay（design D4-b）。 */
+  met: boolean;
+  /** 到達に今日あと何秒必要か（到達済みは 0）。 */
+  todayRemainSeconds: number;
+}
+
+function getTargetHoursRow(db: DB, goalId: number): TargetHoursRow | undefined {
+  return db.prepare('SELECT * FROM goal_target_hours WHERE goal_id = ?').get(goalId) as
+    | TargetHoursRow
+    | undefined;
+}
+
+function targetHoursMemberRefs(db: DB, goalId: number): string[] {
+  return (
+    db.prepare('SELECT ref FROM goal_target_hours_member WHERE goal_id = ? ORDER BY ord').all(goalId) as {
+      ref: string;
+    }[]
+  ).map((r) => r.ref);
+}
+
+function toTargetHoursView(db: DB, row: TargetHoursRow): GoalTargetHoursView {
+  const refs = targetHoursMemberRefs(db, row.goal_id);
+  if (row.kind === 'GROUP_SET') {
+    const groupIdentityIds = refs.map((r) => Number(r.slice('group:'.length)));
+    const labels = groupIdentityIds.map((id) => getIdentity(db, id)?.name ?? '不明なグループ');
+    return { kind: 'GROUP_SET', secondsPerDay: row.seconds_per_day, labels, refs, groupIdentityIds };
+  }
+  if (row.kind === 'TIMELINE') {
+    const label = refs[0] ? refs[0].slice('timeline:'.length) : '';
+    return { kind: 'TIMELINE', secondsPerDay: row.seconds_per_day, labels: [label], refs, groupIdentityIds: [] };
+  }
+  return { kind: 'TOTAL_WORK', secondsPerDay: row.seconds_per_day, labels: ['総作業時間'], refs: [], groupIdentityIds: [] };
+}
+
+/** 目標時間の入力検証（design D1・spec: goal-target-hours）。任意項目なので未指定は何もしない。 */
+function validateTargetHoursInput(input: NewGoalTargetHoursInput | null | undefined): void {
+  if (!input) return;
+  if (input.kind !== 'TOTAL_WORK' && input.kind !== 'GROUP_SET' && input.kind !== 'TIMELINE')
+    throw new GoalValidationError('目標時間の対象は総作業時間・グループ・カテゴリのいずれかにしてください');
+  if (!(typeof input.secondsPerDay === 'number' && input.secondsPerDay > 0))
+    throw new GoalValidationError('目標時間は1分以上で指定してください');
+  if (input.kind === 'GROUP_SET') {
+    const ids = input.groupIdentityIds ?? [];
+    if (ids.length === 0) throw new GoalValidationError('対象のグループを1つ以上選択してください');
+    if (new Set(ids).size !== ids.length)
+      throw new GoalValidationError('同じグループを重複して選ぶことはできません');
+  }
+  if (input.kind === 'TIMELINE' && !(input.timelineLabel ?? '').trim())
+    throw new GoalValidationError('カテゴリ名を入力してください');
+}
+
+function insertTargetHours(db: DB, goalId: number, input: NewGoalTargetHoursInput, nowMs: number): void {
+  db.prepare(
+    `INSERT INTO goal_target_hours (goal_id, kind, seconds_per_day, label_snapshot, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(goalId, input.kind, input.secondsPerDay, null, nowMs);
+  const insMember = db.prepare('INSERT INTO goal_target_hours_member (goal_id, ref, ord) VALUES (?, ?, ?)');
+  if (input.kind === 'GROUP_SET') {
+    (input.groupIdentityIds ?? []).forEach((id, i) => insMember.run(goalId, `group:${id}`, i));
+  } else if (input.kind === 'TIMELINE') {
+    insMember.run(goalId, `timeline:${(input.timelineLabel ?? '').trim()}`, 0);
+  }
+}
+
+/** 凍結区間を `[startDay, upTo]` へ切り詰めた個々の day_key 集合（分母から除く対象・design D4）。 */
+function frozenDayKeySet(intervals: FreezeInterval[], startDay: string, upTo: string): Set<string> {
+  const set = new Set<string>();
+  for (const iv of intervals) {
+    const from = iv.startDay > startDay ? iv.startDay : startDay;
+    const to = iv.endDay < upTo ? iv.endDay : upTo;
+    if (to < from) continue;
+    for (let i = 0; i <= dayDiff(from, to); i++) set.add(addDaysKey(from, i));
+  }
+  return set;
+}
+
+/** 目標時間の対象の実測秒を dayKeys（凍結日を除いた対象日）ぶん合算する（design D2・D4）。 */
+function accumulatedSecondsFor(db: DB, row: TargetHoursRow, dayKeys: string[]): number {
+  if (dayKeys.length === 0) return 0;
+  if (row.kind === 'TOTAL_WORK') {
+    let sum = 0;
+    for (const dk of dayKeys) sum += totalWorkSecondsForDay(db, dk);
+    return sum;
+  }
+  if (row.kind === 'TIMELINE') {
+    const refs = targetHoursMemberRefs(db, row.goal_id);
+    const label = refs[0] ? refs[0].slice('timeline:'.length) : '';
+    const dayPh = dayKeys.map(() => '?').join(',');
+    const r = db
+      .prepare(
+        `SELECT COALESCE(SUM((end_at - start_at) * 1.0 / n), 0) AS ms FROM activity_log_entry
+         WHERE entry_type = 'MANUAL' AND category_key = ? AND day_key IN (${dayPh})`,
+      )
+      .get(label, ...dayKeys) as { ms: number };
+    return Math.floor(r.ms / 1000);
+  }
+  // GROUP_SET: 各対象グループの alias（name,color）を束ねて単純和（同一 identity は自動的に合算される）。
+  const refs = targetHoursMemberRefs(db, row.goal_id);
+  const groupIds = refs.map((r) => Number(r.slice('group:'.length)));
+  const aliasPairs: { name: string; color: string }[] = [];
+  for (const id of groupIds) for (const a of listAliases(db, id)) aliasPairs.push({ name: a.name, color: a.color ?? '' });
+  if (aliasPairs.length === 0) return 0;
+  const dayPh = dayKeys.map(() => '?').join(',');
+  const namePh = aliasPairs.map(() => '(?, ?)').join(', ');
+  const r = db
+    .prepare(
+      `SELECT COALESCE(SUM(credited_ms), 0) AS ms FROM session
+       WHERE day_key IN (${dayPh}) AND (tab_group_name_snapshot, COALESCE(group_color_snapshot, '')) IN (${namePh})`,
+    )
+    .get(...dayKeys, ...aliasPairs.flatMap((a) => [a.name, a.color])) as { ms: number };
+  return Math.floor(r.ms / 1000);
+}
+
+/**
+ * 目標時間を持つ目標のペースを算定する（design D4・D4-b）。目標時間を持たない、または
+ * 経過日数0（開始前・全期間凍結）のときは null（ペース非表示）。
+ */
+export function goalPace(db: DB, goalId: number, nowMs = Date.now()): GoalPaceView | null {
+  const goal = getGoalRow(db, goalId);
+  const row = getTargetHoursRow(db, goalId);
+  if (!row) return null;
+  const today = todayKey(db, nowMs);
+  if (today < goal.start_day) return null;
+  const effEnd = effectiveEndDayOf(db, goal, today);
+  const upTo = today < effEnd ? today : effEnd;
+  const intervals = goalFreezeIntervals(db, goal.id);
+  const totalDays = dayDiff(goal.start_day, upTo) + 1;
+  const frozen = frozenDaysUpTo(intervals, upTo);
+  const elapsedDays = totalDays - frozen;
+  if (elapsedDays <= 0) return null;
+
+  const frozenSet = frozenDayKeySet(intervals, goal.start_day, upTo);
+  const dayKeys: string[] = [];
+  for (let i = 0; i < totalDays; i++) {
+    const dk = addDaysKey(goal.start_day, i);
+    if (!frozenSet.has(dk)) dayKeys.push(dk);
+  }
+
+  const accumulated = accumulatedSecondsFor(db, row, dayKeys);
+  const targetSecondsPerDay = row.seconds_per_day;
+  const met = accumulated >= targetSecondsPerDay * elapsedDays;
+  const averageSeconds = Math.floor(accumulated / elapsedDays);
+  const todayRemainSeconds = Math.max(0, targetSecondsPerDay * elapsedDays - accumulated);
+  return { elapsedDays, accumulatedSeconds: accumulated, averageSeconds, targetSecondsPerDay, met, todayRemainSeconds };
+}
+
 export interface GoalView {
   id: number;
   name: string;
@@ -266,15 +465,28 @@ export interface GoalView {
   continuedGoalId: number | null;
   /** 一時凍結の現在状態（予約中/凍結中/解凍済み）。一度も凍結したことが無ければ null（spec: goal-freeze）。 */
   freeze: FreezeView | null;
+  /** なぜ始めるのか（作成理由・必須・design D7）。 */
+  startReason: string;
+  /** 証拠写真のキャプション。null なら「求めない」設定（design D4-c）。 */
+  outcomeCaption: string | null;
+  /** めざした状態の自己申告（3値）。終了・完走の時点で焼き込む（design D4-c）。 */
+  outcomeMet: boolean | null;
+  /** 終了した日（`status==='ended'` のときのみ非 null・design D6）。 */
+  endedDayKey: string | null;
+  /** 目標時間（1目標に最大1つ・任意・spec: goal-target-hours）。 */
+  targetHours: GoalTargetHoursView | null;
+  /** 目標時間を持つ進行中の目標のペース。目標時間が無ければ null（spec: goal-target-hours）。 */
+  pace: GoalPaceView | null;
 }
 
-function toGoalView(db: DB, row: GoalRow, today: string, _nowMs: number): GoalView {
+function toGoalView(db: DB, row: GoalRow, today: string, nowMs: number): GoalView {
   const status = deriveStatus(db, today, row);
   const endDay = effectiveEndDayOf(db, row, today);
   const dayCount = dayDiff(row.start_day, endDay) + 1;
   // 進行中は 1..M（未決着ルールで完走が保留されている間は M で頭打ち）。完走後・開始前は null
   // （目標一覧の表示は「完走」の一言で足り、Day N/M はレポートヘッダが担う）。
   const dayNumber = status === 'active' ? Math.min(dayDiff(row.start_day, today) + 1, dayCount) : null;
+  const targetHoursRow = getTargetHoursRow(db, row.id);
   return {
     id: row.id,
     name: row.name,
@@ -294,6 +506,12 @@ function toGoalView(db: DB, row: GoalRow, today: string, _nowMs: number): GoalVi
     lifecycleReason: row.lifecycle_reason,
     continuedGoalId: row.continued_goal_id,
     freeze: getFreezeOn(db, row.id, today),
+    startReason: row.start_reason,
+    outcomeCaption: row.outcome_caption,
+    outcomeMet: row.outcome_met == null ? null : row.outcome_met === 1,
+    endedDayKey: row.ended_day_key,
+    targetHours: targetHoursRow ? toTargetHoursView(db, targetHoursRow) : null,
+    pace: targetHoursRow ? goalPace(db, row.id, nowMs) : null,
   };
 }
 
@@ -319,10 +537,21 @@ export interface NewGoalRuleInput {
 
 export interface CreateGoalInput {
   name: string;
-  purpose?: string;
+  /** めざす状態（必須・design D4-c）。終わるときにこれができたかを聞かれる。 */
+  purpose: string;
+  /** なぜ始めるのか（作成理由・必須・design D7）。 */
+  startReason: string;
+  /** 期限（必須・30日固定を撤廃・design D5）。`endDay >= 実際の start_day` を要求する。 */
+  endDay: string;
   start?: GoalStart;
   /** この目標のためにその場で作るルール（1つ以上・spec: goal-challenge）。 */
   rules: NewGoalRuleInput[];
+  /** 目標時間（任意・1目標に最大1つ・spec: goal-target-hours）。 */
+  targetHours?: NewGoalTargetHoursInput | null;
+  /** 証拠写真のキャプション（任意）。null/未指定なら「求めない」。 */
+  outcomeCaption?: string | null;
+  /** 初期写真（Before・任意）。`outcomeCaption` が無いと拒否される。 */
+  outcomeImage?: { dataUrl: string } | null;
 }
 
 export interface AddRuleResult {
@@ -371,26 +600,44 @@ export function addRuleToGoal(
 }
 
 /**
- * 目標を作成する。開始日は今日／明日の選択式（既定=今日）、期間は30日固定（延長されうる）。
- * ルールはその場で新規作成し自動で紐づける（「採用」の明示選択は廃止・spec: goal-inline-condition）。
+ * 目標を作成する。開始日は今日／明日の選択式（既定=今日）、期限は作成時に自由指定する
+ * （30日固定を撤廃・design D5）。ルールはその場で新規作成し自動で紐づける
+ * （「採用」の明示選択は廃止・spec: goal-inline-condition）。
  * 作成と紐づけは一体の操作で、途中の失敗（バリデーション・拡張要求）は全体 rollback する。
  */
 export function createGoal(db: DB, input: CreateGoalInput, nowMs = Date.now()): GoalView {
   const name = (input.name ?? '').trim();
   if (!name) throw new GoalValidationError('目標名は必須です');
+  const purpose = (input.purpose ?? '').trim();
+  if (!purpose) throw new GoalValidationError('めざす状態を入力してください');
+  const startReason = (input.startReason ?? '').trim();
+  if (!startReason) throw new GoalValidationError('始める理由を入力してください');
+  if (!input.endDay) throw new GoalValidationError('期限を指定してください');
   const rules = input.rules ?? [];
   if (rules.length === 0) throw new GoalValidationError('ルールを1つ以上追加してください');
   const start: GoalStart = input.start === 'tomorrow' ? 'tomorrow' : 'today';
   const startDay = goalStartDay(db, nowMs, start);
-  const endDay = addDaysKey(startDay, GOAL_DAYS - 1);
+  const endDay = input.endDay;
+  if (endDay < startDay) throw new GoalValidationError('期限は開始日以降にしてください');
+  const outcomeCaption = input.outcomeCaption != null ? String(input.outcomeCaption).trim() || null : null;
+  if (!outcomeCaption && input.outcomeImage)
+    throw new GoalValidationError('初期写真を保存するには証拠写真のキャプションが必要です');
+  validateTargetHoursInput(input.targetHours);
 
   const tx = db.transaction((): number => {
     const info = db
-      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(name, (input.purpose ?? '').trim(), startDay, endDay, nowMs);
+      .prepare(
+        `INSERT INTO goal (name, purpose, start_day, end_day, created_at, start_reason, outcome_caption)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(name, purpose, startDay, endDay, nowMs, startReason, outcomeCaption);
     const goalId = info.lastInsertRowid as number;
     for (const r of rules) {
       addRuleToGoal(db, goalId, { ...r, startDay: r.startDay ?? startDay }, {}, nowMs);
+    }
+    if (input.targetHours) insertTargetHours(db, goalId, input.targetHours, nowMs);
+    if (outcomeCaption && input.outcomeImage) {
+      addJournalImage(db, goalId, startDay, { dataUrl: input.outcomeImage.dataUrl, caption: outcomeCaption }, nowMs);
     }
     return goalId;
   });
@@ -488,22 +735,43 @@ function requireCompletedUnforked(db: DB, goalId: number, nowMs: number): GoalRo
 }
 
 /**
- * 続ける: 新しい30日目標を作り直す（Day 1/30）。永続ルール（end_day=null・status='active'）は
- * 新目標へ紐づけ続投する（既に期日を終えた単発/範囲ルールは復活しない）。前サイクルのレポートは残る。
+ * 続ける: 新しい目標を作り直す（Day 1/M。期間は元の目標と同じ長さを既定とする・design:
+ * goal-lifecycle-fork）。永続ルール（end_day=null・status='active'）は新目標へ紐づけ続投する
+ * （既に期日を終えた単発/範囲ルールは復活しない）。目標時間があれば新目標へ引き継ぐ。
+ * 前サイクルのレポートは残る。
  */
 export function continueGoal(db: DB, goalId: number, nowMs = Date.now()): GoalView {
   const goal = requireCompletedUnforked(db, goalId, nowMs);
   const today = todayKey(db, nowMs);
-  const newEndDay = addDaysKey(today, GOAL_DAYS - 1);
+  const originalDayCount = dayDiff(goal.start_day, goal.end_day) + 1;
+  const newEndDay = addDaysKey(today, originalDayCount - 1);
 
   const tx = db.transaction((): number => {
     const info = db
-      .prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(goal.name, goal.purpose, today, newEndDay, nowMs);
+      .prepare(
+        `INSERT INTO goal (name, purpose, start_day, end_day, created_at, start_reason)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(goal.name, goal.purpose, today, newEndDay, nowMs, goal.start_reason);
     const newGoalId = info.lastInsertRowid as number;
     const permanentRules = linkedRules(db, goal.id).filter((r) => r.status === 'active' && r.end_day === null);
     for (const r of permanentRules) {
       db.prepare('INSERT OR IGNORE INTO goal_rule (goal_id, rule_id) VALUES (?, ?)').run(newGoalId, r.id);
+    }
+    const targetHoursRow = getTargetHoursRow(db, goal.id);
+    if (targetHoursRow) {
+      const view = toTargetHoursView(db, targetHoursRow);
+      insertTargetHours(
+        db,
+        newGoalId,
+        {
+          kind: view.kind,
+          secondsPerDay: view.secondsPerDay,
+          groupIdentityIds: view.groupIdentityIds,
+          timelineLabel: view.kind === 'TIMELINE' ? view.labels[0] : undefined,
+        },
+        nowMs,
+      );
     }
     db.prepare(
       "UPDATE goal SET lifecycle_choice = 'continued', lifecycle_decided_at = ?, continued_goal_id = ? WHERE id = ?",
@@ -514,20 +782,61 @@ export function continueGoal(db: DB, goalId: number, nowMs = Date.now()): GoalVi
   return toGoalView(db, getGoalRow(db, newGoalId), todayKey(db, nowMs), nowMs);
 }
 
+export interface EndGoalInput {
+  /** 必須。空は 400（GoalValidationError）。 */
+  reason: string;
+  /** めざした状態の答え（3値・任意）。未指定は「答えない」（null）。 */
+  outcomeMet?: boolean;
+  /** 証拠写真（任意）。`outcome_caption` が無い目標に渡すと拒否される。 */
+  photo?: { dataUrl: string; width?: number | null; height?: number | null };
+}
+
 /**
- * 終える（理由任意）: 永続ルールをゲートから外す（`status='removed'`）。目標は完走・終了として
- * アーカイブされる（レポート・沿革・カレンダーは読めるまま残す）。理由を書けば沿革の最終エントリに残る。
+ * 終える（理由必須・design D6）: 進行中・完走後のどちらからでも呼べ、問いは分岐しない。
+ * 永続ルールをゲートから外し（`status='removed'`）、当日から解錠評価に含まれなくする。
+ * 終了時点のペースを `final_pace_json` へ、めざした状態の答えを `outcome_met` へ焼き込む。
+ * 未発効の凍結予約は取り消し、適用済みの延長と凍結の沿革は残す。
  */
-export function endGoal(db: DB, goalId: number, reason: string | undefined, nowMs = Date.now()): GoalView {
-  const goal = requireCompletedUnforked(db, goalId, nowMs);
-  const r = (reason ?? '').trim();
+export function endGoal(db: DB, goalId: number, input: EndGoalInput, nowMs = Date.now()): GoalView {
+  const goal = getGoalRow(db, goalId);
+  if (goal.ended_day_key != null) throw new GoalLifecycleError('この目標は既に終了しています');
+  const reason = (input.reason ?? '').trim();
+  if (!reason) throw new GoalValidationError('理由を入力してください');
+  if (input.photo && !goal.outcome_caption)
+    throw new GoalValidationError('この目標には証拠写真の設定がありません');
+  const today = todayKey(db, nowMs);
+  const outcomeMet = input.outcomeMet === true ? 1 : input.outcomeMet === false ? 0 : null;
 
   const tx = db.transaction(() => {
     const permanentRules = linkedRules(db, goal.id).filter((x) => x.status === 'active' && x.end_day === null);
-    for (const rule of permanentRules) removeRule(db, rule.id, r || '目標を終える', nowMs);
+    for (const rule of permanentRules) removeRule(db, rule.id, reason, nowMs);
+
+    if (getFreezeOn(db, goal.id, today)?.state === 'reserved') cancelFreeze(db, goal.id, nowMs);
+
+    if (input.photo && goal.outcome_caption) {
+      // 完走から日が経ってから終える（進行中/完走どちらも同じ経路）ことがあり得るため、
+      // 期間チェックは無効化する（当日にキャプションつきで保存できることを優先する・design D6）。
+      addJournalImage(
+        db,
+        goal.id,
+        today,
+        {
+          dataUrl: input.photo.dataUrl,
+          caption: goal.outcome_caption,
+          width: input.photo.width ?? null,
+          height: input.photo.height ?? null,
+        },
+        nowMs,
+        { allowOutOfRange: true },
+      );
+    }
+
+    const pace = goalPace(db, goal.id, nowMs);
     db.prepare(
-      "UPDATE goal SET lifecycle_choice = 'ended', lifecycle_reason = ?, lifecycle_decided_at = ? WHERE id = ?",
-    ).run(r || null, nowMs, goal.id);
+      `UPDATE goal SET ended_day_key = ?, end_reason = ?, outcome_met = ?, final_pace_json = ?,
+              lifecycle_choice = 'ended', lifecycle_reason = ?, lifecycle_decided_at = ?
+        WHERE id = ?`,
+    ).run(today, reason, outcomeMet, pace ? JSON.stringify(pace) : null, reason, nowMs, goal.id);
   });
   tx();
   return toGoalView(db, getGoalRow(db, goal.id), todayKey(db, nowMs), nowMs);
@@ -657,9 +966,13 @@ export function addJournalImage(
   dayKey: string,
   input: AddJournalImageInput,
   nowMs = Date.now(),
+  opts: { allowOutOfRange?: boolean } = {},
 ): JournalImageMeta {
   const row = getGoalRow(db, goalId); // 存在確認（無ければ 404）。status は問わない。
-  if (dayKey < row.start_day || dayKey > effectiveEndDayOf(db, row, todayKey(db, nowMs)))
+  if (
+    !opts.allowOutOfRange &&
+    (dayKey < row.start_day || dayKey > effectiveEndDayOf(db, row, todayKey(db, nowMs)))
+  )
     throw new JournalImageError('目標期間外の日には追加できません');
   const { mime, bytes } = parseDataUrl(input.dataUrl);
   if (!IMAGE_MIME_ALLOW.has(mime))
@@ -798,6 +1111,10 @@ export interface GoalReport {
     continuedGoalId: number | null;
     /** 一時凍結の現在状態。ヘッダの「凍結中」表示に使う（spec: goal-freeze / goal-report）。 */
     freeze: FreezeView | null;
+    /** 証拠写真のキャプション。null なら「求めない」設定（完走フォークの「終える」ダイアログが使う）。 */
+    outcomeCaption: string | null;
+    /** 目標時間（②の水準線描画に使う）。無ければ null（spec: goal-target-hours）。 */
+    targetHours: GoalTargetHoursView | null;
   };
   rules: ReportRule[];
   hasTimeType: boolean;
@@ -1006,6 +1323,11 @@ export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalRepor
       lifecycleReason: goal.lifecycle_reason,
       continuedGoalId: goal.continued_goal_id,
       freeze: getFreezeOn(db, goal.id, today),
+      outcomeCaption: goal.outcome_caption,
+      targetHours: (() => {
+        const row = getTargetHoursRow(db, goal.id);
+        return row ? toTargetHoursView(db, row) : null;
+      })(),
     },
     rules: reportRules,
     hasTimeType: reportRules.some((r) => r.isTimeType),

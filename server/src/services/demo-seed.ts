@@ -34,6 +34,12 @@ export const DEMO_AFTER_END_DAY = addDaysKey(DEMO_EFFECTIVE_END_DAY, 1); // 完�
 const GOAL_DAYS = 30;
 const GOAL_NAME = 'メンタルを安定させる';
 const GOAL_PURPOSE = '毎日を穏やかに保ち、作業と振り返りの習慣で心を整える。';
+const GOAL_START_REASON = '気分の浮き沈みに振り回されず、淡々と積み上げられるようになりたい。';
+// 主目標の目標時間（spec: goal-target-hours・issue #76）。下限（総作業時間・段階的に4h→3h）とは
+// 別に「5h/日」を目標として置く。パスワードの条件にはならない（ゲートに合流しない・design D3）。
+const GOAL_TARGET_SECONDS_PER_DAY = 5 * 3600;
+// 証拠写真は既存の「作業スペース」ペア（Day1=Before・Day30=After）をそのまま指す（新規画像は足さない）。
+const GOAL_OUTCOME_CAPTION = '作業スペース';
 
 // --- 2つ目のデモ目標: 手動チェック（非時間型）のみを採用した完走目標 --------------
 // 時間型の実践を含まないため、完走レポートに②「時間の推移」が出ない例を示す
@@ -43,6 +49,28 @@ export const DEMO_GOAL2_START_DAY = '2026-05-01'; // Day1
 export const DEMO_GOAL2_END_DAY = addDaysKey(DEMO_GOAL2_START_DAY, GOAL_DAYS - 1); // 2026-05-30
 const GOAL2_NAME = '朝の散歩を習慣にする';
 const GOAL2_PURPOSE = '時間では測らない「やった／やってない」だけの一点突破チャレンジ。';
+const GOAL2_START_REASON = '時間で測る目標に疲れた。まず「やったか/やってないか」だけに単純化したい。';
+
+// --- 3つ目のデモ目標: 目標時間つきで進行中に理由つきで終えた目標（spec: goal-target-hours /
+// goal-lifecycle-fork ADDED / goal-history・issue #76）------------------------------------
+// 「大きい沿革」の主役（目標時間の到達/未達・めざした状態の答え・証拠写真の3つが同じ行に並ぶ）を
+// デモで実際に見せる。時間は目標に届かなかったが、めざした状態には届いた——という数字だけでは
+// 読めない事実を示す（design D7）。主目標・2つ目の目標とは無関係な別期間に置く。
+export const DEMO_GOAL3_ID = 3;
+export const DEMO_GOAL3_START_DAY = '2026-04-20'; // Day1
+export const DEMO_GOAL3_END_DAY = '2026-04-26'; // 期限（7日間・1週間チャレンジの例）
+export const DEMO_GOAL3_ENDED_DAY = '2026-04-24'; // Day5に理由つきで終える（進行中に降りる例）
+const GOAL3_NAME = 'AtCoderのレーティングを上げる';
+const GOAL3_PURPOSE = '緑コーダーになる';
+const GOAL3_START_REASON = '1週間だけ集中して伸びを試したい';
+const GOAL3_END_REASON = '試験勉強はもう大丈夫。設計に戻したい';
+const GOAL3_OUTCOME_CAPTION = 'AtCoder レーティング';
+const GOAL3_TARGET_SECONDS_PER_DAY = 2 * 3600; // 目標: 2h/日
+const GOAL3_GROUP_STABLE_ID = 'demo-atcoder';
+const GOAL3_GROUP_NAME = 'AtCoder';
+const GOAL3_GROUP_COLOR = 'orange';
+// Day1〜5 の実測分（分）。平均は目標(2h)に届かないが、めざした状態は「できた」（design D7 の主役）。
+const GOAL3_WORK_MIN = [100, 140, 50, 130, 90];
 // 手動チェックを飛ばした日（1始まり Day 番号）。両方達成の日＝達成日数 24/30。
 const WALK_MISS_DAYS = new Set<number>([5, 12, 20]); // 朝散歩 met 27/30
 const STRETCH_MISS_DAYS = new Set<number>([8, 12, 15, 22]); // ストレッチ met 26/30
@@ -299,10 +327,16 @@ function seedRuleChronicle(db: DB): void {
 /** デモ用サンプルを空の（マイグレーション済み）DB へ seed する。 */
 export function seedDemo(db: DB): void {
   const tx = db.transaction(() => {
-    // 目標本体。
+    // 目標本体。目標時間（5h/日）と証拠写真（既存の「作業スペース」ペアを指す）を持つ
+    // サンプルとして完走させる（spec: goal-target-hours・design D4-c）。
     db.prepare(
-      'INSERT INTO goal (id, name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(DEMO_GOAL_ID, GOAL_NAME, GOAL_PURPOSE, DEMO_START_DAY, DEMO_END_DAY, SEED_TS);
+      `INSERT INTO goal (id, name, purpose, start_day, end_day, created_at, start_reason, outcome_caption, outcome_met)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(DEMO_GOAL_ID, GOAL_NAME, GOAL_PURPOSE, DEMO_START_DAY, DEMO_END_DAY, SEED_TS, GOAL_START_REASON, GOAL_OUTCOME_CAPTION, 1);
+    db.prepare(
+      `INSERT INTO goal_target_hours (goal_id, kind, seconds_per_day, label_snapshot, created_at)
+       VALUES (?, 'TOTAL_WORK', ?, '総作業時間', ?)`,
+    ).run(DEMO_GOAL_ID, GOAL_TARGET_SECONDS_PER_DAY, SEED_TS);
 
     // ルール4つ（作業4時間 / 振り返りを書く / 明日のタスク登録 / 筋トレ手動チェック）。すべて永続
     // （end_day=null）で目標の全期間を通して効く。「採用」は廃止済み＝goal_rule で自動紐づけする。
@@ -465,8 +499,8 @@ export function seedDemo(db: DB): void {
     // --- 2つ目のデモ目標: 手動チェックのみ（非時間型）を追った完走目標 -----------
     // 時間型ルールが無いため、完走レポートは①達成カレンダーのみ・②時間の推移は出ない。
     db.prepare(
-      'INSERT INTO goal (id, name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(DEMO_GOAL2_ID, GOAL2_NAME, GOAL2_PURPOSE, DEMO_GOAL2_START_DAY, DEMO_GOAL2_END_DAY, SEED_TS);
+      'INSERT INTO goal (id, name, purpose, start_day, end_day, created_at, start_reason) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(DEMO_GOAL2_ID, GOAL2_NAME, GOAL2_PURPOSE, DEMO_GOAL2_START_DAY, DEMO_GOAL2_END_DAY, SEED_TS, GOAL2_START_REASON);
     // ルールは手動チェック2つ（朝散歩 / ストレッチ）。閾値なし・非時間型・永続。
     insRule.run({ id: RULE_WALK_ID, target: 'MANUAL_CHECK', threshold: null, label: '朝散歩', signal: null, startDay: DEMO_GOAL2_START_DAY, now: SEED_TS });
     insRule.run({ id: RULE_STRETCH_ID, target: 'MANUAL_CHECK', threshold: null, label: 'ストレッチ', signal: null, startDay: DEMO_GOAL2_START_DAY, now: SEED_TS });
@@ -497,6 +531,55 @@ export function seedDemo(db: DB): void {
     // ③ Before/After 画像（1枚ずつ・同一キャプションでペア化）。
     insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY, '朝の道', IMG_BEFORE, 0, SEED_TS);
     insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_END_DAY, '朝の道', IMG_AFTER, 0, SEED_TS);
+
+    // --- 3つ目のデモ目標: 目標時間つきで進行中に理由つきで終えた目標（issue #76・design D7）------
+    // 「大きい沿革」の主役（数字・自己申告・証拠写真の3つが同じ行に並ぶこと）をデモで実際に見せる。
+    // 時間は目標(2h/日)に届かなかったが、めざした状態には届いた——という筋書き。
+    // 下限ルールは持たない（design: goal-target-hours「下限ルールが無い対象にも目標時間を置ける」）。
+    const goal3Pace = {
+      elapsedDays: GOAL3_WORK_MIN.length,
+      accumulatedSeconds: GOAL3_WORK_MIN.reduce((a, m) => a + m * 60, 0),
+      averageSeconds: Math.floor(GOAL3_WORK_MIN.reduce((a, m) => a + m * 60, 0) / GOAL3_WORK_MIN.length),
+      targetSecondsPerDay: GOAL3_TARGET_SECONDS_PER_DAY,
+      met: GOAL3_WORK_MIN.reduce((a, m) => a + m * 60, 0) >= GOAL3_TARGET_SECONDS_PER_DAY * GOAL3_WORK_MIN.length,
+      todayRemainSeconds: Math.max(
+        0,
+        GOAL3_TARGET_SECONDS_PER_DAY * GOAL3_WORK_MIN.length - GOAL3_WORK_MIN.reduce((a, m) => a + m * 60, 0),
+      ),
+    };
+    db.prepare(
+      `INSERT INTO goal
+         (id, name, purpose, start_day, end_day, created_at, start_reason,
+          ended_day_key, end_reason, outcome_caption, outcome_met, final_pace_json,
+          lifecycle_choice, lifecycle_reason, lifecycle_decided_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'ended', ?, ?)`,
+    ).run(
+      DEMO_GOAL3_ID, GOAL3_NAME, GOAL3_PURPOSE, DEMO_GOAL3_START_DAY, DEMO_GOAL3_END_DAY, SEED_TS, GOAL3_START_REASON,
+      DEMO_GOAL3_ENDED_DAY, GOAL3_END_REASON, GOAL3_OUTCOME_CAPTION, JSON.stringify(goal3Pace),
+      GOAL3_END_REASON, SEED_TS,
+    );
+    const goal3GroupId = resolveIdentity(db, GOAL3_GROUP_NAME, GOAL3_GROUP_COLOR, GOAL3_GROUP_STABLE_ID, SEED_TS)!;
+    db.prepare(
+      `INSERT INTO goal_target_hours (goal_id, kind, seconds_per_day, label_snapshot, created_at)
+       VALUES (?, 'GROUP_SET', ?, ?, ?)`,
+    ).run(DEMO_GOAL3_ID, GOAL3_TARGET_SECONDS_PER_DAY, GOAL3_GROUP_NAME, SEED_TS);
+    db.prepare('INSERT INTO goal_target_hours_member (goal_id, ref, ord) VALUES (?, ?, 0)').run(
+      DEMO_GOAL3_ID,
+      `group:${goal3GroupId}`,
+    );
+    GOAL3_WORK_MIN.forEach((min, i) => {
+      const dayKey = addDaysKey(DEMO_GOAL3_START_DAY, i);
+      const sid = `demo-atcoder-${i + 1}`;
+      db.prepare(
+        `INSERT INTO session
+           (stable_group_id, tab_group_name_snapshot, group_color_snapshot, category_key_snapshot,
+            started_at, ended_at, day_key, coactive_group_keys, n, credited_ms, close_reason, created_at)
+         VALUES (?, ?, ?, NULL, 0, ?, ?, '[]', 1, ?, 'NORMAL', ?)`,
+      ).run(sid, GOAL3_GROUP_NAME, GOAL3_GROUP_COLOR, min * 60 * 1000, dayKey, min * 60 * 1000, SEED_TS);
+    });
+    // 証拠写真（Before=Day1・After=終えた当日）。既存のキャプション機構がそのまま Before/After を描く。
+    insImg.run(DEMO_GOAL3_ID, DEMO_GOAL3_START_DAY, GOAL3_OUTCOME_CAPTION, IMG_BEFORE, 0, SEED_TS);
+    insImg.run(DEMO_GOAL3_ID, DEMO_GOAL3_ENDED_DAY, GOAL3_OUTCOME_CAPTION, IMG_AFTER, 0, SEED_TS);
 
     // --- 配分バー用タイムライン記録（Day15・reflection-alloc-group-identity）-----------
     // 振り返り(紫)を「開き直しで別 stable_group_id」になった 30 分 × 6 回＝3h として焼き込む。

@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
+import { thirtyDayEnd } from './goal-input.js';
 
 /**
  * 一時凍結の予約フロー（spec: goal-freeze・issue #60）。
@@ -31,7 +32,9 @@ async function seedGoal(request: APIRequestContext, name: string, checkLabel: st
     data: {
       name,
       purpose: 'テスト用',
+      startReason: 'e2e のため',
       start: 'today',
+      endDay: thirtyDayEnd(dayKey),
       rules: [{ target: 'MANUAL_CHECK', label: checkLabel, startDay: dayKey, endDay: null, reason: '毎日やる' }],
     },
   });

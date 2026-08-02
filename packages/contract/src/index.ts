@@ -396,3 +396,63 @@ export const DueRulesResponseSchema = z.object({
   rules: z.array(DueRuleSchema),
 });
 export type DueRulesResponse = z.infer<typeof DueRulesResponseSchema>;
+
+// --- 目標時間・ペース・大きい沿革（spec: goal-target-hours / goal-history・issue #76）--------
+
+/** 目標時間の対象種別（1目標に最大1つ・任意・design D1）。 */
+export const TargetHoursKindSchema = z.enum(['TOTAL_WORK', 'GROUP_SET', 'TIMELINE']);
+export type TargetHoursKind = z.infer<typeof TargetHoursKindSchema>;
+
+/** 目標時間（1日あたり・design D1・D2）。束ねた対象は現在値から都度解決した表示名/参照を持つ。 */
+export const GoalTargetHoursSchema = z.object({
+  kind: TargetHoursKindSchema,
+  secondsPerDay: z.number().int().positive(),
+  labels: z.array(z.string()),
+  refs: z.array(z.string()),
+  groupIdentityIds: z.array(z.number().int()),
+});
+export type GoalTargetHours = z.infer<typeof GoalTargetHoursSchema>;
+
+/** 目標時間を持つ目標のペース（design D4・D4-b）。目標時間が無い/経過0日は null。 */
+export const GoalPaceSchema = z.object({
+  elapsedDays: z.number().int().positive(),
+  accumulatedSeconds: z.number().int().nonnegative(),
+  averageSeconds: z.number().int().nonnegative(),
+  targetSecondsPerDay: z.number().int().positive(),
+  met: z.boolean(),
+  todayRemainSeconds: z.number().int().nonnegative(),
+});
+export type GoalPace = z.infer<typeof GoalPaceSchema>;
+
+/** 大きい沿革（目標の年表）の1行の種別（design D7）。 */
+export const GoalHistoryEntryKindSchema = z.enum(['created', 'ended', 'completed']);
+export type GoalHistoryEntryKind = z.infer<typeof GoalHistoryEntryKindSchema>;
+
+/** 証拠写真1枚（都度解決・design D7）。 */
+export const GoalHistoryPhotoSchema = z.object({
+  imageId: z.number().int(),
+  dayKey: DayKeySchema,
+  caption: z.string(),
+});
+export type GoalHistoryPhoto = z.infer<typeof GoalHistoryPhotoSchema>;
+
+/**
+ * 大きい沿革の1行（目標の作成・終了・完走のいずれか・design D7）。到達判定と自己申告は
+ * 終了・完走の時点で焼き込んだ値、証拠写真は都度解決した値（欠けている要素は null のまま）。
+ */
+export const GoalHistoryEntrySchema = z.object({
+  kind: GoalHistoryEntryKindSchema,
+  goalId: z.number().int(),
+  name: z.string(),
+  dayKey: DayKeySchema,
+  purpose: z.string().nullable(),
+  reason: z.string().nullable(),
+  pace: GoalPaceSchema.nullable(),
+  targetHours: GoalTargetHoursSchema.nullable(),
+  outcomeMet: z.boolean().nullable(),
+  photos: z.object({
+    before: GoalHistoryPhotoSchema.nullable(),
+    after: GoalHistoryPhotoSchema.nullable(),
+  }),
+});
+export type GoalHistoryEntry = z.infer<typeof GoalHistoryEntrySchema>;

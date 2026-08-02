@@ -120,7 +120,12 @@ describe('画像 API の一巡（進行中）', () => {
 describe('目標・ルール API（spec: editable-rule-registry / goal-lifecycle-fork）', () => {
   /** 進行中（今日が Day1）の目標を作る（1つ以上のルールを添えて作成）。 */
   async function createActiveGoal(rules: Record<string, unknown>[]): Promise<{ id: number; ruleId: number }> {
-    const res = await app.inject({ method: 'POST', url: '/api/goals', payload: { name: '目標', rules } });
+    const today = todayKey(db, Date.now());
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/goals',
+      payload: { name: '目標', purpose: 'めざす状態', startReason: '始める理由', endDay: addDaysKey(today, 29), rules },
+    });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     return { id: body.id, ruleId: body.rules[0].ruleId };

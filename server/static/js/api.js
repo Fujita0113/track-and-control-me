@@ -84,7 +84,8 @@ export const api = {
   // （「採用」は廃止・今日タブに書き込み動線は無い・spec: editable-rule-registry）。
   getGoals: () => req('GET', '/api/goals'),
   getGoal: (id) => req('GET', `/api/goals/${id}`),
-  // b = { name, purpose?, start?, rules: [{ target, ...contentFields, startDay?, endDay?, reason }] }
+  // b = { name, purpose, startReason, endDay, start?, rules: [{ target, ...contentFields, startDay?, endDay?, reason }],
+  //       targetHours?: { kind, secondsPerDay, groupIdentityIds?, timelineLabel? }, outcomeCaption?, outcomeImage?: { dataUrl } }
   createGoal: (b) => req('POST', '/api/goals', b),
   deleteGoal: (id) => req('DELETE', `/api/goals/${id}`),
   getGoalReport: (id) => req('GET', `/api/goals/${id}/report`),
@@ -97,12 +98,16 @@ export const api = {
   updateGoalRule: (goalId, ruleId, input) => req('PATCH', `/api/goals/${goalId}/rules/${ruleId}`, input),
   removeGoalRule: (goalId, ruleId, reason) => req('DELETE', `/api/goals/${goalId}/rules/${ruleId}`, { reason }),
 
-  // 完走フォーク（続ける／終える・spec: goal-lifecycle-fork）
+  // 完走フォーク（続ける／終える・spec: goal-lifecycle-fork）。endGoal は進行中でもいつでも呼べる
+  // （spec: goal-lifecycle-fork ADDED）。b = { reason, outcomeMet?, photo?: { dataUrl } }
   continueGoal: (goalId) => req('POST', `/api/goals/${goalId}/continue`),
-  endGoal: (goalId, reason) => req('POST', `/api/goals/${goalId}/end`, { reason }),
+  endGoal: (goalId, b) => req('POST', `/api/goals/${goalId}/end`, b),
 
   // ⑤沿革（ルール操作の年表。日記は含まない）
   getGoalChronicle: (id) => req('GET', `/api/goals/${id}/chronicle`),
+
+  // 大きい沿革（目標そのものの年表・spec: goal-history）
+  getGoalHistory: () => req('GET', '/api/goals/history'),
 
   // 一時凍結（spec: goal-freeze）
   reserveGoalFreeze: (goalId, { endDay, reason }) => req('POST', `/api/goals/${goalId}/freeze`, { endDay, reason }),
@@ -146,6 +151,7 @@ export const api = {
     updateGoalRule: (goalId, ruleId, input, now) => req('PATCH', `/api/demo/goals/${goalId}/rules/${ruleId}`, { ...input, now }),
     removeGoalRule: (goalId, ruleId, reason, now) => req('DELETE', `/api/demo/goals/${goalId}/rules/${ruleId}`, { reason, now }),
     continueGoal: (goalId, now) => req('POST', `/api/demo/goals/${goalId}/continue`, { now }),
-    endGoal: (goalId, reason, now) => req('POST', `/api/demo/goals/${goalId}/end`, { reason, now }),
+    endGoal: (goalId, b, now) => req('POST', `/api/demo/goals/${goalId}/end`, { ...b, now }),
+    history: (now) => req('GET', `/api/demo/goals/history?${q({ now })}`),
   },
 };

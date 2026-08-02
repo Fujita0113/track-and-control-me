@@ -1,4 +1,5 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
+import { thirtyDayEnd } from './goal-input.js';
 
 /**
  * issue #73 / hide-achieved-once-rules の通し E2E。
@@ -16,7 +17,9 @@ async function seedSingleQuestion(request: APIRequestContext, dayKey: string): P
     data: {
       name: '単発ルール非表示テスト目標',
       purpose: 'テスト用',
+      startReason: 'e2e のため',
       start: 'tomorrow',
+      endDay: thirtyDayEnd(dayKey),
       rules: [{ target: 'QUESTION', questionText: QUESTION, startDay: dayKey, endDay: dayKey, reason: REASON }],
     },
   });

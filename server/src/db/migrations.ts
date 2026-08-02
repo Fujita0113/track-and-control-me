@@ -1255,4 +1255,39 @@ CREATE TABLE goal_freeze_change (
 CREATE INDEX idx_goal_freeze_change_goal ON goal_freeze_change(goal_id, day_key, id);
 `,
   },
+  {
+    version: 25,
+    name: 'goal-target-hours-and-open-period',
+    // 目標時間・期限自由化・いつでも終える・大きい沿革（spec: goal-target-hours / goal-history /
+    // goal-challenge / goal-lifecycle-fork・issue #76）。
+    // `goal_target_hours` は1目標に高々1行（goal_id が PK）。束ねる対象は `goal_target_hours_member`
+    // （(goal_id, ref) UNIQUE で二重計上を防ぐ）。`ref` は `group:<identityId>` / `timeline:<ラベル>`
+    // （`rule:<id>` は指さない・design D1）。
+    // `goal` へは作成理由（`start_reason`・既存行は空文字に移行）、終了関連（`ended_day_key` /
+    // `end_reason` / `final_pace_json`）、証拠写真・自己申告（`outcome_caption` / `outcome_met`）を追加する。
+    sql: /* sql */ `
+CREATE TABLE goal_target_hours (
+  goal_id INTEGER PRIMARY KEY REFERENCES goal(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,                  -- TOTAL_WORK|GROUP_SET|TIMELINE
+  seconds_per_day INTEGER NOT NULL,    -- 1日あたりの目標秒数
+  label_snapshot TEXT,                 -- 作成時点の表示ラベル（参考情報。表示は都度 live 解決する）
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE goal_target_hours_member (
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  ref TEXT NOT NULL,                   -- group:<identityId> | timeline:<ラベル>
+  ord INTEGER NOT NULL DEFAULT 0,      -- 表示順（決定的な並びのため）
+  PRIMARY KEY (goal_id, ref)
+);
+CREATE INDEX idx_gth_member_goal ON goal_target_hours_member(goal_id, ord);
+
+ALTER TABLE goal ADD COLUMN start_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE goal ADD COLUMN ended_day_key TEXT;
+ALTER TABLE goal ADD COLUMN end_reason TEXT;
+ALTER TABLE goal ADD COLUMN final_pace_json TEXT;
+ALTER TABLE goal ADD COLUMN outcome_caption TEXT;
+ALTER TABLE goal ADD COLUMN outcome_met INTEGER;
+`,
+  },
 ];

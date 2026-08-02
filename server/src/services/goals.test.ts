@@ -48,6 +48,8 @@ const NOW_NEXT = jst(2026, 7, 11, 12, 0);
 const NOW_COMPLETED = jst(2026, 8, 10, 12, 0);
 const START = '2026-07-11';
 const END = '2026-08-09';
+/** 今日開始（2026-07-10）の目標を従来どおり30日にするための期限。 */
+const END_FROM_TODAY = '2026-08-08';
 
 let db: DB;
 beforeEach(() => {
@@ -65,7 +67,7 @@ describe('目標の作成（明日開始・「採用」は廃止・自動紐付�
   it('その場で作ったルールが自動で紐づき、Day 1/30 の開始前で現れる', () => {
     const g = createGoal(
       db,
-      { name: 'メンタルを安定させる', purpose: '穏やかに', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: '4時間は守りたい' }], start: 'tomorrow' },
+      { startReason: '始める理由', endDay: END, name: 'メンタルを安定させる', purpose: '穏やかに', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: '4時間は守りたい' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     expect(g.startDay).toBe(START);
@@ -78,9 +80,9 @@ describe('目標の作成（明日開始・「採用」は廃止・自動紐付�
   });
 
   it('理由なし・ルール0件は拒否され、目標もルールも作られない', () => {
-    expect(() => createGoal(db, { name: 'x', rules: [], start: 'tomorrow' }, NOW_TODAY)).toThrow(GoalValidationError);
+    expect(() => createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'x', rules: [], start: 'tomorrow' }, NOW_TODAY)).toThrow(GoalValidationError);
     expect(() =>
-      createGoal(db, { name: 'x', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: '' }], start: 'tomorrow' }, NOW_TODAY),
+      createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'x', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: '' }], start: 'tomorrow' }, NOW_TODAY),
     ).toThrow();
     expect(listGoals(db, NOW_TODAY)).toHaveLength(0);
     expect((db.prepare('SELECT COUNT(*) AS c FROM rule').get() as { c: number }).c).toBe(0);
@@ -89,7 +91,7 @@ describe('目標の作成（明日開始・「採用」は廃止・自動紐付�
   it('PHOTO×範囲・QUESTION×単発をその場で作って紐づけられる', () => {
     const g = createGoal(
       db,
-      {
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END,
         name: '髪質を改善する',
         rules: [
           { target: 'PHOTO', caption: '前髪・正面', startDay: START, endDay: addDaysKey(START, 6), reason: '…髪質が良くなるのではないだろうか' },
@@ -106,7 +108,7 @@ describe('目標の作成（明日開始・「採用」は廃止・自動紐付�
     const identityId = resolveIdentity(db, '競技プログラミング', 'yellow')!;
     const g = createGoal(
       db,
-      { name: '競プロで緑になる', rules: [{ target: 'GROUP', groupIdentityId: identityId, thresholdSeconds: 7200, reason: '緑になりたい' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '競プロで緑になる', rules: [{ target: 'GROUP', groupIdentityId: identityId, thresholdSeconds: 7200, reason: '緑になりたい' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     expect(g.rules[0]!.groupIdentityId).toBe(identityId);
@@ -114,13 +116,13 @@ describe('目標の作成（明日開始・「採用」は廃止・自動紐付�
   });
 
   it('並行して2つ作成でき、互いに影響しない', () => {
-    createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    createGoal(db, { name: 'B', rules: [{ target: 'MANUAL_CHECK', label: '筋トレ', reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'B', rules: [{ target: 'MANUAL_CHECK', label: '筋トレ', reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     expect(listGoals(db, NOW_TODAY)).toHaveLength(2);
   });
 
   it('今日開始の既定は当日を Day1 として即進行中になる', () => {
-    const g = createGoal(db, { name: '今日から', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }] }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END_FROM_TODAY, name: '今日から', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }] }, NOW_TODAY);
     expect(g.startDay).toBe('2026-07-10');
     expect(g.status).toBe('active');
     expect(g.dayNumber).toBe(1);
@@ -129,7 +131,7 @@ describe('目標の作成（明日開始・「採用」は廃止・自動紐付�
 
 describe('削除猶予（作成当日のみ）', () => {
   it('作成当日は削除でき、紐づけ・日記も CASCADE で消える（ルール本体は残る）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     expect(deleteGoal(db, g.id, NOW_TODAY)).toBe(true);
     expect(listGoals(db, NOW_TODAY)).toHaveLength(0);
@@ -137,12 +139,12 @@ describe('削除猶予（作成当日のみ）', () => {
   });
 
   it('翌日以降は削除できない', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     expect(() => deleteGoal(db, g.id, NOW_NEXT)).toThrow(GoalDeleteWindowError);
   });
 
   it('削除後、他goalと共有していなかったルールは removed になり、解錠評価から外れる（issue #75）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     expect(deleteGoal(db, g.id, NOW_TODAY)).toBe(true);
 
@@ -155,7 +157,7 @@ describe('削除猶予（作成当日のみ）', () => {
   });
 
   it('削除しても、他goalとまだ共有しているルールの status は変えない（issue #75）', () => {
-    const shared = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const shared = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = shared.rules[0]!.ruleId;
     // 別goalへ同じルールを紐づけて共有状態を作る（goal-lifecycle-fork の引き継ぎと同じ形）。
     db.prepare('INSERT INTO goal (name, purpose, start_day, end_day, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -173,7 +175,7 @@ describe('削除猶予（作成当日のみ）', () => {
 
 describe('目標コーナーのルール編集・削除（ジャンル固定なし・design D3）', () => {
   it('理由つきで閾値を変更でき、rule:<id> は不変（rule_change に記録される）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: '作る' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: '作る' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     const { rule } = updateGoalRule(db, g.id, ruleId, { target: 'TOTAL_WORK', thresholdSeconds: 10800, startDay: START, reason: '課題週間。ゼロにはしない' }, {}, NOW_NEXT);
     expect(rule.id).toBe(ruleId);
@@ -183,7 +185,7 @@ describe('目標コーナーのルール編集・削除（ジャンル固定な�
   });
 
   it('採用中でも理由つきで削除でき、当日の実効ゲートから外れる（過去日は不変）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: '作る' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: '作る' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     const removed = removeGoalRule(db, g.id, ruleId, '反応が薄いから', NOW_NEXT);
     expect(removed.status).toBe('removed');
@@ -191,8 +193,8 @@ describe('目標コーナーのルール編集・削除（ジャンル固定な�
   });
 
   it('他目標が追うルールを壊さない', () => {
-    const g1 = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    const g2 = createGoal(db, { name: 'B', rules: [{ target: 'MANUAL_CHECK', label: '筋トレ', reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g1 = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g2 = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'B', rules: [{ target: 'MANUAL_CHECK', label: '筋トレ', reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     removeGoalRule(db, g2.id, g2.rules[0]!.ruleId, '理由', NOW_NEXT);
     expect(getGoal(db, g1.id, NOW_NEXT).rules).toHaveLength(1);
   });
@@ -202,7 +204,7 @@ describe('壊れたルールを直す（issue #59・グループ差し替え）'
   it('GROUP の identity を差し替えても rule:<id> は不変で、needsReset が解消する', () => {
     const g = createGoal(
       db,
-      { name: '競プロで緑になる', rules: [{ target: 'GROUP', stableGroupId: 'broken-uuid', thresholdSeconds: 7200, reason: '既存の壊れた参照' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '競プロで緑になる', rules: [{ target: 'GROUP', stableGroupId: 'broken-uuid', thresholdSeconds: 7200, reason: '既存の壊れた参照' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     const ruleId = g.rules[0]!.ruleId;
@@ -221,7 +223,7 @@ describe('壊れたルールを直す（issue #59・グループ差し替え）'
 
 describe('期間延長フォーク（design D7）', () => {
   it('目標末尾を越えるルールは GoalExtensionRequiredError（未指定時）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const overEnd = addDaysKey(END, 4); // 目標末尾より後
     expect(() =>
       addRuleToGoal(db, g.id, { target: 'PHOTO', caption: '前髪', startDay: END, endDay: overEnd, reason: 'r' }, {}, NOW_NEXT),
@@ -229,7 +231,7 @@ describe('期間延長フォーク（design D7）', () => {
   });
 
   it('伸ばすと目標終了が延び、Day N/M が変わる', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const overEnd = addDaysKey(END, 4);
     const { truncated } = addRuleToGoal(db, g.id, { target: 'PHOTO', caption: '前髪', startDay: END, endDay: overEnd, reason: 'r' }, { extend: 'extend' }, NOW_NEXT);
     expect(truncated).toBe(false);
@@ -239,7 +241,7 @@ describe('期間延長フォーク（design D7）', () => {
   });
 
   it('やめると目標末尾まで切り詰めて作成は成功する', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const overEnd = addDaysKey(END, 4);
     const { rule, truncated } = addRuleToGoal(db, g.id, { target: 'PHOTO', caption: '前髪', startDay: END, endDay: overEnd, reason: 'r' }, { extend: 'truncate' }, NOW_NEXT);
     expect(truncated).toBe(true);
@@ -248,7 +250,7 @@ describe('期間延長フォーク（design D7）', () => {
   });
 
   it('期間短縮の手段は無い（end_day は前方向にのみ変わる）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const overEnd = addDaysKey(END, 4);
     addRuleToGoal(db, g.id, { target: 'PHOTO', caption: '前髪', startDay: END, endDay: overEnd, reason: 'r' }, { extend: 'extend' }, NOW_NEXT);
     // 短縮 API は存在しない＝ end_day を早める操作を提供していないことを、伸びたままであることで確認する。
@@ -258,7 +260,7 @@ describe('期間延長フォーク（design D7）', () => {
 
 describe('完走フォーク（続ける／終える・spec: goal-lifecycle-fork）', () => {
   function seedCompletedGoal(): number {
-    return createGoal(db, { name: '英語を毎日やる', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600, reason: '毎日60分' }], start: 'tomorrow' }, NOW_TODAY).id;
+    return createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '英語を毎日やる', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 3600, reason: '毎日60分' }], start: 'tomorrow' }, NOW_TODAY).id;
   }
 
   it('未完走・未到来ではフォークを呼べない', () => {
@@ -286,7 +288,7 @@ describe('完走フォーク（続ける／終える・spec: goal-lifecycle-fork
 
   it('終えると永続ルールがゲートから外れ、レポート・沿革は残る', () => {
     const id = seedCompletedGoal();
-    const view = endGoal(db, id, 'もう十分身についた', NOW_COMPLETED);
+    const view = endGoal(db, id, { reason: 'もう十分身についた' }, NOW_COMPLETED);
     expect(view.lifecycleChoice).toBe('ended');
     expect(view.lifecycleReason).toBe('もう十分身についた');
     const ruleRow = db.prepare('SELECT r.status AS status FROM goal_rule gr JOIN rule r ON r.id = gr.rule_id WHERE gr.goal_id = ?').get(id) as { status: string };
@@ -306,7 +308,7 @@ describe('完走フォーク（続ける／終える・spec: goal-lifecycle-fork
     const id = seedCompletedGoal();
     expect(getGoalReport(db, id, NOW_COMPLETED).goal.showLifecycleFork).toBe(true);
     // 進行中の別目標では出ない。
-    const g2 = createGoal(db, { name: 'B', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g2 = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'B', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const runningReport = getGoalReport(db, g2.id, NOW_NEXT);
     expect(runningReport.goal.showLifecycleFork).toBe(false);
   });
@@ -316,7 +318,7 @@ describe('写真/質問ルールへの回答（今日タブ・design D5）', () 
   it('写真提出でルールが met になり、③の画像として保存される', () => {
     const g = createGoal(
       db,
-      { name: '髪質を改善する', rules: [{ target: 'PHOTO', caption: '前髪・正面', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '髪質を改善する', rules: [{ target: 'PHOTO', caption: '前髪・正面', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     const ruleId = g.rules[0]!.ruleId;
@@ -328,7 +330,7 @@ describe('写真/質問ルールへの回答（今日タブ・design D5）', () 
   it('質問回答でルールが met になる（空回答は拒否）', () => {
     const g = createGoal(
       db,
-      { name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     const ruleId = g.rules[0]!.ruleId;
@@ -342,7 +344,7 @@ describe('GoalRuleView.carryStale（issue #73: 凍結モーダルの表示除外
   it('未提出の単発ルールは carryStale=false', () => {
     const g = createGoal(
       db,
-      { name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     expect(getGoal(db, g.id, NOW_NEXT).rules[0]!.carryStale).toBe(false);
@@ -351,7 +353,7 @@ describe('GoalRuleView.carryStale（issue #73: 凍結モーダルの表示除外
   it('提出した当日は carryStale=false', () => {
     const g = createGoal(
       db,
-      { name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     const ruleId = g.rules[0]!.ruleId;
@@ -362,7 +364,7 @@ describe('GoalRuleView.carryStale（issue #73: 凍結モーダルの表示除外
   it('提出日の翌日以降は carryStale=true（met は変わらず、凍結モーダルの一覧からのみ外す）', () => {
     const g = createGoal(
       db,
-      { name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '髪質を改善する', rules: [{ target: 'QUESTION', questionText: '使用感は？', startDay: START, endDay: START, reason: 'r' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     const ruleId = g.rules[0]!.ruleId;
@@ -374,7 +376,7 @@ describe('GoalRuleView.carryStale（issue #73: 凍結モーダルの表示除外
   it('範囲・時間型ルールは常に carryStale=false', () => {
     const g = createGoal(
       db,
-      {
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END,
         name: 'A',
         rules: [
           { target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' },
@@ -390,21 +392,21 @@ describe('GoalRuleView.carryStale（issue #73: 凍結モーダルの表示除外
 
 describe('目標日記（明日開始）', () => {
   it('進行中の日は保存でき、reflection_done を汚染しない', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     saveJournal(db, g.id, START, '初日の日記', NOW_NEXT);
     expect(getJournal(db, g.id, START).content).toBe('初日の日記');
     expect((db.prepare('SELECT COUNT(*) AS c FROM reflection_entry').get() as { c: number }).c).toBe(0);
   });
 
   it('完走後の日記書き込みは拒否される', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     expect(() => saveJournal(db, g.id, START, 'x', NOW_COMPLETED)).toThrow(JournalNotWritableError);
   });
 });
 
 describe('目標日記の画像添付（明日開始）', () => {
   it('開始前・進行中・完走後いずれでも追加/一覧/取得/更新/削除できる（D4b: いつでも可）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
 
     const a = addJournalImage(db, g.id, START, { dataUrl: dataUrl('image/png', [1, 2, 3]), caption: '台所' }, NOW_TODAY);
     const b = addJournalImage(db, g.id, START, { dataUrl: dataUrl('image/jpeg', [4, 5]), caption: '机' }, NOW_NEXT);
@@ -426,13 +428,13 @@ describe('目標日記の画像添付（明日開始）', () => {
   });
 
   it('期間外の day_key は 400（JournalImageError）で拒否される', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     expect(() => addJournalImage(db, g.id, '2026-07-10', { dataUrl: dataUrl() }, NOW_NEXT)).toThrow(JournalImageError);
   });
 
   it('他目標の imageId は触れない（所有検証・404 相当）', () => {
-    const g1 = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    const g2 = createGoal(db, { name: 'B', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g1 = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g2 = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'B', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const img = addJournalImage(db, g1.id, START, { dataUrl: dataUrl(), caption: 'g1' }, NOW_NEXT);
     expect(() => getJournalImageBytes(db, g2.id, img.imageId)).toThrow(JournalImageNotFoundError);
   });
@@ -440,7 +442,7 @@ describe('目標日記の画像添付（明日開始）', () => {
 
 describe('完了レポート（明日開始）', () => {
   it('完走前は 409（GoalReportNotReadyError）', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     expect(() => getGoalReport(db, g.id, NOW_TODAY)).toThrow(GoalReportNotReadyError);
   });
 
@@ -448,7 +450,7 @@ describe('完了レポート（明日開始）', () => {
     const identityId = resolveIdentity(db, 'AtCoder', 'blue')!;
     const g = createGoal(
       db,
-      { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: 'r' }, { target: 'GROUP', groupIdentityId: identityId, thresholdSeconds: 1800, reason: 'r' }], start: 'tomorrow' },
+      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: 'r' }, { target: 'GROUP', groupIdentityId: identityId, thresholdSeconds: 1800, reason: 'r' }], start: 'tomorrow' },
       NOW_TODAY,
     );
     const totalRuleId = g.rules.find((r) => r.target === 'TOTAL_WORK')!.ruleId;
@@ -489,7 +491,7 @@ describe('完了レポート（明日開始）', () => {
   });
 
   it('削除後の日は inactive（対象外）扱いで、削除前の達成は保持される', () => {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     seedEval('2026-07-11', [{ conditionKey: `rule:${ruleId}`, target: 'TOTAL_WORK', met: true, actualSeconds: 200, thresholdSeconds: 100 }]);
     // Day3 に削除する。
@@ -503,7 +505,7 @@ describe('完了レポート（明日開始）', () => {
   });
 
   it('TIMELINE ルールは①カレンダーに乗り、②時間推移（isTimeType）として扱われる', () => {
-    const g = createGoal(db, { name: '運動', rules: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '運動', rules: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     seedEval('2026-07-11', [{ conditionKey: `rule:${ruleId}`, target: 'TIMELINE', met: true, actualSeconds: 2100, thresholdSeconds: 1800 }]);
     const rep = getGoalReport(db, g.id, NOW_COMPLETED);
@@ -513,7 +515,7 @@ describe('完了レポート（明日開始）', () => {
   });
 
   it('MANUAL_CHECK ルールは①カレンダーに乗り、②時間推移からは除外される（非時間型）', () => {
-    const g = createGoal(db, { name: '筋トレ習慣', rules: [{ target: 'MANUAL_CHECK', label: '筋トレ', reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '筋トレ習慣', rules: [{ target: 'MANUAL_CHECK', label: '筋トレ', reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     seedEval('2026-07-11', [{ conditionKey: `rule:${ruleId}`, target: 'MANUAL_CHECK', met: true }]);
     const rep = getGoalReport(db, g.id, NOW_COMPLETED);
@@ -529,7 +531,7 @@ describe('走行中プレビュー（レポートの鍵を外す・spec: goal-re
   const NOW_DAY12 = jst(2026, 7, 22, 12, 0);
 
   function seedRunningGoal(): { id: number; ruleId: number } {
-    const g = createGoal(db, { name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     const ruleId = g.rules[0]!.ruleId;
     for (let i = 0; i < 12; i++) {
       seedEval(addDaysKey(START, i), [{ conditionKey: `rule:${ruleId}`, target: 'TOTAL_WORK', met: true, actualSeconds: 15000, thresholdSeconds: 14400 }]);

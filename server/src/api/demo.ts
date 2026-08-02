@@ -18,6 +18,7 @@ import {
   GoalReportNotReadyError,
   GoalExtensionRequiredError,
   GoalLifecycleError,
+  GoalValidationError,
   JournalImageNotFoundError,
 } from '../services/goals.js';
 import {
@@ -26,6 +27,7 @@ import {
   RuleValidationError,
 } from '../services/rule-registry.js';
 import { getChronicle } from '../services/goal-chronicle.js';
+import { goalHistory } from '../services/goal-history.js';
 import { freezeQuota } from '../services/goal-freeze.js';
 import { daySummary } from '../services/summary.js';
 import { getDayAllocation } from '../services/day-allocation.js';
@@ -116,6 +118,15 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
       }
       throw err;
     }
+  });
+
+  // GET /api/demo/goals/history?now=<dayKey> — 大きい沿革（デモ DB・読み取り専用・spec: goal-history）。
+  // ペース（完走の到達判定）は仮想日付を分母に使う経路を通す（プロジェクトルール: 日数が関わる
+  // 機能はデモモードで成果を明示する）。
+  app.get('/api/demo/goals/history', async (req) => {
+    const db = getDemoDb();
+    const now = resolveNow((req.query as { now?: string }).now);
+    return goalHistory(db, virtualNowMs(db, now));
   });
 
   // GET /api/demo/goals/freeze/quota?now=<dayKey> — 凍結の月枠（読み取り専用・操作導線は出さない）。
@@ -215,7 +226,7 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
       reply.code(409);
       return { error: err.message };
     }
-    if (err instanceof ReasonRequiredError || err instanceof RuleValidationError) {
+    if (err instanceof ReasonRequiredError || err instanceof RuleValidationError || err instanceof GoalValidationError) {
       reply.code(400);
       return { error: err.message };
     }
@@ -277,10 +288,15 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
   app.post('/api/demo/goals/:id/end', async (req, reply) => {
     const db = getDemoDb();
     const id = Number((req.params as { id: string }).id);
-    const b = (req.body ?? {}) as { reason?: string; now?: string };
+    const b = (req.body ?? {}) as {
+      reason?: string;
+      now?: string;
+      outcomeMet?: boolean;
+      photo?: { dataUrl: string; width?: number | null; height?: number | null };
+    };
     const now = resolveNow(b.now);
     try {
-      return endGoal(db, id, b.reason, virtualNowMs(db, now));
+      return endGoal(db, id, { reason: b.reason ?? '', outcomeMet: b.outcomeMet, photo: b.photo }, virtualNowMs(db, now));
     } catch (err) {
       return replyDemoError(err, reply);
     }
