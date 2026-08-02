@@ -91,7 +91,7 @@ test('目標時間つきで作成 → カードにペース → 理由つきで�
   // --- 4. 大きい沿革の行に3つ（到達判定・答え・Before→After）が並ぶ -------------------
   const history = page.locator('.gr-history');
   await expect(history).toBeVisible();
-  const endedRow = history.locator('.gr-hist-row', { hasText: `−終える ${GOAL_NAME}` });
+  const endedRow = history.locator('.gr-hist-row', { hasText: `${GOAL_NAME} を終えた` });
   await expect(endedRow).toBeVisible();
   await expect(endedRow).toContainText(END_REASON);
   // ① 到達判定（目標2h/日に対し実測0なので未達＝×）。
