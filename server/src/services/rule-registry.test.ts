@@ -20,6 +20,8 @@ import {
   RuleImmutableFieldError,
   RuleNotFoundError,
 } from './rule-registry.js';
+import { resolveIdentity } from './group-identity.js';
+
 
 /**
  * 単体テスト（task 2.5 / spec: editable-rule-registry）。
@@ -395,3 +397,59 @@ describe('resolveByStableOrLegacy', () => {
     expect(resolveByStableOrLegacy([{ conditionKey: 'other', met: true }], rule)).toBeUndefined();
   });
 });
+
+describe('GROUP_OR バリデーション (spec: rule-group-or-aggregate)', () => {
+  it('groupIdentityIds が1件以下なら RuleValidationError', () => {
+    const id1 = resolveIdentity(db, 'A', null)!;
+    expect(() =>
+      createRule(db, {
+        target: 'GROUP_OR',
+        groupIdentityIds: [id1],
+        thresholdSeconds: 900,
+        startDay: '2026-07-20',
+        reason: 'r',
+      } as any)
+    ).toThrow('グループは2件以上選択してください');
+  });
+
+  it('groupIdentityIds が2件なら rule_group_member に2行挙振される', () => {
+    const id1 = resolveIdentity(db, 'A', null)!;
+    const id2 = resolveIdentity(db, 'B', null)!;
+    const rule = createRule(db, {
+      target: 'GROUP_OR',
+      groupIdentityIds: [id1, id2],
+      thresholdSeconds: 900,
+      startDay: '2026-07-20',
+      reason: 'r',
+    } as any);
+    const members = db
+      .prepare('SELECT group_identity_id FROM rule_group_member WHERE rule_id = ? ORDER BY sort_order')
+      .all(rule.id) as { group_identity_id: number }[];
+    expect(members.map((m) => m.group_identity_id)).toEqual([id1, id2]);
+  });
+
+  it('updateRule でグループ一覧が差し替わる', () => {
+    const id1 = resolveIdentity(db, 'A', null)!;
+    const id2 = resolveIdentity(db, 'B', null)!;
+    const id3 = resolveIdentity(db, 'C', null)!;
+    const rule = createRule(db, {
+      target: 'GROUP_OR',
+      groupIdentityIds: [id1, id2],
+      thresholdSeconds: 900,
+      startDay: '2026-07-20',
+      reason: 'r',
+    } as any);
+    updateRule(db, rule.id, {
+      target: 'GROUP_OR',
+      groupIdentityIds: [id1, id3],
+      thresholdSeconds: 900,
+      startDay: '2026-07-20',
+      reason: '差し替え',
+    } as any);
+    const members = db
+      .prepare('SELECT group_identity_id FROM rule_group_member WHERE rule_id = ? ORDER BY sort_order')
+      .all(rule.id) as { group_identity_id: number }[];
+    expect(members.map((m) => m.group_identity_id)).toEqual([id1, id3]);
+  });
+});
+

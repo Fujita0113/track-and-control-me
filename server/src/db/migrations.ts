@@ -1290,4 +1290,18 @@ ALTER TABLE goal ADD COLUMN outcome_caption TEXT;
 ALTER TABLE goal ADD COLUMN outcome_met INTEGER;
 `,
   },
+  {
+    version: 26,
+    name: 'rule-group-member',
+    sql: /* sql */ `
+-- GROUP_OR ルールと複数グループの紐づけ（spec: rule-group-or-aggregate / design.md D1）。
+CREATE TABLE rule_group_member (
+  rule_id INTEGER NOT NULL REFERENCES rule(id) ON DELETE CASCADE,
+  group_identity_id INTEGER NOT NULL REFERENCES group_identity(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (rule_id, group_identity_id)
+);
+CREATE INDEX idx_rule_group_member_rule ON rule_group_member(rule_id, sort_order);
+`,
+  },
 ];

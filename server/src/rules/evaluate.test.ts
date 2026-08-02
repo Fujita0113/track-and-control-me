@@ -371,3 +371,59 @@ describe('carryStale（issue #73: 達成済み単発ルールの表示除外）'
     expect(result.status).toBe('UNLOCKED');
   });
 });
+
+describe('GROUP_OR ルールの評価 (spec: rule-group-or-aggregate)', () => {
+  it('2グループの合計が閾値以上なら met=true', () => {
+    const id1 = resolveIdentity(db, '英語の勉強', 'blue')!;
+    const id2 = resolveIdentity(db, '読書', 'green')!;
+    seedSession(db, '英語の勉強', 'blue', jst(2026, 7, 20, 9, 0), jst(2026, 7, 20, 9, 20)); // 1200秒
+    seedSession(db, '読書', 'green', jst(2026, 7, 20, 10, 0), jst(2026, 7, 20, 10, 10)); // 600秒
+    createRule(db, {
+      target: 'GROUP_OR',
+      groupIdentityIds: [id1, id2],
+      thresholdSeconds: 1800,
+      startDay: DAY,
+      reason: 'r',
+    } as any);
+
+    const evalResult = evaluateDay(db, DAY, jst(2026, 7, 20, 12, 0));
+    const cond = evalResult.perCondition.find((c) => c.target === ('GROUP_OR' as any))!;
+    expect(cond.actualSeconds).toBe(1800);
+    expect(cond.met).toBe(true);
+  });
+
+  it('2グループの合計が閾値未満なら met=false', () => {
+    const id1 = resolveIdentity(db, '英語の勉強', 'blue')!;
+    const id2 = resolveIdentity(db, '読書', 'green')!;
+    seedSession(db, '英語の勉強', 'blue', jst(2026, 7, 20, 9, 0), jst(2026, 7, 20, 9, 10)); // 600秒
+    createRule(db, {
+      target: 'GROUP_OR',
+      groupIdentityIds: [id1, id2],
+      thresholdSeconds: 1800,
+      startDay: DAY,
+      reason: 'r',
+    } as any);
+
+    const evalResult = evaluateDay(db, DAY, jst(2026, 7, 20, 12, 0));
+    const cond = evalResult.perCondition.find((c) => c.target === ('GROUP_OR' as any))!;
+    expect(cond.actualSeconds).toBe(600);
+    expect(cond.met).toBe(false);
+  });
+
+  it('全グループにセッションがなくても評価できる（0秒・met=false）', () => {
+    const id1 = resolveIdentity(db, '英語の勉強', 'blue')!;
+    const id2 = resolveIdentity(db, '読書', 'green')!;
+    createRule(db, {
+      target: 'GROUP_OR',
+      groupIdentityIds: [id1, id2],
+      thresholdSeconds: 900,
+      startDay: DAY,
+      reason: 'r',
+    } as any);
+
+    const evalResult = evaluateDay(db, DAY, jst(2026, 7, 20, 12, 0));
+    const cond = evalResult.perCondition.find((c) => c.target === ('GROUP_OR' as any))!;
+    expect(cond.actualSeconds).toBe(0);
+    expect(cond.met).toBe(false);
+  });
+});

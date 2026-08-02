@@ -13,7 +13,7 @@ import { frozenGoalIdsOn } from './goal-freeze.js';
  * 全操作は非空の理由を要求し、`rule_change` に1操作1行で記録する（＝沿革の実体）。
  */
 
-export type RuleTarget = 'TOTAL_WORK' | 'GROUP' | 'TIMELINE' | 'MANUAL_CHECK' | 'PLANNING' | 'PHOTO' | 'QUESTION';
+export type RuleTarget = 'TOTAL_WORK' | 'GROUP' | 'GROUP_OR' | 'TIMELINE' | 'MANUAL_CHECK' | 'PLANNING' | 'PHOTO' | 'QUESTION';
 export type RuleStatus = 'active' | 'removed';
 export type RuleOp = 'add' | 'update' | 'remove';
 /** スケジュール（軸2・種類とは独立）。`end_day=null` は永続、`start=end` は単発、`start<end` は範囲。 */
@@ -72,6 +72,7 @@ export interface RuleContentInput {
   label?: string | null;
   signalKey?: string | null;
   groupIdentityId?: number | null;
+  groupIdentityIds?: number[] | null;
   /** @deprecated 新規作成では使わない。壊れた旧参照の据え置き・移行専用。 */
   stableGroupId?: string | null;
   caption?: string | null;
@@ -93,17 +94,30 @@ function ruleConditionKey(ruleId: number): string {
 }
 export { ruleConditionKey };
 
+export function getRuleGroupMemberIds(db: DB, ruleId: number): number[] {
+  return (
+    db
+      .prepare('SELECT group_identity_id FROM rule_group_member WHERE rule_id = ? ORDER BY sort_order')
+      .all(ruleId) as { group_identity_id: number }[]
+  ).map((m) => m.group_identity_id);
+}
+
 /** target 別の入力検証（spec: editable-rule-registry / goal-inline-condition）。 */
 function validateContent(content: RuleContentInput): void {
   const t = content.target;
-  if (!['TOTAL_WORK', 'GROUP', 'TIMELINE', 'MANUAL_CHECK', 'PLANNING', 'PHOTO', 'QUESTION'].includes(t))
+  if (!['TOTAL_WORK', 'GROUP', 'GROUP_OR', 'TIMELINE', 'MANUAL_CHECK', 'PLANNING', 'PHOTO', 'QUESTION'].includes(t))
     throw new RuleValidationError('ルール種別が不正です');
-  if (t === 'TOTAL_WORK' || t === 'GROUP' || t === 'TIMELINE') {
+  if (t === 'TOTAL_WORK' || t === 'GROUP' || t === 'GROUP_OR' || t === 'TIMELINE') {
     if (!(typeof content.thresholdSeconds === 'number' && content.thresholdSeconds > 0))
       throw new RuleValidationError('時間（分）は1分以上で指定してください');
   }
   if (t === 'GROUP' && content.groupIdentityId == null && !content.stableGroupId)
     throw new RuleValidationError('グループを選択してください');
+  if (t === 'GROUP_OR') {
+    const ids = content.groupIdentityIds ?? [];
+    if (!Array.isArray(ids) || ids.length < 2)
+      throw new RuleValidationError('グループは2件以上選択してください');
+  }
   if (t === 'TIMELINE' && !(content.label ?? '').trim())
     throw new RuleValidationError('カテゴリ名を入力してください');
   if (t === 'MANUAL_CHECK' && !(content.label ?? '').trim())
@@ -126,19 +140,24 @@ function requireReason(reason: string | undefined | null): string {
 }
 
 /** DB 行 → 中身スナップショット（`rule_change.before`/`after` に JSON で保存する単位）。 */
-function contentSnapshot(row: {
-  target: string;
-  comparator: string;
-  threshold_seconds: number | null;
-  label: string | null;
-  signal_key: string | null;
-  stable_group_id: string | null;
-  group_identity_id: number | null;
-  caption: string | null;
-  question_text: string | null;
-  start_day: string;
-  end_day: string | null;
-}): Record<string, unknown> {
+function contentSnapshot(
+  db: DB,
+  row: {
+    id?: number;
+    target: string;
+    comparator: string;
+    threshold_seconds: number | null;
+    label: string | null;
+    signal_key: string | null;
+    stable_group_id: string | null;
+    group_identity_id: number | null;
+    caption: string | null;
+    question_text: string | null;
+    start_day: string;
+    end_day: string | null;
+  },
+): Record<string, unknown> {
+  const groupIdentityIds = row.id ? getRuleGroupMemberIds(db, row.id) : [];
   return {
     target: row.target,
     comparator: row.comparator,
@@ -147,6 +166,7 @@ function contentSnapshot(row: {
     signalKey: row.signal_key,
     stableGroupId: row.stable_group_id,
     groupIdentityId: row.group_identity_id,
+    groupIdentityIds: groupIdentityIds.length > 0 ? groupIdentityIds : undefined,
     caption: row.caption,
     questionText: row.question_text,
     startDay: row.start_day,
@@ -213,8 +233,16 @@ export function createRule(db: DB, input: CreateRuleInput, nowMs = Date.now()): 
         now: nowMs,
       });
     const ruleId = info.lastInsertRowid as number;
+    if (input.target === 'GROUP_OR' && input.groupIdentityIds && input.groupIdentityIds.length > 0) {
+      const insMember = db.prepare(
+        'INSERT INTO rule_group_member (rule_id, group_identity_id, sort_order) VALUES (?, ?, ?)',
+      );
+      input.groupIdentityIds.forEach((gid, index) => {
+        insMember.run(ruleId, gid, index);
+      });
+    }
     const row = getRule(db, ruleId);
-    recordChange(db, ruleId, 'add', null, contentSnapshot(row), reason, today, nowMs);
+    recordChange(db, ruleId, 'add', null, contentSnapshot(db, row), reason, today, nowMs);
     return row;
   });
   return tx();
@@ -239,7 +267,7 @@ export function updateRule(db: DB, ruleId: number, input: UpdateRuleInput, nowMs
   }
 
   const tx = db.transaction((): RuleRow => {
-    const before = contentSnapshot(existing);
+    const before = contentSnapshot(db, existing);
     db.prepare(
       `UPDATE rule SET
          target = @target, comparator = @comparator, threshold_seconds = @threshold, label = @label,
@@ -260,8 +288,19 @@ export function updateRule(db: DB, ruleId: number, input: UpdateRuleInput, nowMs
       startDay: input.startDay,
       endDay: input.endDay ?? null,
     });
+    if (input.target === 'GROUP_OR') {
+      db.prepare('DELETE FROM rule_group_member WHERE rule_id = ?').run(ruleId);
+      if (input.groupIdentityIds && input.groupIdentityIds.length > 0) {
+        const insMember = db.prepare(
+          'INSERT INTO rule_group_member (rule_id, group_identity_id, sort_order) VALUES (?, ?, ?)',
+        );
+        input.groupIdentityIds.forEach((gid, index) => {
+          insMember.run(ruleId, gid, index);
+        });
+      }
+    }
     const row = getRule(db, ruleId);
-    recordChange(db, ruleId, 'update', before, contentSnapshot(row), reason, today, nowMs);
+    recordChange(db, ruleId, 'update', before, contentSnapshot(db, row), reason, today, nowMs);
     return row;
   });
   return tx();
@@ -278,7 +317,7 @@ export function removeRule(db: DB, ruleId: number, reason: string, nowMs = Date.
   const tx = db.transaction((): RuleRow => {
     db.prepare("UPDATE rule SET status = 'removed' WHERE id = ?").run(ruleId);
     const row = getRule(db, ruleId);
-    recordChange(db, ruleId, 'remove', contentSnapshot(existing), null, r, today, nowMs);
+    recordChange(db, ruleId, 'remove', contentSnapshot(db, existing), null, r, today, nowMs);
     return row;
   });
   return tx();

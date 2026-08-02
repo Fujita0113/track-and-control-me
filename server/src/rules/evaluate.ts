@@ -12,6 +12,7 @@ import {
   carryoverPolicy,
   rangeDayNumber,
   rangeSpanDays,
+  getRuleGroupMemberIds,
   type RuleRow,
   type RuleTarget,
   type RuleSchedule,
@@ -173,6 +174,46 @@ function evaluateRule(db: DB, rule: RuleRow, dayKey: string, totalWorkSeconds: n
         stableGroupId: rule.stable_group_id,
         groupName: groupDisplay.needsReset ? `${groupDisplay.name}（要再設定）` : groupDisplay.name,
         groupColor: groupDisplay.color,
+        met: actualSeconds >= (rule.threshold_seconds ?? 0),
+      };
+    }
+    case 'GROUP_OR': {
+      const memberIds = getRuleGroupMemberIds(db, rule.id);
+      let actualSeconds = 0;
+      const groupNames: string[] = [];
+      if (memberIds.length > 0) {
+        const allAliases: { name: string; color: string | null }[] = [];
+        for (const mid of memberIds) {
+          const gd = resolveGroupDisplay(db, { ...rule, group_identity_id: mid });
+          if (gd.name) groupNames.push(gd.name);
+          const aliases = listAliases(db, mid);
+          allAliases.push(...aliases);
+        }
+        if (allAliases.length > 0) {
+          const placeholders = allAliases.map(() => '(?, ?)').join(', ');
+          const params = allAliases.flatMap((a) => [a.name, a.color ?? '']);
+          const row = db
+            .prepare(
+              `SELECT COALESCE(SUM(credited_ms), 0) AS ms FROM session
+               WHERE day_key = ? AND (tab_group_name_snapshot, COALESCE(group_color_snapshot, '')) IN (${placeholders})`,
+            )
+            .get(dayKey, ...params) as { ms: number };
+          actualSeconds = Math.floor(row.ms / 1000);
+        }
+      }
+      let summaryName = 'グループ OR 集計';
+      if (groupNames.length === 2) {
+        summaryName = `${groupNames[0]} または ${groupNames[1]}`;
+      } else if (groupNames.length >= 3) {
+        summaryName = `${groupNames[0]} など`;
+      } else if (groupNames.length === 1) {
+        summaryName = groupNames[0]!;
+      }
+      return {
+        ...base,
+        actualSeconds,
+        thresholdSeconds: rule.threshold_seconds,
+        groupName: summaryName,
         met: actualSeconds >= (rule.threshold_seconds ?? 0),
       };
     }

@@ -18,6 +18,7 @@ import {
   rangeDayNumber,
   rangeSpanDays,
   resolveByStableOrLegacy,
+  getRuleGroupMemberIds,
   RuleNotFoundError,
   type RuleContentInput,
   type RuleRow,
@@ -207,6 +208,18 @@ function ruleLabel(db: DB, rule: RuleRow): string {
     const gd = resolveGroupDisplay(db, rule);
     return gd.needsReset ? `${gd.name}（要再設定）` : gd.name;
   }
+  if (rule.target === 'GROUP_OR') {
+    const memberIds = getRuleGroupMemberIds(db, rule.id);
+    const names: string[] = [];
+    for (const mid of memberIds) {
+      const gd = resolveGroupDisplay(db, { ...rule, group_identity_id: mid });
+      if (gd.name) names.push(gd.name);
+    }
+    if (names.length === 2) return `${names[0]} または ${names[1]}`;
+    if (names.length >= 3) return `${names[0]} など`;
+    if (names.length === 1) return names[0]!;
+    return 'グループ OR 集計';
+  }
   if (rule.target === 'TIMELINE') return rule.label ?? 'カテゴリ';
   if (rule.target === 'MANUAL_CHECK') return rule.label ?? '手動チェック';
   if (rule.target === 'PLANNING') return rule.signal_key ?? '翌日計画';
@@ -224,6 +237,7 @@ export interface GoalRuleView {
   endDay: string | null;
   thresholdSeconds: number | null;
   groupIdentityId: number | null;
+  groupIdentityIds?: number[];
   stableGroupId: string | null;
   signalKey: string | null;
   caption: string | null;
@@ -251,6 +265,7 @@ function toRuleView(db: DB, rule: RuleRow, today: string): GoalRuleView {
     endDay: rule.end_day,
     thresholdSeconds: rule.threshold_seconds,
     groupIdentityId: rule.group_identity_id,
+    groupIdentityIds: rule.target === 'GROUP_OR' ? getRuleGroupMemberIds(db, rule.id) : undefined,
     stableGroupId: rule.stable_group_id,
     signalKey: rule.signal_key,
     caption: rule.caption,
@@ -524,6 +539,7 @@ export interface NewGoalRuleInput {
   label?: string | null;
   signalKey?: string | null;
   groupIdentityId?: number | null;
+  groupIdentityIds?: number[] | null;
   /** @deprecated identity 参照に置き換え済み。壊れた旧参照の据え置き・移行専用。 */
   stableGroupId?: string | null;
   caption?: string | null;

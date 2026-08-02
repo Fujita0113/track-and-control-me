@@ -2,6 +2,7 @@ import type { DB } from '../db/index.js';
 import { createTask } from './tasks.js';
 import { createGoal, addDaysKey } from './goals.js';
 import { todayKey } from './summary.js';
+import { resolveIdentity } from './group-identity.js';
 
 /**
  * 開発用DB（フォールバックポート起動時の `track.dev.sqlite`）を新規作成した回に限り投入する
@@ -10,6 +11,9 @@ import { todayKey } from './summary.js';
  * 使い捨てデータのため `Date.now()` 基準の相対日時でよい（固定 day_key の再現性は不要）。
  */
 export function seedDevSample(db: DB): void {
+  resolveIdentity(db, '英語の勉強', 'blue');
+  resolveIdentity(db, '読書', 'green');
+
   createTask(db, { title: '受信トレイを整理する', status: 'TODO', priority: 'mid' });
   createTask(db, { title: '今日の作業計画を立てる', status: 'DOING', priority: 'high' });
   createTask(db, { title: 'デモ用タスクの完了確認', status: 'DONE', priority: 'low' });

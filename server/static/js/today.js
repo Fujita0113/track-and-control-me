@@ -231,6 +231,9 @@ function condRow(c, planning, date) {
     title = `グループ: ${c.groupName || '不明なグループ（要再設定）'}`;
     chipColor = c.groupColor || null;
     sub = `${fmtHM(c.actualSeconds || 0)} / ${fmtHM(c.thresholdSeconds || 0)}`;
+  } else if (c.target === 'GROUP_OR') {
+    title = `グループ: ${c.groupName || 'グループ OR 集計'}`;
+    sub = `${fmtHM(c.actualSeconds || 0)} / ${fmtHM(c.thresholdSeconds || 0)}`;
   } else if (c.target === 'TIMELINE') {
     // 「<カテゴリ> ◯分以上」＋「実績 / 閾値」（spec: group-rule-identity・ゲート画面の TIMELINE 表示）。
     const min = Math.round((c.thresholdSeconds || 0) / 60);
@@ -264,7 +267,7 @@ function condRow(c, planning, date) {
     titleEl,
     h('div', { class: 'cond-sub', text: sub }),
   );
-  if ((c.target === 'TOTAL_WORK' || c.target === 'GROUP' || c.target === 'TIMELINE') && c.thresholdSeconds) {
+  if ((c.target === 'TOTAL_WORK' || c.target === 'GROUP' || c.target === 'GROUP_OR' || c.target === 'TIMELINE') && c.thresholdSeconds) {
     const pct = Math.min(100, Math.round(((c.actualSeconds || 0) / c.thresholdSeconds) * 100));
     const bar = h('div', { class: 'progress' }, h('span', {}));
     bar.firstChild.style.width = `${pct}%`;
