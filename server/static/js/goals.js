@@ -33,6 +33,48 @@ function destroyCharts() {
   charts = [];
 }
 
+// --- ①のホバープレビュー（spec: goal-report-day-detail / design D1）------------------------
+// body 直下に1つだけツールチップ DOM を持ち回す（util.js の attachTooltip と同じ流儀）。
+// 表示内容はレポート取得済みの rep.days をそのまま使い、新規のネットワーク取得は行わない。
+let dayTipEl = null;
+function ensureDayTip() {
+  if (dayTipEl) return dayTipEl;
+  dayTipEl = h('div', { class: 'gr-daytip', role: 'tooltip' });
+  document.body.appendChild(dayTipEl);
+  return dayTipEl;
+}
+function positionDayTip(el) {
+  const tip = dayTipEl;
+  const r = el.getBoundingClientRect();
+  tip.classList.add('show');
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  const gap = 8;
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  let top = r.bottom + gap;
+  if (top + th > vh - 4) top = r.top - gap - th;
+  if (top < 4) top = 4;
+  let left = r.left + r.width / 2 - tw / 2;
+  left = Math.max(4, Math.min(left, vw - tw - 4));
+  tip.style.top = `${Math.round(top)}px`;
+  tip.style.left = `${Math.round(left)}px`;
+}
+function hideDayTip() {
+  if (dayTipEl) dayTipEl.classList.remove('show');
+}
+/** ①のマス／ヘッダに、その日の文面プレビューをホバーで出す。新規取得はしない（design D1）。 */
+function attachDayHoverPreview(el, day) {
+  el.addEventListener('mouseenter', () => {
+    const tip = ensureDayTip();
+    clear(tip);
+    tip.appendChild(h('div', { class: 'gr-daytip-head', text: `Day ${day.dayNumber}（${day.dayKey}）` }));
+    tip.appendChild(h('div', { class: 'gr-daytip-body', text: day.text && day.text.trim() ? day.text : '未記入' }));
+    positionDayTip(el);
+  });
+  el.addEventListener('mouseleave', hideDayTip);
+}
+
 export function hide() {
   destroyCharts();
 }
@@ -691,7 +733,7 @@ async function renderReport(root, goalId) {
   const imgBase = `${isDemo() ? '/api/demo/goals/' : '/api/goals/'}${rep.goal.id}/journal`;
 
   // ① 達成カレンダー
-  page.appendChild(blockCalendar(rep, readerState));
+  page.appendChild(blockCalendar(rep, readerState, root));
   // ② 時間の推移（時間型ルールがある場合のみ）
   if (rep.hasTimeType) page.appendChild(blockTimeSeries(rep));
   // ③ Before / After（2モード＋最終日CTA）
@@ -892,17 +934,25 @@ function grCard(title) {
 }
 
 // ① 30日 × 実践の達成カレンダー
-function blockCalendar(rep, rs) {
+function blockCalendar(rep, rs, root) {
   const card = grCard('① 達成カレンダー');
   const scroll = h('div', { class: 'gr-cal-scroll' });
   const grid = h('div', { class: 'gr-cal' });
   grid.style.gridTemplateColumns = `minmax(92px, 132px) repeat(${rep.goal.dayCount}, 17px)`;
 
+  // クリックで開く日別詳細モーダル（既存の④選択・ハイライトは維持したまま追加で開く・design D5）。
+  // デモモードは本番用の GET /api/summary・GET/PUT /api/reflection/:date を持たないため開かない（design D6）。
+  const onDayClick = (dayNumber) => {
+    rs.renderReader(dayNumber);
+    if (!isDemo()) openDayDetailModal(rep, dayNumber, () => renderReport(root, rep.goal.id));
+  };
+
   // ヘッダ行（空 + Day 番号）
   grid.appendChild(h('div', { class: 'gr-cal-corner' }));
   for (let d = 1; d <= rep.goal.dayCount; d++) {
     const head = h('div', { class: 'gr-cal-dh', text: String(d) });
-    head.addEventListener('click', () => rs.renderReader(d));
+    head.addEventListener('click', () => onDayClick(d));
+    attachDayHoverPreview(head, rep.days[d - 1]);
     rs.headerByDay.set(d, head);
     grid.appendChild(head);
   }
@@ -921,7 +971,8 @@ function blockCalendar(rep, rs) {
         type: 'button',
         title: `Day ${cell.dayNumber}: ${label}`,
       });
-      el.addEventListener('click', () => rs.renderReader(cell.dayNumber));
+      el.addEventListener('click', () => onDayClick(cell.dayNumber));
+      attachDayHoverPreview(el, rep.days[cell.dayNumber - 1]);
       if (!rs.cellsByDay.has(cell.dayNumber)) rs.cellsByDay.set(cell.dayNumber, []);
       rs.cellsByDay.get(cell.dayNumber).push(el);
       grid.appendChild(el);
@@ -940,6 +991,134 @@ function blockCalendar(rep, rs) {
     legend.appendChild(h('span', {}, h('span', { class: 'gr-cell frozen gr-legend-swatch' }), '凍結（対象外）'));
   card.appendChild(legend);
   return card;
+}
+
+const DAY_DETAIL_MOOD_LABELS = ['いまひとつ', 'まあまあ', 'ふつう', '良い', 'とても良い'];
+
+/**
+ * ①のマスをクリックしたときに開く日別詳細モーダル（spec: goal-report-day-detail）。
+ * ブロック1「この日にやったこと」はレポート取得済みの rep.rules[*].cells をそのまま使い、
+ * 新規のルール評価はしない（design D2）。ブロック2「時間の内訳」・ブロック3「気分・振り返り」は
+ * この日1件ぶんだけ、モーダルを開くたびに都度フェッチする（全日先読みしない・design D2）。
+ * 編集・保存できるのは振り返り（ブロック3）だけ。保存後は差分更新せずレポート全体を再取得する（design D4）。
+ */
+async function openDayDetailModal(rep, dayNumber, onSaved) {
+  const day = rep.days[dayNumber - 1];
+  const dayKey = day.dayKey;
+
+  const body = h('div', { class: 'modal-body stack gr-daymodal' });
+
+  // ブロック1: この日にやったこと。
+  const doneList = h('div', { class: 'gr-daymodal-rules' });
+  for (const p of rep.rules) {
+    const cell = p.cells[dayNumber - 1];
+    const blank = cell.future || cell.inactive;
+    const statusClass = cell.frozen ? 'frozen' : blank ? 'future' : cell.met ? 'done' : 'miss';
+    const statusText = cell.frozen ? '凍結中（対象外）' : blank ? 'まだ来ていない／対象外' : cell.met ? 'やった' : 'やってない';
+    doneList.appendChild(h('div', { class: 'gr-daymodal-rule' },
+      h('span', { class: 'gr-daymodal-rule-label', text: `${ruleKindIcon(p.target)} ${ruleNiceLabel(p.target, p.label)}` }),
+      p.isTimeType && cell.actualSeconds != null
+        ? h('span', { class: 'gr-daymodal-rule-nums', text: `${fmtHM(cell.actualSeconds)} / ${cell.thresholdSeconds != null ? fmtHM(cell.thresholdSeconds) : '—'}` })
+        : null,
+      h('span', { class: `gr-daymodal-rule-status ${statusClass}`, text: statusText }),
+    ));
+  }
+  body.appendChild(h('div', { class: 'gr-daymodal-sec' },
+    h('h4', { class: 'gr-fsec-title', text: 'この日にやったこと' }),
+    doneList,
+  ));
+
+  // ブロック2: 時間の内訳（GET /api/summary?date= を都度フェッチ）。
+  const timeList = h('div', { class: 'gr-daymodal-time' }, h('p', { class: 'gr-empty', text: '読み込み中…' }));
+  body.appendChild(h('div', { class: 'gr-daymodal-sec' },
+    h('h4', { class: 'gr-fsec-title', text: '時間の内訳' }),
+    timeList,
+  ));
+
+  // ブロック3: 気分・振り返り（GET/PUT /api/reflection/:date）。編集できるのはここだけ（design D3）。
+  let satisfaction = 0;
+  const moodSegs = [];
+  const moodGroup = h('div', { class: 'rf-mood' });
+  const syncMood = () => moodSegs.forEach((s, i) => s.classList.toggle('on', i + 1 === satisfaction));
+  DAY_DETAIL_MOOD_LABELS.forEach((label, idx) => {
+    const val = idx + 1;
+    const seg = h('span', { class: 'rf-mood-seg', text: label });
+    seg.addEventListener('click', () => { satisfaction = satisfaction === val ? 0 : val; syncMood(); });
+    moodSegs.push(seg);
+    moodGroup.appendChild(seg);
+  });
+  const textarea = h('textarea', { class: 'gr-textarea', rows: '4', placeholder: '今日はどんな一日でしたか。' });
+  body.appendChild(h('div', { class: 'gr-daymodal-sec' },
+    h('h4', { class: 'gr-fsec-title', text: '気分・振り返り' }),
+    h('div', { class: 'rf-mood-row' }, h('span', { class: 'rf-mood-label', text: '気分' }), moodGroup),
+    textarea,
+  ));
+
+  // 目標日記が別に存在する日は読み取り専用で追加表示。編集導線は出さない（design D3）。
+  if (day.source === 'journal') {
+    body.appendChild(h('div', { class: 'gr-daymodal-journal' },
+      h('h4', { class: 'gr-fsec-title', text: '📔 この目標の日記（読み取り専用）' }),
+      h('p', { class: 'muted', text: 'これは目標日記です。編集は振り返りタブ／目標コーナーから行えます。' }),
+      h('div', { class: 'gr-daymodal-journal-text', text: day.text }),
+    ));
+  }
+
+  const saveBtn = h('button', { class: 'btn primary', type: 'button', text: '保存' });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      await api.putReflection(dayKey, textarea.value, satisfaction || null);
+      toast('保存しました', 'ok');
+      closeModal();
+      await onSaved();
+    } catch (err) {
+      toast(err.data?.error || `失敗: ${err.message}`, 'err');
+      saveBtn.disabled = false;
+    }
+  });
+  body.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', type: 'button', text: '閉じる', onclick: closeModal }),
+    saveBtn,
+  ));
+
+  openModal(body, `Day ${dayNumber}（${dayKey}）`);
+
+  // 時間の内訳（モーダルを開いてからこの日1件ぶんだけ取得・design D2）。
+  try {
+    const summary = await api.getSummary(dayKey);
+    clear(timeList);
+    if (!summary.groups.length) {
+      timeList.appendChild(h('p', { class: 'gr-empty', text: 'この日の記録はありません' }));
+    } else {
+      for (const g of summary.groups) {
+        timeList.appendChild(h('div', { class: 'gr-daymodal-time-row' },
+          h('span', { class: 'gr-daymodal-time-name', text: g.name }),
+          h('span', { class: 'gr-daymodal-time-sec', text: fmtDur(g.seconds) }),
+        ));
+      }
+    }
+    const targetHours = rep.goal.targetHours;
+    if (targetHours) {
+      const actual = targetHours.kind === 'TOTAL_WORK'
+        ? summary.totalWorkSeconds
+        : summary.groups.filter((g) => targetHours.labels.includes(g.name)).reduce((s, g) => s + g.seconds, 0);
+      timeList.appendChild(h('div', { class: 'gr-daymodal-time-target' },
+        h('span', { text: `目標（1日ぶん） ${fmtDur(targetHours.secondsPerDay)}` }),
+        h('span', { text: `実測 ${fmtDur(actual)}` }),
+      ));
+    }
+  } catch (err) {
+    clear(timeList);
+    timeList.appendChild(h('p', { class: 'gr-empty', text: `時間の内訳を取得できません: ${err.message}` }));
+  }
+
+  // 気分・振り返り本文（rep.days の合成テキストとは別に、生の reflection_entry を取得する・design D2）。
+  try {
+    const r = await api.getReflection(dayKey);
+    textarea.value = r && r.content ? r.content : '';
+    satisfaction = r && r.satisfaction ? r.satisfaction : 0;
+    syncMood();
+  } catch { /* noop */ }
 }
 
 /**

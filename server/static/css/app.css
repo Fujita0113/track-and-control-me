@@ -1077,6 +1077,28 @@ body.rf-page .content { max-width: none; }
 .gr-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .gr-legend-swatch { width: 14px; height: 14px; cursor: default; }
 
+/* ①のホバープレビュー（spec: goal-report-day-detail） */
+.gr-daytip { position: fixed; top: 0; left: 0; z-index: 120; display: none; max-width: 260px; padding: 8px 10px; border-radius: 8px; background: #212b36; color: #f4f6fa; font-size: 12px; line-height: 1.5; box-shadow: var(--shadow-lg); pointer-events: none; }
+.gr-daytip.show { display: block; }
+.gr-daytip-head { font-weight: 700; color: #e3e8ef; margin-bottom: 3px; }
+.gr-daytip-body { white-space: pre-wrap; word-break: break-word; }
+
+/* ①クリックで開く日別詳細モーダル（spec: goal-report-day-detail） */
+.gr-daymodal-sec { display: flex; flex-direction: column; gap: 6px; }
+.gr-daymodal-rules { display: flex; flex-direction: column; gap: 4px; }
+.gr-daymodal-rule { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.gr-daymodal-rule-label { flex: 1; color: #46505f; }
+.gr-daymodal-rule-nums { color: var(--muted); font-size: 12px; }
+.gr-daymodal-rule-status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.gr-daymodal-rule-status.done { color: #1a7a4c; background: #e2f5ea; }
+.gr-daymodal-rule-status.miss { color: #6b7686; background: #eef1f5; }
+.gr-daymodal-rule-status.future,
+.gr-daymodal-rule-status.frozen { color: #97a1af; background: #f4f6f9; }
+.gr-daymodal-time-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #46505f; }
+.gr-daymodal-time-target { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.gr-daymodal-journal { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.gr-daymodal-journal-text { font-size: 13px; color: #46505f; white-space: pre-wrap; word-break: break-word; background: #f7f8fa; border-radius: 8px; padding: 8px 10px; }
+
 /* ② 時間の推移 */
 .gr-ts { margin-bottom: 20px; }
 .gr-ts:last-child { margin-bottom: 0; }
