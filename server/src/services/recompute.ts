@@ -1,7 +1,13 @@
 import type { GroupColor, GroupRef } from '@track/contract';
 import type { DB } from '../db/index.js';
 import { getConfig, toAggregationConfig } from '../db/index.js';
-import { aggregateSamples, type AggregationResult, type RawSample } from '../aggregation/index.js';
+import {
+  aggregateSamples,
+  boundaryStartOfDay,
+  prevDayKey,
+  type AggregationResult,
+  type RawSample,
+} from '../aggregation/index.js';
 import type { SplitOverride } from '../aggregation/aggregate.js';
 import { loadSplitOverrides } from './timeline.js';
 import { resolveIdentity } from './group-identity.js';
@@ -21,13 +27,37 @@ interface RawSampleRow {
   open_group_keys: string;
 }
 
-export function loadRawSamples(db: DB): RawSample[] {
-  const rows = db
-    .prepare(
-      `SELECT boot_id, seq, client_ts, monotonic_ms, idle_state, active_stable_group_id, open_group_keys
-       FROM raw_sample ORDER BY client_ts, boot_id, seq`,
-    )
-    .all() as RawSampleRow[];
+/**
+ * `onlyDays` を絞り込んだ再計算で `loadRawSamples` に渡す下限時刻を求める（design.md D1）。
+ * 対象日のうち最古日から1日前倒しした日境界開始時刻を返す。`aggregateSamples` は隣接サンプル対で
+ * gapを判定するため、対象範囲最初の区間を計算するには開始直前のサンプルが最低限必要になる。
+ */
+export function recomputeWindowStartMs(
+  onlyDays: string[] | undefined,
+  tz: string,
+  boundaryMinutes: number,
+): number | undefined {
+  if (!onlyDays || onlyDays.length === 0) return undefined;
+  const minDay = onlyDays.reduce((a, b) => (a < b ? a : b));
+  return boundaryStartOfDay(prevDayKey(minDay), tz, boundaryMinutes);
+}
+
+export function loadRawSamples(db: DB, opts: { sinceMs?: number } = {}): RawSample[] {
+  const rows = (
+    opts.sinceMs !== undefined
+      ? db
+          .prepare(
+            `SELECT boot_id, seq, client_ts, monotonic_ms, idle_state, active_stable_group_id, open_group_keys
+             FROM raw_sample WHERE client_ts >= @sinceMs ORDER BY client_ts, boot_id, seq`,
+          )
+          .all({ sinceMs: opts.sinceMs })
+      : db
+          .prepare(
+            `SELECT boot_id, seq, client_ts, monotonic_ms, idle_state, active_stable_group_id, open_group_keys
+             FROM raw_sample ORDER BY client_ts, boot_id, seq`,
+          )
+          .all()
+  ) as RawSampleRow[];
   return rows.map((r) => {
     let open: GroupRef[] = [];
     try {
@@ -53,8 +83,10 @@ export function loadRawSamples(db: DB): RawSample[] {
 
 /** 集計して非確定日を作り直す。返り値は集計結果（評価に流用可）。 */
 export function recompute(db: DB, opts: { onlyDays?: string[] } = {}): AggregationResult {
-  const cfg = toAggregationConfig(getConfig(db));
-  const samples = loadRawSamples(db);
+  const rawCfg = getConfig(db);
+  const cfg = toAggregationConfig(rawCfg);
+  const sinceMs = recomputeWindowStartMs(opts.onlyDays, rawCfg.tz, rawCfg.day_boundary_minutes);
+  const samples = loadRawSamples(db, sinceMs !== undefined ? { sinceMs } : {});
   const overrides: SplitOverride[] = loadAllSplitOverrides(db);
   const result = aggregateSamples(samples, cfg, overrides);
   persist(db, result, opts.onlyDays);
