@@ -49,29 +49,31 @@ export function ruleNiceLabel(target, label) {
   return label;
 }
 
-// 共有: ルール編集の条件ドロップダウン(フラット)。
+// 共有: ルール編集の条件ドロップダウン(フラット/optgroup構造).
 // 旧「就寝前リチュアル」ターゲット＋「シグナル」サブセレクトの2段を廃し、PLANNING を
 // signal_key ごとに1項目へ展開する。各エントリは UI 選択値 v ↔ サーバー (target, signalKey)。
 // PLANNING 系は "PLANNING:<signalKey>" を選択値にして 1 つの <select> で完結させる。
+// GROUP / GROUP_OR は単一の GROUP_SELECT ("グループ作業時間") へ統合する。
 export const CONDITION_KINDS = [
-  { v: 'TOTAL_WORK', target: 'TOTAL_WORK', signalKey: null },
-  { v: 'GROUP', target: 'GROUP', signalKey: null },
-  { v: 'GROUP_OR', target: 'GROUP_OR', signalKey: null },
-  { v: 'TIMELINE', target: 'TIMELINE', signalKey: null },
-  { v: 'MANUAL_CHECK', target: 'MANUAL_CHECK', signalKey: null },
-  { v: 'PLANNING:reflection_done', target: 'PLANNING', signalKey: 'reflection_done' },
-  { v: 'PLANNING:tomorrow_tasks_registered', target: 'PLANNING', signalKey: 'tomorrow_tasks_registered' },
-  { v: 'PLANNING:tomorrow_planned', target: 'PLANNING', signalKey: 'tomorrow_planned' },
-].map((k) => ({ ...k, label: conditionLabel(k.target, k.signalKey) }));
+  { v: 'TOTAL_WORK', target: 'TOTAL_WORK', signalKey: null, group: '作業時間・計測' },
+  { v: 'GROUP_SELECT', target: 'GROUP_SELECT', signalKey: null, group: '作業時間・計測', label: 'グループ作業時間' },
+  { v: 'TIMELINE', target: 'TIMELINE', signalKey: null, group: '作業時間・計測' },
+  { v: 'PLANNING:reflection_done', target: 'PLANNING', signalKey: 'reflection_done', group: '計画・振り返り' },
+  { v: 'PLANNING:tomorrow_tasks_registered', target: 'PLANNING', signalKey: 'tomorrow_tasks_registered', group: '計画・振り返り' },
+  { v: 'PLANNING:tomorrow_planned', target: 'PLANNING', signalKey: 'tomorrow_planned', group: '計画・振り返り' },
+  { v: 'MANUAL_CHECK', target: 'MANUAL_CHECK', signalKey: null, group: 'チェック・手動記録' },
+].map((k) => ({ ...k, label: k.label || conditionLabel(k.target, k.signalKey) }));
 
 /** (target, signalKey) → 条件ドロップダウンの選択値 v。PLANNING は signal_key を含める(null は tomorrow_planned)。 */
 export function conditionKindValue(target, signalKey) {
+  if (target === 'GROUP' || target === 'GROUP_OR') return 'GROUP_SELECT';
   if (target === 'PLANNING') return `PLANNING:${signalKey || 'tomorrow_planned'}`;
   return target;
 }
 
 /** 選択値 v → { target, signalKey }。"PLANNING:<key>" を分解し、凍結済みの未知 signal_key も復元できる。 */
 export function conditionKindTarget(v) {
+  if (v === 'GROUP_SELECT') return { target: 'GROUP_SELECT', signalKey: null };
   if (v.startsWith('PLANNING:')) return { target: 'PLANNING', signalKey: v.slice('PLANNING:'.length) };
   return { target: v, signalKey: null };
 }

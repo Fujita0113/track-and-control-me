@@ -21,7 +21,7 @@ test('GROUP_OR ルールの作成と表示フロー', async ({ page }) => {
 
   // ルール編集
   const editor = modal.locator('.gr-newcond-editor').first();
-  await editor.locator('select').first().selectOption('GROUP_OR');
+  await editor.locator('select').first().selectOption('GROUP_SELECT');
 
   // 対象グループが表示され、選択できること
   const checkboxes = editor.locator('input[type="checkbox"]');

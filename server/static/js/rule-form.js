@@ -72,8 +72,8 @@ export async function maybeShowDueRuleToast(todayKey) {
 /** フォーム用の種類選択肢（PLANNING を含む既存 CONDITION_KINDS ＋ 写真/質問）。 */
 const FORM_KINDS = [
   ...CONDITION_KINDS,
-  { v: 'PHOTO', target: 'PHOTO', signalKey: null, label: '📷 写真を出す' },
-  { v: 'QUESTION', target: 'QUESTION', signalKey: null, label: '💬 質問に答える' },
+  { v: 'PHOTO', target: 'PHOTO', signalKey: null, group: 'チェック・手動記録', label: '📷 写真を出す' },
+  { v: 'QUESTION', target: 'QUESTION', signalKey: null, group: 'チェック・手動記録', label: '💬 質問に答える' },
 ];
 
 /**
@@ -82,14 +82,27 @@ const FORM_KINDS = [
  */
 export function buildRuleForm({ initial, todayKey, groups } = {}) {
   const isEdit = !!initial;
-  const kindSel = h('select', {}, ...FORM_KINDS.map((k) => h('option', { value: k.v }, k.label)));
-  const initialKindV = initial ? (initial.target === 'PLANNING' ? conditionKindValue('PLANNING', initial.signalKey) : initial.target) : 'TOTAL_WORK';
+  const categoryLabels = {
+    '作業時間・計測': '⏱ 作業時間・計測',
+    '計画・振り返り': '📝 計画・振り返り',
+    'チェック・手動記録': '✅ チェック・手動記録',
+  };
+  const groupedKinds = FORM_KINDS.reduce((acc, k) => {
+    const g = k.group || 'その他';
+    if (!acc[g]) acc[g] = [];
+    acc[g].push(k);
+    return acc;
+  }, {});
+  const kindSelChildren = Object.entries(groupedKinds).map(([g, items]) => {
+    const label = categoryLabels[g] || g;
+    return h('optgroup', { label }, ...items.map((k) => h('option', { value: k.v }, k.label)));
+  });
+  const kindSel = h('select', {}, ...kindSelChildren);
+  const initialKindV = initial ? conditionKindValue(initial.target, initial.signalKey) : 'TOTAL_WORK';
   kindSel.value = initialKindV;
 
   const minutes = h('input', { class: 'pc-input pc-input-num', type: 'number', min: '1', step: '5', value: String(initial?.thresholdSeconds ? Math.round(initial.thresholdSeconds / 60) : 60) });
-  const groupSel = h('select', { class: 'pc-input' }, ...(groups || []).map((g) => h('option', { value: String(g.id) }, g.name)));
-  if (initial?.groupIdentityId != null) groupSel.value = String(initial.groupIdentityId);
-  const initialGroupMemberIds = initial?.groupIdentityIds || [];
+  const initialGroupMemberIds = initial?.groupIdentityIds || (initial?.groupIdentityId != null ? [Number(initial.groupIdentityId)] : []);
   const groupBoxesContainer = h('div', { class: 'row', style: { gap: '8px', flexWrap: 'wrap' } });
   const groupCheckboxes = (groups || []).map((g) => {
     const cb = h('input', {
@@ -118,8 +131,9 @@ export function buildRuleForm({ initial, todayKey, groups } = {}) {
     clear(extra);
     const { target } = conditionKindTarget(kindSel.value);
     if (target === 'TOTAL_WORK') extra.append(labelSpan('しきい値(分)'), minutes);
-    else if (target === 'GROUP') extra.append(labelSpan('グループ'), groupSel, labelSpan('≥ 分'), minutes);
-    else if (target === 'GROUP_OR') extra.append(labelSpan('対象グループ（2件以上）'), groupBoxesContainer, labelSpan('≥ 分'), minutes);
+    else if (target === 'GROUP_SELECT' || target === 'GROUP' || target === 'GROUP_OR') {
+      extra.append(labelSpan('対象グループ（1件以上）'), groupBoxesContainer, labelSpan('≥ 分'), minutes);
+    }
     else if (target === 'TIMELINE') extra.append(labelSpan('カテゴリ'), catInp, catList, labelSpan('≥ 分'), minutes);
     else if (target === 'MANUAL_CHECK') extra.append(labelSpan('チェック名'), labelInp);
     else if (target === 'PHOTO') extra.append(labelSpan('撮るもの'), captionInp, isEdit ? labelSpan('（作成後は変更不可）') : null);
@@ -128,9 +142,6 @@ export function buildRuleForm({ initial, todayKey, groups } = {}) {
   };
   kindSel.addEventListener('change', syncKind);
   syncKind();
-  if (initial?.needsReset && conditionKindTarget(kindSel.value).target === 'GROUP') {
-    groupSel.value = ''; // 壊れた参照は選び直しを促す（既定の選択を空にする）。
-  }
 
   // --- 軸2: いつ（永続/単発/範囲）--------------------------------------------
   const initialSchedule = initial?.schedule || 'permanent';
@@ -179,14 +190,19 @@ export function buildRuleForm({ initial, todayKey, groups } = {}) {
       const { target, signalKey } = conditionKindTarget(kindSel.value);
       const out = { target, reason: reasonInp.value.trim() };
       if (target === 'TOTAL_WORK') out.thresholdSeconds = (Number(minutes.value) || 0) * 60;
-      else if (target === 'GROUP') { out.groupIdentityId = groupSel.value ? Number(groupSel.value) : null; out.thresholdSeconds = (Number(minutes.value) || 0) * 60; }
-      else if (target === 'GROUP_OR') {
+      else if (target === 'GROUP_SELECT' || target === 'GROUP' || target === 'GROUP_OR') {
         const selectedIds = groupCheckboxes.filter((g) => g.cb.checked).map((g) => Number(g.id));
-        if (selectedIds.length < 2) {
-          toast('グループは2件以上選択してください', 'error');
-          throw new Error('グループは2件以上選択してください');
+        if (selectedIds.length === 0) {
+          toast('グループを1つ以上選択してください', 'error');
+          throw new Error('グループを1つ以上選択してください');
         }
-        out.groupIdentityIds = selectedIds;
+        if (selectedIds.length === 1) {
+          out.target = 'GROUP';
+          out.groupIdentityId = selectedIds[0];
+        } else {
+          out.target = 'GROUP_OR';
+          out.groupIdentityIds = selectedIds;
+        }
         out.thresholdSeconds = (Number(minutes.value) || 0) * 60;
       }
       else if (target === 'TIMELINE') { out.label = catInp.value.trim(); out.thresholdSeconds = (Number(minutes.value) || 0) * 60; }
