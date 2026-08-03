@@ -4,6 +4,7 @@ import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
 import { getDayAllocation } from './day-allocation.js';
 import { daySummary } from './summary.js';
+import { addDaysKey } from './day-key.js';
 
 /**
  * 一日の配分集計（spec: reflection-day-overview）。
@@ -156,5 +157,46 @@ describe('getDayAllocation', () => {
     expect(work[0]!.label).toBe('その他（未グループ）');
     expect(work[0]!.color).toBeNull();
     expect(work[0]!.seconds).toBe(2 * 3600);
+  });
+
+  // --- workSeconds / avgWorkSeconds7d（issue #81・spec: reflection-day-overview） -----------
+  // 今日タブと同一の「総作業時間」（daily_totals_snapshot 由来）を返し、直近7日平均（対象日を除く・
+  // 記録の無い日も0秒として算入しカレンダー日数7で単純平均）との差分表示の元データを提供する。
+
+  /** daily_totals_snapshot に1行挿入（totalWorkSecondsForDay / daySummary().totalWorkSeconds の源泉）。 */
+  function insertTotal(db: DB, dayKey: string, ms: number, group = 'grpA'): void {
+    db.prepare(
+      `INSERT INTO daily_totals_snapshot (day_key, stable_group_id, ms, is_final, updated_at)
+       VALUES (?, ?, ?, 1, ?)`,
+    ).run(dayKey, group, ms, Date.now());
+  }
+
+  it('(h) workSeconds は daySummary().totalWorkSeconds と同一の値', () => {
+    const db = openDb(':memory:');
+    insertSession(db, 'grpA', 'A', jst(9, 0), jst(12, 12)); // 端〜端の母数用（totalSeconds とは無関係な値でよい）
+    insertTotal(db, DAY, 3 * 3600 * 1000 + 12 * 60 * 1000); // 3h12m（今日タブの総作業時間）
+    const a = getDayAllocation(db, DAY, jst(18, 0));
+    const summary = daySummary(db, DAY);
+    expect(a.workSeconds).toBe(summary.totalWorkSeconds);
+    expect(a.workSeconds).toBe(3 * 3600 + 12 * 60);
+  });
+
+  it('(i) avgWorkSeconds7d は直近7日（対象日を除く）の単純平均・記録の無い日も0秒で算入', () => {
+    const db = openDb(':memory:');
+    // 対象日 DAY の前日から4日間だけ各3h記録、残り3日（計7日）は無記録（0秒）。
+    for (let i = 1; i <= 4; i++) insertTotal(db, addDaysKey(DAY, -i), 3 * 3600 * 1000);
+    insertTotal(db, DAY, 5 * 3600 * 1000); // 対象日自身は平均に含めない
+    const a = getDayAllocation(db, DAY, jst(18, 0));
+    // (3h*4 + 0*3) / 7 = 12h/7 = 1h42m51s
+    expect(a.avgWorkSeconds7d).toBe(Math.round((4 * 3 * 3600) / 7));
+  });
+
+  it('(j) 平均より多い/少ない日の差分は workSeconds - avgWorkSeconds7d から求められる', () => {
+    const db = openDb(':memory:');
+    for (let i = 1; i <= 7; i++) insertTotal(db, addDaysKey(DAY, -i), 3 * 3600 * 1000); // 直近7日 各3h → 平均3h
+    insertTotal(db, DAY, 5 * 3600 * 1000); // 対象日 5h
+    const a = getDayAllocation(db, DAY, jst(18, 0));
+    expect(a.avgWorkSeconds7d).toBe(3 * 3600);
+    expect(a.workSeconds - a.avgWorkSeconds7d).toBe(2 * 3600); // +2h
   });
 });

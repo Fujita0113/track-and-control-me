@@ -1,10 +1,4 @@
-# reflection-day-overview Specification
-
-## Purpose
-
-振り返りタブに、対象日の「一日の配分」を俯瞰できる表示を追加する。持ち分（credited）規則で重複計上せずにその日の記録を集計し、`reflection-timeline-workspace` の左メインにある独立した全幅ビュー「一日の配分」として横棒リストで提供する。この表示は振り返りの対象日に追従し、既存の `reflection-journal` の本文編集・保存動線を変更しない。対象日のタイムライン閲覧・記録は左メインの「タイムライン（完全版）」ビュー（`reflection-timeline-workspace`）が担う。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 一日の配分集計
 

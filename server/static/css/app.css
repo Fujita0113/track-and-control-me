@@ -905,6 +905,10 @@ body.rf-page .content { max-width: none; }
 .rf-alloc-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .rf-alloc-title { font-size: 15px; font-weight: 700; color: #22303f; letter-spacing: 0.01em; }
 .rf-alloc-sub { font-size: 12px; color: #8b95a7; }
+.rf-alloc-stat { display: flex; align-items: baseline; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.rf-alloc-stat-num { font-size: 28px; font-weight: 700; letter-spacing: -0.4px; color: #16202c; font-variant-numeric: tabular-nums; }
+.rf-alloc-stat-lbl { font-size: 12.5px; color: #8b95a7; }
+.rf-alloc-delta { font-size: 12.5px; font-weight: 600; color: #46505f; font-variant-numeric: tabular-nums; background: #eef1f6; padding: 3px 10px; border-radius: 999px; }
 .rf-alloc-empty { margin: 14px 4px 6px; font-size: 13px; line-height: 1.7; color: #8b95a7; text-align: center; }
 .rf-bars { display: flex; flex-direction: column; gap: 11px; }
 .rf-bar-row { display: flex; align-items: center; gap: 12px; }

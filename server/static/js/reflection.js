@@ -600,11 +600,19 @@ async function loadEditorForDate(date) {
   ctx.dirty = false;
 }
 
+/** 差分秒 → "+Nh Nm" / "-Nh Nm" / "±0"（fmtDur を流用し符号を付与）。 */
+function fmtWorkDelta(deltaSeconds) {
+  if (deltaSeconds === 0) return '±0';
+  const sign = deltaSeconds > 0 ? '+' : '-';
+  return `${sign}${fmtDur(Math.abs(deltaSeconds))}`;
+}
+
 /**
  * 配分データ（getAllocation/デモ配分の戻り値）から配分カード要素を組み立てる（純関数）。
  * 左メインの「一日の配分」ビュー（renderAllocView）とデモの閲覧プレビュー（showDemo）で共用する。
  * 未記録以外は時間の長い順（降順）に上から並べ、未記録は常に最下部（中立色）に固定する。
- * 母数ゼロの日は棒を描かず空状態メッセージ。
+ * 母数ゼロの日は棒を描かず空状態メッセージ。総作業時間・直近7日平均は母数ゼロと独立に計算されるため、
+ * 空状態でも差分表示は行う（design D3・spec: reflection-day-overview「一日の配分バー」）。
  */
 function buildAllocCard(alloc) {
   const head = h('div', { class: 'rf-alloc-head' },
@@ -612,8 +620,20 @@ function buildAllocCard(alloc) {
     h('span', { class: 'rf-alloc-sub', text: '覚醒時間中（記録の端〜端）' }),
   );
 
+  // 総作業時間の絶対値（今日タブの .stat と同じ「大きな数字＋ラベル」の見せ方）＋直近7日平均比のバッジ。
+  // 差分だけでは「実際に何時間使ったか」が読み取れないため両方を表示する（issue #81 追加フィードバック）。
+  let statRow = null;
+  if (alloc && typeof alloc.workSeconds === 'number' && typeof alloc.avgWorkSeconds7d === 'number') {
+    const delta = alloc.workSeconds - alloc.avgWorkSeconds7d;
+    statRow = h('div', { class: 'rf-alloc-stat' },
+      h('span', { class: 'rf-alloc-stat-num', text: fmtDur(alloc.workSeconds) }),
+      h('span', { class: 'rf-alloc-stat-lbl', text: '総作業時間' }),
+      h('span', { class: 'rf-alloc-delta', text: `直近7日平均比 ${fmtWorkDelta(delta)}` }),
+    );
+  }
+
   if (!alloc || !alloc.totalSeconds || !alloc.slices) {
-    return h('div', { class: 'rf-alloc-card' }, head,
+    return h('div', { class: 'rf-alloc-card' }, head, statRow,
       h('p', { class: 'rf-alloc-empty', text: 'この日はまだ記録がありません。作業や休憩が記録されると、一日の配分が表示されます。' }));
   }
 
@@ -636,7 +656,7 @@ function buildAllocCard(alloc) {
       h('span', { class: 'rf-bar-val', text: fmtDur(r.seconds) }),
     ));
   }
-  return h('div', { class: 'rf-alloc-card' }, head, bars);
+  return h('div', { class: 'rf-alloc-card' }, head, statRow, bars);
 }
 
 /** 左メイン「一日の配分」ビュー（独立全幅ビュー・design: エディタ上部常設バーからの昇格）。 */

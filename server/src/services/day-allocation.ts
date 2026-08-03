@@ -1,6 +1,8 @@
 import type { DB } from '../db/index.js';
 import { getTimeline } from './timeline.js';
 import { todayKey } from './summary.js';
+import { totalWorkSecondsForDay } from './categories.js';
+import { addDaysKey } from './day-key.js';
 
 /**
  * 一日の配分（day allocation）集計（spec: reflection-day-overview / design D2・D3）。
@@ -35,11 +37,18 @@ export interface DayAllocation {
   totalSeconds: number;
   slices: AllocationSlice[];
   untrackedSeconds: number;
+  workSeconds: number;
+  avgWorkSeconds7d: number;
 }
 
 export function getDayAllocation(db: DB, dayKey: string, nowMs = Date.now()): DayAllocation {
   const tl = getTimeline(db, dayKey, nowMs);
   const isToday = todayKey(db, nowMs) === dayKey;
+
+  const workSeconds = totalWorkSecondsForDay(db, dayKey);
+  let avgSum = 0;
+  for (let i = 1; i <= 7; i++) avgSum += totalWorkSecondsForDay(db, addDaysKey(dayKey, -i));
+  const avgWorkSeconds7d = Math.round(avgSum / 7);
 
   // WORK スライス: identity 別に credited_ms を合算（today-group-breakdown と共有・design D1/D5）。
   // AutoBlock は timeline.ts で既に identity（改名の別名解決込み）へ揃え済みなので、
@@ -73,7 +82,16 @@ export function getDayAllocation(db: DB, dayKey: string, nowMs = Date.now()): Da
   const starts = [...tl.auto.map((b) => b.startAt), ...tl.manual.map((m) => m.startAt)];
   const ends = [...tl.auto.map((b) => b.endAt), ...tl.manual.map((m) => m.endAt)];
   if (starts.length === 0) {
-    return { dayKey, extentStart: null, extentEnd: null, totalSeconds: 0, slices: [], untrackedSeconds: 0 };
+    return {
+      dayKey,
+      extentStart: null,
+      extentEnd: null,
+      totalSeconds: 0,
+      slices: [],
+      untrackedSeconds: 0,
+      workSeconds,
+      avgWorkSeconds7d,
+    };
   }
   const extentStart = Math.min(...starts);
   const lastEnd = Math.max(...ends);
@@ -94,5 +112,5 @@ export function getDayAllocation(db: DB, dayKey: string, nowMs = Date.now()): Da
   const sliceTotal = slices.reduce((acc, s) => acc + s.seconds, 0);
   const untrackedSeconds = Math.max(0, totalSeconds - sliceTotal);
 
-  return { dayKey, extentStart, extentEnd, totalSeconds, slices, untrackedSeconds };
+  return { dayKey, extentStart, extentEnd, totalSeconds, slices, untrackedSeconds, workSeconds, avgWorkSeconds7d };
 }
