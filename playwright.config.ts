@@ -2,12 +2,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * E2E（ブラウザ駆動）設定。デモモード（本番 DB 非依存）で SPA を実ブラウザ検証する。
- * - サーバは webServer で自動起動（DB_PATH=:memory: なので本番データに触れない）。
+ * - サーバはワーカーごとに `e2e/fixtures.ts` が自動起動する（DB_PATH=:memory: なので本番データに触れない）。
+ *   1プロセス共有だと fullyParallel 下で他 spec の書き込みがアサーションに混ざるため、
+ *   ワーカーごとに専用サーバー＋専用DBを持たせて完全分離している。
  * - vitest（*.test.ts）とは分離: testDir=e2e / testMatch=*.spec.ts で衝突しない。
  */
-
-const PORT = 8899;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: './e2e',
@@ -17,21 +16,9 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'line' : 'list',
   use: {
-    baseURL: BASE_URL,
     trace: 'on-first-retry',
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
-  // SPA を配信するローカルサーバを自動起動（インメモリ DB＝本番非干渉）。
-  webServer: {
-    command: 'npm run server',
-    url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
-    env: {
-      PORT: String(PORT),
-      DB_PATH: ':memory:',
-    },
-  },
 });

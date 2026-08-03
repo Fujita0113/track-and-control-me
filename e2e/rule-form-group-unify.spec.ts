@@ -1,9 +1,16 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { thirtyDayEnd } from './goal-input.js';
+import { seedGroupIdentities } from './group-seed.js';
 
 test('「グループ作業時間」選択から1件選択(GROUP)および2件選択(GROUP_OR)の目標が作成・表示される', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
+
+  // GROUP_SELECT の選択肢は実測データからしか生まれないため、テスト自身で2グループぶん用意する。
+  await seedGroupIdentities(page, [
+    { title: '英語の勉強', color: 'blue' },
+    { title: '読書', color: 'green' },
+  ]);
 
   // 目標タブを開く
   await page.locator('#tabs button[data-target="goals"]').click();

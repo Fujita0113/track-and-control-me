@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * デモモードで振り返りタブの「一日の配分」バーを実ブラウザで検証する

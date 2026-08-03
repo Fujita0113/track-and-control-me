@@ -1,11 +1,18 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { thirtyDayEnd } from './goal-input.js';
+import { seedGroupIdentities } from './group-seed.js';
 
 test('GROUP_OR ルールの作成と表示フロー', async ({ page }) => {
   const { dayKey } = await (await page.request.get('/api/summary')).json();
 
   await page.goto('/');
   await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
+
+  // GROUP_SELECT の選択肢は実測データからしか生まれないため、テスト自身で2グループぶん用意する。
+  await seedGroupIdentities(page, [
+    { title: '英語の勉強', color: 'blue' },
+    { title: '読書', color: 'green' },
+  ]);
 
   // 目標タブを開く
   await page.locator('#tabs button[data-target="goals"]').click();

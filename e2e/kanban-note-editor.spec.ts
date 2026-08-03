@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * かんばんカード詳細のノートエディタ e2e（kanban-detail-shared-editor / issue #57）。

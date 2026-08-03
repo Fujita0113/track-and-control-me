@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * 左ビューによるサイドバーと日付ストリップの駆動（reflection-timeline-workspace / issue #67）。

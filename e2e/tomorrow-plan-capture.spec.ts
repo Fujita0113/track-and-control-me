@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * 明日の計画ビュー e2e（tomorrow-plan-capture / issue #61・#67）。

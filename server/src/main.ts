@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     actualPort: port,
   });
   ensureDbDir(dbPath);
-  const isDevDb = dbPath === ':memory:' || dbPath === join(pre.serverRoot, 'data', 'track.dev.sqlite');
+  const isDevDb = dbPath !== ':memory:' && dbPath === join(pre.serverRoot, 'data', 'track.dev.sqlite');
   const needsDevSeed = isDevDb && !existsSync(dbPath);
 
   const db = openDb(dbPath);

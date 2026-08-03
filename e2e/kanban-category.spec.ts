@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * かんばんの「カテゴリ付けモード」E2E（kanban-task-category / tasks 4.4・4.5）。

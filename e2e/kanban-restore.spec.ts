@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * かんばんの「アーカイブ済みタスクを戻す」E2E（kanban-restore-archived / issue #45）。

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * 明日の計画ビュー: 右サイドバーへ供給する詳細とアクティビティログ（tomorrow-plan-board / issue #67）。

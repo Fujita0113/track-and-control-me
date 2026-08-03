@@ -1,4 +1,5 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect } from './fixtures.js';
+import type { APIRequestContext } from '@playwright/test';
 import { thirtyDayEnd } from './goal-input.js';
 
 /**

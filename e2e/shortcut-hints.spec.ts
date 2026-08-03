@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * ショートカット & ホバーヒント E2E（shortcut-hover-hints / issue #35）。

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * かんばんのタスク作成 Optimistic UI（issue #29 フォローアップ）。

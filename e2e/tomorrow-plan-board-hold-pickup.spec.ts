@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 
 /**
  * 明日の計画ビューへの埋め込みカンバン盤面（tomorrow-plan-board / issue #67）。

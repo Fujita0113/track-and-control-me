@@ -32,26 +32,68 @@ describe('findAvailablePort', () => {
     });
   }
 
+  /** 指定ポートが今この瞬間に空いているかを実ソケットで確認する（bind できれば空き）。 */
+  function isFree(port: number, host: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const probe = createServer();
+      probe.once('error', () => resolve(false));
+      probe.listen(port, host, () => probe.close(() => resolve(true)));
+    });
+  }
+
+  /**
+   * 固定ポート番号は使わない。エフェメラルポート範囲（Windows既定 49152-65535）は
+   * OS が他プロセス（IDE の内部通信等）へいつ配ってもおかしくないため、決め打ちの番号は
+   * 「たまたま今日空いている」以上の保証がなく、実測でも IDE との衝突で flaky 化した。
+   * 代わりに OS に port:0 で今空いている番号を教えてもらい、そこから続く count 個が
+   * 全部空いていることを確認できるまで探す（見つかるまで軽く再試行する）。
+   */
+  async function findFreeRun(host: string, count: number): Promise<number> {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const base = await new Promise<number>((resolve, reject) => {
+        const probe = createServer();
+        probe.once('error', reject);
+        probe.listen(0, host, () => {
+          const address = probe.address();
+          const port = typeof address === 'object' && address ? address.port : 0;
+          probe.close(() => resolve(port));
+        });
+      });
+      let allFree = true;
+      for (let i = 1; i < count; i++) {
+        if (!(await isFree(base + i, host))) {
+          allFree = false;
+          break;
+        }
+      }
+      if (allFree) return base;
+    }
+    throw new Error(`空きポートの連番(${count}個)が見つかりませんでした`);
+  }
+
   it('いつものポートが空いていればそのポートを返す', async () => {
-    const port = await findAvailablePort(58001, '127.0.0.1');
-    expect(port).toBe(58001);
+    const freePort = await findFreeRun('127.0.0.1', 1);
+    const port = await findAvailablePort(freePort, '127.0.0.1');
+    expect(port).toBe(freePort);
   });
 
   it('いつものポートが使用中なら次の空きポートを返す', async () => {
-    await occupy(58011, '127.0.0.1');
-    const port = await findAvailablePort(58011, '127.0.0.1');
-    expect(port).toBe(58012);
+    const base = await findFreeRun('127.0.0.1', 2);
+    await occupy(base, '127.0.0.1');
+    const port = await findAvailablePort(base, '127.0.0.1');
+    expect(port).toBe(base + 1);
   });
 
   it('連続して使用中のポートはスキップする', async () => {
-    await occupy(58021, '127.0.0.1');
-    await occupy(58022, '127.0.0.1');
-    const port = await findAvailablePort(58021, '127.0.0.1');
-    expect(port).toBe(58023);
+    const base = await findFreeRun('127.0.0.1', 3);
+    await occupy(base, '127.0.0.1');
+    await occupy(base + 1, '127.0.0.1');
+    const port = await findAvailablePort(base, '127.0.0.1');
+    expect(port).toBe(base + 2);
   });
 
   it('探索範囲内が全て使用中なら例外を投げる', async () => {
-    const base = 58030;
+    const base = await findFreeRun('127.0.0.1', 3);
     for (let i = 0; i < 3; i++) {
       await occupy(base + i, '127.0.0.1');
     }
