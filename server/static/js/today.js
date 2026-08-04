@@ -145,12 +145,44 @@ async function renderOverview(region) {
 }
 
 // --- (2) 解錠状態 + 条件進捗 + reveal ------------------------------------
+
+/**
+ * 質問回答欄（`.cond-answer`）のうち値が非空のものを `ruleId → { value, focused, selectionStart, selectionEnd }`
+ * として退避する（issue #83: 30秒自動更新で入力中の回答が消えるのを防ぐ）。
+ */
+function snapshotAnswers(region) {
+  const pending = new Map();
+  for (const input of region.querySelectorAll('.cond-answer')) {
+    if (!input.value) continue;
+    const ruleId = input.dataset.ruleId;
+    if (!ruleId) continue;
+    pending.set(ruleId, {
+      value: input.value,
+      focused: document.activeElement === input,
+      selectionStart: input.selectionStart,
+      selectionEnd: input.selectionEnd,
+    });
+  }
+  return pending;
+}
+
+/** 退避 Map のうちフォーカス中だったものへ、再描画後の同じ ruleId の入力でフォーカス・カーソル位置を戻す。 */
+function restoreFocusedAnswer(region, pending) {
+  for (const input of region.querySelectorAll('.cond-answer')) {
+    const snap = pending.get(input.dataset.ruleId);
+    if (!snap || !snap.focused) continue;
+    input.focus();
+    try { input.setSelectionRange(snap.selectionStart, snap.selectionEnd); } catch { /* noop */ }
+  }
+}
+
 async function renderGate(region) {
   const date = state.today;
   const [unlock, planning] = await Promise.all([
     api.getUnlock(date),
     api.getPlanning(date).catch(() => null),
   ]);
+  const pending = snapshotAnswers(region);
   clear(region);
 
   const unlocked = unlock.status === 'UNLOCKED';
@@ -167,10 +199,11 @@ async function renderGate(region) {
   if (!unlock.perCondition || unlock.perCondition.length === 0) {
     list.appendChild(emptyState('条件が定義されていません'));
   } else {
-    for (const c of unlock.perCondition) list.appendChild(condRow(c, planning, date));
+    for (const c of unlock.perCondition) list.appendChild(condRow(c, planning, date, pending));
   }
   condCard.appendChild(list);
   region.appendChild(condCard);
+  restoreFocusedAnswer(region, pending);
 
   if (unlocked) {
     region.appendChild(revealCard(date));
@@ -183,12 +216,12 @@ async function renderGate(region) {
   }
 }
 
-function condRow(c, planning, date) {
+function condRow(c, planning, date, pending = new Map()) {
   const met = !!c.met;
 
   // 写真/質問ルールは、その場で答える／やめる導線を行内に持つ（spec: goal-check-gate）。
   // ゲートで足止めされている場所で解決できるようにするため、別タブへ飛ばさない。
-  if (c.target === 'PHOTO' || c.target === 'QUESTION') return ruleAnswerRow(c, date);
+  if (c.target === 'PHOTO' || c.target === 'QUESTION') return ruleAnswerRow(c, date, pending);
 
   // MANUAL_CHECK は行内チェックボックスでトグル(旧 checks.js を吸収)。
   if (c.target === 'MANUAL_CHECK') {
@@ -285,7 +318,7 @@ function condRow(c, planning, date) {
  *   💬 質問 … 質問文を提示し、答え（非空）を書いて保存。
  * ルールの編集・削除はここには置かない（振り返りタブの目標コーナーに一本化・spec: editable-rule-registry）。
  */
-function ruleAnswerRow(c, date) {
+function ruleAnswerRow(c, date, pending = new Map()) {
   const met = !!c.met;
   const icon = c.target === 'PHOTO' ? '📷' : '💬';
   const row = h('div', { class: `cond cond-check ${met ? 'met' : ''}` });
@@ -340,7 +373,10 @@ function ruleAnswerRow(c, date) {
     actionHost.appendChild(h('span', { class: 'cond-hint', text: `キャプションは「${c.label}」で保存されます` }));
   } else {
     // 質問: 質問文はタイトルに出ているので、答えだけを書く。空回答はサーバーが 400 で弾く。
-    const input = h('input', { type: 'text', class: 'cond-answer', placeholder: '答えを書く' });
+    // data-rule-id は、30秒自動更新の再描画をまたいで未送信の入力を復元するためのキー（issue #83）。
+    const input = h('input', { type: 'text', class: 'cond-answer', placeholder: '答えを書く', dataset: { ruleId: c.ruleId } });
+    const saved = pending.get(String(c.ruleId));
+    if (saved) input.value = saved.value;
     const send = h('button', { type: 'button', class: 'btn btn-ghost cond-btn', text: '答える' });
     const submit = async () => {
       if (!input.value.trim()) { toast('答えを入力してください', 'err'); return; }
