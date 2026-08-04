@@ -126,7 +126,9 @@ export function buildRuleForm({ initial, todayKey, groups } = {}) {
   if (isEdit && initial.target === 'PHOTO') captionInp.disabled = true;
   if (isEdit && initial.target === 'QUESTION') questionInp.disabled = true;
 
-  const extra = h('div', { class: 'row', style: { flex: '1', gap: '8px', flexWrap: 'wrap' } });
+  // 種類ごとの追加入力は縦積み（ラベル→入力の順）にする。種類セレクトと横に並べると
+  // 幅の狭いモーダルで質問文などが詰まって読みにくいため（issue #84）。
+  const extra = h('div', { class: 'pc-field' });
   const syncKind = () => {
     clear(extra);
     const { target } = conditionKindTarget(kindSel.value);
@@ -136,8 +138,14 @@ export function buildRuleForm({ initial, todayKey, groups } = {}) {
     }
     else if (target === 'TIMELINE') extra.append(labelSpan('カテゴリ'), catInp, catList, labelSpan('≥ 分'), minutes);
     else if (target === 'MANUAL_CHECK') extra.append(labelSpan('チェック名'), labelInp);
-    else if (target === 'PHOTO') extra.append(labelSpan('撮るもの'), captionInp, isEdit ? labelSpan('（作成後は変更不可）') : null);
-    else if (target === 'QUESTION') extra.append(labelSpan('質問文'), questionInp, isEdit ? labelSpan('（作成後は変更不可）') : null);
+    else if (target === 'PHOTO') {
+      extra.append(labelSpan('撮るもの'), captionInp);
+      if (isEdit) extra.append(labelSpan('（作成後は変更不可）'));
+    }
+    else if (target === 'QUESTION') {
+      extra.append(labelSpan('質問文'), questionInp);
+      if (isEdit) extra.append(labelSpan('（作成後は変更不可）'));
+    }
     // PLANNING はシグナル選択が種類に統合済み（追加入力なし）。
   };
   kindSel.addEventListener('change', syncKind);
@@ -170,7 +178,8 @@ export function buildRuleForm({ initial, todayKey, groups } = {}) {
   const el = h('div', { class: 'pc-checkform' },
     h('div', { class: 'pc-axis' },
       h('div', { class: 'pc-axis-head', text: '種類' }),
-      h('div', { class: 'row' }, kindSel, extra),
+      kindSel,
+      extra,
     ),
     h('div', { class: 'pc-axis' },
       h('div', { class: 'pc-axis-head', text: 'いつ' }),
