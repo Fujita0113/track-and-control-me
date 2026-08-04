@@ -130,6 +130,7 @@ export async function mount(root, opts) {
     completingId: null,
     draggingId: null,
     renamingId: null, // カード上インライン編集中のタスクID(issue #29)
+    dirtyReorderCols: new Set(), // 作成中カードがいたため送信保留した列（design D2, issue #79）
   };
   clear(root);
   root.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
@@ -818,12 +819,35 @@ function commitColumnOrder(affected) {
   S.tasks = [...groups.HOLD, ...groups.TODO, ...groups.DOING, ...groups.DONE];
 }
 
-/** バッチ再インデックスを保存。失敗時は再取得でサーバ状態へ収束（design Risks）。 */
+/** 列に作成中（実ID未確定）のカードが存在するか、その時点の S.tasks から都度判定する（design D1）。 */
+function hasPendingCard(colKey) {
+  return S.tasks.some((x) => normStatus(x.status) === colKey && x.id <= 0);
+}
+
+/** バッチ再インデックスを保存。作成中の列はサーバー送信のみ保留し dirtyReorderCols へ積む
+ * （design D2）。送信するグループも仮IDは安全弁として除外する（design D3）。
+ * 失敗時は再取得でサーバ状態へ収束（design Risks）。 */
 async function saveReorder(groups) {
-  const filtered = groups.filter((g) => g.ids.length > 0);
+  const toSend = [];
+  for (const g of groups) {
+    if (hasPendingCard(g.status)) { S.dirtyReorderCols.add(g.status); continue; }
+    toSend.push({ status: g.status, ids: g.ids.filter((id) => id > 0) });
+  }
+  const filtered = toSend.filter((g) => g.ids.length > 0);
   if (!filtered.length) return;
   try { await api.reorder(filtered); }
   catch (err) { toast(`並べ替えの保存に失敗: ${err.message}`, 'err'); await reload(); }
+}
+
+/** 作成が確定（成功/失敗）した列の保留中reorderを、最新の S.tasks から再計算して送信する
+ * （design D4）。仮ID配列のスナップショットは再利用せず、都度作り直す。 */
+async function flushDirtyReorders() {
+  for (const col of [...S.dirtyReorderCols]) {
+    if (hasPendingCard(col)) continue;
+    S.dirtyReorderCols.delete(col);
+    const ids = S.tasks.filter((x) => normStatus(x.status) === col).map((x) => x.id);
+    if (ids.length > 0) await saveReorder([{ status: col, ids }]);
+  }
 }
 
 async function onDrop(e, colKey, colElm) {
@@ -1042,6 +1066,7 @@ async function commitComposer(keepOpen, openDet) {
       || S.renamingId === tempId
       || (S.categorizePick && S.categorizePick.id === tempId);
     placeholder.id = t.id; // オブジェクト参照は維持し id のみ本物に差し替える
+    await flushDirtyReorders();
     reconcileTaskId(tempId, t.id);
     if (needsRerender) {
       // 詳細を開いたまま裏で確定した場合、再描画でノートのフォーカスが奪われないようにする。
@@ -1050,6 +1075,7 @@ async function commitComposer(keepOpen, openDet) {
     }
   } catch (err) {
     S.tasks = S.tasks.filter((x) => x !== placeholder);
+    await flushDirtyReorders();
     if (S.detailId === tempId) { S.detailId = null; S.dueCalOpen = false; }
     if (S.renamingId === tempId) S.renamingId = null;
     if (S.categorizePick && S.categorizePick.id === tempId) S.categorizePick = null;
