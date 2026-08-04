@@ -88,6 +88,8 @@ let rootEl = null;
 let S = null;
 let O = null;
 const saveTimers = new Map(); // `${id}:${field}` → { timer, run }
+let isRendering = false; // renderAll() の再入ガード（issue #85: フォーカス除去に伴う同期blurからの再入クラッシュ防止）
+let renderQueued = false;
 
 const DEFAULT_OPTS = {
   bodyClass: 'kb-page', // body へ付けるクラス。埋め込み時は null（rf-page を壊さない）
@@ -267,23 +269,33 @@ function flushSaves() {
 
 // --- 全体レンダリング -------------------------------------------------------
 function renderAll() {
-  clear(rootEl);
-  if (O.asideHost) {
-    // 埋め込み盤面（design Risks）: .kb-main を使わず盤面スクロール要素のみを左メインへ置き、
-    // aside（詳細・ログ）は外部の右サイドバー要素へ供給する。
-    rootEl.appendChild(embedHeaderEl());
-    rootEl.appendChild(boardEl());
-    renderAsideInto(O.asideHost);
-  } else {
-    const page = h('div', { class: 'kb' });
-    page.appendChild(headerEl());
-    const main = h('div', { class: 'kb-main' });
-    main.appendChild(boardEl());
-    main.appendChild(asideEl());
-    page.appendChild(main);
-    rootEl.appendChild(page);
+  if (isRendering) { renderQueued = true; return; }
+  isRendering = true;
+  try {
+    clear(rootEl);
+    if (O.asideHost) {
+      // 埋め込み盤面（design Risks）: .kb-main を使わず盤面スクロール要素のみを左メインへ置き、
+      // aside（詳細・ログ）は外部の右サイドバー要素へ供給する。
+      rootEl.appendChild(embedHeaderEl());
+      rootEl.appendChild(boardEl());
+      renderAsideInto(O.asideHost);
+    } else {
+      const page = h('div', { class: 'kb' });
+      page.appendChild(headerEl());
+      const main = h('div', { class: 'kb-main' });
+      main.appendChild(boardEl());
+      main.appendChild(asideEl());
+      page.appendChild(main);
+      rootEl.appendChild(page);
+    }
+    afterRender();
+  } finally {
+    isRendering = false;
   }
-  afterRender();
+  if (renderQueued) {
+    renderQueued = false;
+    renderAll();
+  }
 }
 
 /** 埋め込み盤面用の最小ヘッダ。明日トグルのみを提供する（design D1: 設定/カテゴリ付けは持ち込まない）。 */

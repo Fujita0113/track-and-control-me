@@ -4,6 +4,8 @@ import { test, expect } from './fixtures.js';
  * カンバンで新規カード作成後、サーバー応答（実ID採番）が返る前に同じ列で別カードを
  * ドラッグ&ドロップすると、まだ負の仮IDを持つ作成中カードが並べ替えの送信配列に混入し
  * 400 エラー→ reload で巻き戻る不具合の修正確認（issue #79）。
+ * あわせて、コンポーザを開いたまま（フォーカスしたまま）並べ替えても、盤面の再描画が
+ * クラッシュしないことも検証する（issue #85: renderAll 再入によるクラッシュ）。
  * 実際のマウスジェスチャによる HTML5 D&D はヘッドレス環境で不安定なため、kanban.js の実イベント
  * リスナーへ合成 DragEvent を直接ディスパッチして検証する（kanban-vertical-autoscroll.spec.ts と同じ手法）。
  * ワーカー内のサーバーは他specの作成物が残り得るため、順序検証は runId を含むタイトルだけに
@@ -69,8 +71,8 @@ test('未着手列で作成中のカードがある間に同列を並べ替え�
   await composer.fill(titleC);
   await composer.press('Enter');
   await expect(todo.locator('.kb-card', { hasText: titleC })).toBeVisible({ timeout: 200 });
-  // 次の入力用に開いたままのコンポーザを閉じる（ドラッグ操作そのものの検証に集中するため）。
-  await composer.press('Escape');
+  // コンポーザは開いたまま（フォーカスされたまま）にする（issue #85: この状態で並べ替えが
+  // クラッシュしないことも合わせて検証する）。
 
   // 作成の応答待ち（400ms）のうちに、カードBをカードAの前へドラッグして並べ替える。
   await dragBeforeCard(
@@ -126,8 +128,8 @@ test('作成が失敗した場合、保留していた並べ替えは作成中�
   await composer.fill(titleC);
   await composer.press('Enter');
   await expect(todo.locator('.kb-card', { hasText: titleC })).toBeVisible({ timeout: 200 });
-  // 次の入力用に開いたままのコンポーザを閉じる（ドラッグ操作そのものの検証に集中するため）。
-  await composer.press('Escape');
+  // コンポーザは開いたまま（フォーカスされたまま）にする（issue #85: この状態で並べ替えが
+  // クラッシュしないことも合わせて検証する）。
 
   // 作成の応答待ち（300ms）のうちに、カードBをカードAの前へドラッグして並べ替える。
   await dragBeforeCard(
