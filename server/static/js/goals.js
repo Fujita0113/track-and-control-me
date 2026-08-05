@@ -267,7 +267,13 @@ function goalCard(g, root) {
     del.addEventListener('click', async () => {
       if (!confirm(`「${g.name}」を削除しますか？（作成当日のみ可能）`)) return;
       try { await api.deleteGoal(g.id); toast('削除しました', 'ok'); renderList(root); }
-      catch (err) { toast(err.status === 409 ? '作成当日以外は削除できません' : `失敗: ${err.message}`, 'err'); }
+      catch (err) {
+        if (err.status === 409) {
+          toast(err.data?.error === '終了した目標は削除できません' ? '終了した目標は削除できません' : '作成当日以外は削除できません', 'err');
+        } else {
+          toast(`失敗: ${err.message}`, 'err');
+        }
+      }
     });
     head.appendChild(del);
   }

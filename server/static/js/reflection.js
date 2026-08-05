@@ -123,7 +123,7 @@ async function showDemo(root) {
   // 一時凍結は閲覧専用で表示する（操作導線は出さない・spec: goal-freeze / demo-mode）。
   const quota = await api.demo.freezeQuota(vd).catch(() => null);
   wrap.appendChild(buildFreezeReadOnly(fullGoal, quota));
-  wrap.appendChild(buildGoalRulesBlock(fullGoal, vd, null));
+  wrap.appendChild(buildGoalRulesBlock(fullGoal, vd, null, { startOpen: true }));
 }
 
 export async function show(root) {
@@ -433,16 +433,11 @@ function journalCorner(goal, content, date, quota) {
   // デモは閲覧専用なので作成・凍結の操作導線を出さない（spec: demo-mode）。
   if (date === state.today && !isDemo()) {
     const onFreezeChanged = async () => { await loadJournals(date); };
-    corner.appendChild(buildFreezeBlock(goal, quota, onFreezeChanged, ctx.activeGoals));
-    // 凍結中はルール操作ブロックを畳む（カード自体・日記・画像は残す・spec: goal-freeze）。
-    if (isFrozenNow(goal)) {
-      corner.appendChild(h('details', { class: 'gf-rules-collapse' },
-        h('summary', { text: 'ルール（凍結中は編集できません）' }),
-        buildGoalRulesBlock(goal, date, null),
-      ));
-    } else {
-      corner.appendChild(buildGoalRulesBlock(goal, date, null));
+    // 未予約時の月枠状況＋予約ボタンは #rf-freeze-shared に1箇所だけ出す（目標コーナーごとの複製をしない・spec: goal-freeze）。
+    if (goal.freeze && (goal.freeze.state === 'reserved' || goal.freeze.state === 'frozen')) {
+      corner.appendChild(buildFreezeBlock(goal, quota, onFreezeChanged, ctx.activeGoals));
     }
+    corner.appendChild(buildGoalRulesBlock(goal, date, null, { frozen: isFrozenNow(goal) }));
   }
   // 日記エディタは今までどおりその下に。
   corner.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, editor.el));
@@ -579,6 +574,13 @@ async function loadJournals(date) {
   let quota = null;
   if (date === state.today && !isDemo()) {
     quota = await api.getFreezeQuota().catch(() => null);
+    // 未予約の月枠状況＋「❄ 一時凍結する」ボタンはサイドバーに1箇所だけ出す（目標コーナーごとに複製しない・spec: goal-freeze）。
+    const unfrozenGoals = goals.filter((g) => !g.freeze || g.freeze.state === 'none');
+    if (unfrozenGoals.length) {
+      ctx.journalsHost.appendChild(h('div', { id: 'rf-freeze-shared' },
+        buildFreezeBlock(unfrozenGoals[0], quota, async () => { await loadJournals(date); }, ctx.activeGoals),
+      ));
+    }
   }
   for (const g of goals) {
     let content = '';

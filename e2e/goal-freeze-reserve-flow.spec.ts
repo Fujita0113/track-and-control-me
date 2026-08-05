@@ -65,17 +65,27 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
     // --- 2. 振り返りタブ: モーダルから目標Aの凍結を予約する -------------------------
     await page.locator('#tabs button[data-target="reflection"]').click();
     const cardA = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_A }) });
+    const cardB = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_B }) });
     await expect(cardA).toBeVisible();
-    const freezeBlockA = cardA.locator('.gf-block').first();
-    await expect(freezeBlockA).toContainText('今月の凍結枠は空いています');
+    await expect(cardB).toBeVisible();
+
+    // issue #86: 一時凍結の入口はサイドバーに1つだけ（目標カードごとに複製されない）。
+    // 未予約のうちは各目標カードに .gf-block は出ない。
+    const sharedFreeze = page.locator('#rf-freeze-shared');
+    await expect(sharedFreeze).toContainText('今月の凍結枠は空いています');
+    await expect(cardA.locator('.gf-block')).toHaveCount(0);
+    await expect(cardB.locator('.gf-block')).toHaveCount(0);
 
     // モーダルを起動
-    const triggerBtn = cardA.getByRole('button', { name: /一時凍結/ }).first();
+    const triggerBtn = sharedFreeze.getByRole('button', { name: /一時凍結/ }).first();
     await triggerBtn.scrollIntoViewIfNeeded();
     await triggerBtn.click();
     const modal = page.locator('.modal-root').filter({ hasText: '目標を一時凍結する' });
-    await expect(modal).toContainText(GOAL_A);
     await expect(modal.locator('li', { hasText: CHECK_A })).toBeVisible();
+
+    // 対象は目標Aだけにする（既定の選択に関わらず、Aだけをチェックしておく）。
+    await modal.locator('label', { hasText: GOAL_A }).locator('input[type="checkbox"]').check();
+    await modal.locator('label', { hasText: GOAL_B }).locator('input[type="checkbox"]').uncheck();
 
     await modal.locator('textarea').fill(FREEZE_REASON);
     await modal.locator('input[type="date"]').fill(freezeEnd);
@@ -90,21 +100,20 @@ test('凍結を予約しても当日のゲートは変わらず、月枠は他�
     await expect(page.locator('.cond', { hasText: CHECK_A }).first()).toBeVisible();
     await expect(page.locator('.cond', { hasText: CHECK_B }).first()).toBeVisible();
 
-    // --- 4. 月枠はアプリ全体で1つ。目標Bのカードにも使用済みである旨が出て、
-    //        予約ボタンは表示されない ---------------------------
+    // --- 4. 月枠はアプリ全体で1つ。共有の凍結ブロックに使用済みである旨が出て、
+    //        予約ボタンは表示されない（目標Bのカードには複製されない） ---------------------------
     await page.locator('#tabs button[data-target="reflection"]').click();
-    const cardB = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_B }) });
-    const freezeBlockB = cardB.locator('.gf-block').first();
-    await expect(freezeBlockB).toContainText('今月の凍結枠は使用済みです');
-    await expect(freezeBlockB).toContainText(GOAL_A);
-    await expect(freezeBlockB.getByRole('button', { name: /一時凍結する/ })).toHaveCount(0);
+    await expect(sharedFreeze).toContainText('今月の凍結枠は使用済みです');
+    await expect(sharedFreeze).toContainText(GOAL_A);
+    await expect(sharedFreeze.getByRole('button', { name: /一時凍結する/ })).toHaveCount(0);
+    await expect(cardB.locator('.gf-block')).toHaveCount(0);
 
-    // --- 5. 発効前の取消で枠が戻る（両方の目標カードに反映される） --------------
+    // --- 5. 発効前の取消で枠が戻る --------------
     page.once('dialog', (d) => d.accept());
-    await freezeBlockA.getByRole('button', { name: '取消' }).click();
+    await cardA.locator('.gf-block').getByRole('button', { name: '取消' }).click();
     await expect(page.locator('.toast')).toContainText('取り消しました');
-    await expect(cardA.locator('.gf-block')).toContainText('今月の凍結枠は空いています');
-    await expect(cardB.locator('.gf-block')).toContainText('今月の凍結枠は空いています');
+    await expect(sharedFreeze).toContainText('今月の凍結枠は空いています');
+    await expect(cardA.locator('.gf-block')).toHaveCount(0);
   } finally {
     await request.delete(`/api/goals/${goalIdA}`);
     await request.delete(`/api/goals/${goalIdB}`);

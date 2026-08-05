@@ -28,6 +28,8 @@ test('ルール追加フォームで新規作成時はnullも編集専用注記�
   await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
   await page.locator('#tabs button[data-target="reflection"]').click();
   const journal = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_NAME }) });
+  // issue #86: ルールブロックは既定で折りたたまれているので、まず開く。
+  await journal.locator('details.pc-rules-collapse summary').click();
   const block = journal.locator('.pc-block');
   await expect(block).toBeVisible();
 

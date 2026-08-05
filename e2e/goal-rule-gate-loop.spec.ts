@@ -63,6 +63,8 @@ test('ルールを足す → 今日タブで詰まり → 写真で開き → �
   await page.locator('#tabs button[data-target="reflection"]').click();
   // 他specが同じ共有DBに作ったgoalも同時に .pc-block を持つため、自分のgoalのカードへ絞る。
   const journal = page.locator('.rf-journal').filter({ has: page.locator('.rf-journal-title', { hasText: GOAL_NAME }) });
+  // issue #86: ルールブロックは既定で折りたたまれているので、まず開く。
+  await journal.locator('details.pc-rules-collapse summary').click();
   const block = journal.locator('.pc-block');
   await expect(block).toBeVisible();
 

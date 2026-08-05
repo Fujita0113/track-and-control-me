@@ -356,13 +356,13 @@ function ruleRow(goal, r, todayKey, groups, onChanged) {
   return h('div', { class: 'pc-plan' }, h('div', { class: 'pc-plan-head' }, main, badges, h('div', { class: 'pc-plan-actions' }, editBtn, delBtn)));
 }
 
-/** 沿革1件を「＋追加／✎変更／−削除 ラベル ― 理由」の1行へ。 */
+/** 沿革1件を「＋追加／✎変更／−削除 ラベル」＋理由（別行）へ（issue #86: 詰まって見にくいので2行に分ける）。 */
 function changeLine(entry) {
   const opLabel = entry.change.op === 'add' ? '＋追加' : entry.change.op === 'remove' ? '−削除' : '✎変更';
   const row = h('div', { class: 'pc-pending-row' },
     h('span', { class: 'pc-pending-label', text: `${opLabel} ${ruleKindIcon(entry.target)} ${entry.label}` }),
   );
-  if (entry.change.reason) row.appendChild(h('span', { class: 'pc-pending-note', text: ` ― ${entry.change.reason}` }));
+  if (entry.change.reason) row.appendChild(h('span', { class: 'pc-pending-note', text: `― ${entry.change.reason}` }));
   return row;
 }
 
@@ -370,11 +370,12 @@ function changeLine(entry) {
  * 振り返りタブの目標コーナーに置くルールブロック（spec: editable-rule-registry）。
  * ルール一覧＋「＋追加」＋各行の✎/−＋「最近の変更」。今日タブに書き込み動線は無い。
  */
-export function buildGoalRulesBlock(goal, todayKey, onReload) {
+export function buildGoalRulesBlock(goal, todayKey, onReload, { frozen = false, startOpen = false } = {}) {
   const host = h('div', { class: 'pc-block' });
   const listHost = h('div', { class: 'pc-plans' });
   const changesHost = h('div', { class: 'pc-pending', style: { marginTop: '10px' } });
   const addBtn = h('button', { type: 'button', class: 'btn btn-ghost pc-sm', text: '＋ 追加' });
+  const summary = h('summary', { class: 'pc-rules-summary', text: frozen ? 'ルール（凍結中は編集できません）' : 'ルール（0件）' });
 
   let groups = [];
   const reload = async () => {
@@ -383,6 +384,7 @@ export function buildGoalRulesBlock(goal, todayKey, onReload) {
     groups = await api.getGroupsRecent().catch(() => []);
     const fresh = await ruleApi.goal(goal.id).catch(() => goal);
     Object.assign(goal, fresh);
+    summary.textContent = frozen ? 'ルール（凍結中は編集できません）' : `ルール（${goal.rules.length}件）`;
     if (!goal.rules.length) {
       listHost.appendChild(h('p', { class: 'pc-empty', text: 'まだルールはありません。「＋ 追加」でこの目標のためのルールを作れます。' }));
     } else {
@@ -422,5 +424,7 @@ export function buildGoalRulesBlock(goal, todayKey, onReload) {
   host.appendChild(listHost);
   host.appendChild(changesHost);
   reload();
-  return host;
+  const details = h('details', { class: 'pc-rules-collapse' }, summary, host);
+  if (startOpen) details.open = true;
+  return details;
 }

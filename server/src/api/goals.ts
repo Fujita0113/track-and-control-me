@@ -24,6 +24,7 @@ import {
   GoalNotFoundError,
   GoalValidationError,
   GoalDeleteWindowError,
+  GoalDeleteAfterEndError,
   GoalReportNotReadyError,
   JournalNotWritableError,
   JournalImageError,
@@ -91,6 +92,7 @@ function replyGoalError(err: unknown, reply: { code: (n: number) => void }): Rec
     err instanceof RuleImmutableFieldError ||
     err instanceof GoalLifecycleError ||
     err instanceof GoalDeleteWindowError ||
+    err instanceof GoalDeleteAfterEndError ||
     err instanceof JournalNotWritableError ||
     err instanceof FreezeStateError
   ) {

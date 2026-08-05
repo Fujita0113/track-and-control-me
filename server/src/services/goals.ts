@@ -69,6 +69,12 @@ export class GoalDeleteWindowError extends Error {
     this.name = 'GoalDeleteWindowError';
   }
 }
+export class GoalDeleteAfterEndError extends Error {
+  constructor() {
+    super('終了した目標は削除できません');
+    this.name = 'GoalDeleteAfterEndError';
+  }
+}
 /** レポートを開けない＝**開始前**の目標（まだ1日も走っていない）。 */
 export class GoalReportNotReadyError extends Error {
   constructor() {
@@ -682,6 +688,7 @@ export function deleteGoal(db: DB, id: number, nowMs = Date.now()): boolean {
   const row = getGoalRow(db, id);
   const today = todayKey(db, nowMs);
   if (dayKeyOf(db, row.created_at) !== today) throw new GoalDeleteWindowError();
+  if (row.ended_day_key != null) throw new GoalDeleteAfterEndError();
   const ruleIds = (
     db.prepare('SELECT rule_id FROM goal_rule WHERE goal_id = ?').all(id) as { rule_id: number }[]
   ).map((r) => r.rule_id);

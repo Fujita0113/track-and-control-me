@@ -23,6 +23,7 @@ import {
   submitRulePhoto,
   answerRuleQuestion,
   GoalDeleteWindowError,
+  GoalDeleteAfterEndError,
   GoalReportNotReadyError,
   JournalNotWritableError,
   JournalImageError,
@@ -141,6 +142,17 @@ describe('削除猶予（作成当日のみ）', () => {
   it('翌日以降は削除できない', () => {
     const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
     expect(() => deleteGoal(db, g.id, NOW_NEXT)).toThrow(GoalDeleteWindowError);
+  });
+
+  it('作成当日でも「終える」で終了した目標は削除できない（issue #86: 終えた事実を削除で消せないように）', () => {
+    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END_FROM_TODAY, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }] }, NOW_TODAY);
+    endGoal(db, g.id, { reason: '試験前だから今日はやめる' }, NOW_TODAY);
+    expect(() => deleteGoal(db, g.id, NOW_TODAY)).toThrow(GoalDeleteAfterEndError);
+    // 終了した事実・目標・ルールは消えずに残る。
+    expect(listGoals(db, NOW_TODAY)).toHaveLength(1);
+    const row = db.prepare('SELECT ended_day_key, lifecycle_reason FROM goal WHERE id = ?').get(g.id) as { ended_day_key: string | null; lifecycle_reason: string | null };
+    expect(row.ended_day_key).not.toBeNull();
+    expect(row.lifecycle_reason).toBe('試験前だから今日はやめる');
   });
 
   it('削除後、他goalと共有していなかったルールは removed になり、解錠評価から外れる（issue #75）', () => {
