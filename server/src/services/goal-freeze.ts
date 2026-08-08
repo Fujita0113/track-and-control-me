@@ -17,9 +17,18 @@ import { GoalNotFoundError } from './goal-errors.js';
 
 export type FreezeState = 'reserved' | 'frozen' | 'released';
 
+/**
+ * 凍結の種別（design D1）。「期限を延ばすか」は `start_day` から導出できない
+ * （翌日になれば当日凍結と凍結中の期間凍結が見分けられない）ため列として保存する。
+ *   period   … 翌日発効・期間指定可・延長可・**期限を延ばす**
+ *   same_day … 当日発効・今日1日固定・延長不可・**期限を延ばさない**
+ */
+export type FreezeKind = 'period' | 'same_day';
+
 export interface FreezeInterval {
   startDay: string;
   endDay: string;
+  kind: FreezeKind;
 }
 
 export interface FreezeView {
@@ -29,6 +38,7 @@ export interface FreezeView {
   endDay: string;
   reason: string;
   state: FreezeState;
+  kind: FreezeKind;
 }
 
 export interface FreezeQuota {
@@ -61,6 +71,7 @@ interface GoalFreezeRow {
   start_day: string;
   end_day: string;
   reason: string;
+  kind: FreezeKind;
   created_at: number;
   updated_at: number;
 }
@@ -70,9 +81,18 @@ function todayKey(db: DB, nowMs: number): string {
   return dayKeyFor(nowMs, cfg.tz, cfg.day_boundary_minutes);
 }
 
-/** 月枠の判定基準（翌日＝発効日の月）。予約の重複チェックと表示APIで共有する。 */
+/**
+ * 月枠の判定基準は**`start_day`（発効日）の属する月**（design D4）。
+ * 期間凍結は翌日発効なので `today + 1` の月、当日凍結は `today` の月を見る。
+ * 月の最終日にだけ両者は違う月を指す。
+ */
 export function quotaMonthOf(today: string): string {
   return addDaysKey(today, 1).slice(0, 7);
+}
+
+/** 当日凍結の月枠の判定基準（発効日＝today の月）。 */
+export function sameDayQuotaMonthOf(today: string): string {
+  return today.slice(0, 7);
 }
 
 function nextMonthOf(month: string): string {
@@ -88,7 +108,10 @@ export function freezeStateOn(f: { start_day: string; end_day: string }, today: 
   return 'released';
 }
 
-/** 経過した凍結日数の合計（各区間 `[start, min(end, today)]`・未到来分は数えない・design D2）。 */
+/**
+ * 経過した凍結日数の合計（各区間 `[start, min(end, today)]`・未到来分は数えない・design D2）。
+ * **種別で絞らない**（ペースの分母は当日凍結の日も抜く）。呼び出し側で絞ってはならない。
+ */
 export function frozenDaysUpTo(intervals: FreezeInterval[], today: string): number {
   let total = 0;
   for (const iv of intervals) {
@@ -99,20 +122,27 @@ export function frozenDaysUpTo(intervals: FreezeInterval[], today: string): numb
   return total;
 }
 
-/** 実効 end_day（凍結日数ぶん前方向へ延長・design D2）。 */
+/**
+ * 実効 end_day（凍結日数ぶん前方向へ延長・design D2）。
+ * **期間凍結の区間だけ**を数える。当日凍結は期限を延ばさない（当日発効の代金）。
+ */
 export function effectiveEndDay(goalEndDay: string, intervals: FreezeInterval[], today: string): string {
-  const frozen = frozenDaysUpTo(intervals, today);
+  const frozen = frozenDaysUpTo(
+    intervals.filter((iv) => iv.kind !== 'same_day'),
+    today,
+  );
   return frozen > 0 ? addDaysKey(goalEndDay, frozen) : goalEndDay;
 }
 
 /** 目標が持つ全凍結区間（解凍済みの過去分も累積のため含む）。id 昇順。 */
 export function goalFreezeIntervals(db: DB, goalId: number): FreezeInterval[] {
   return (
-    db.prepare('SELECT start_day, end_day FROM goal_freeze WHERE goal_id = ? ORDER BY id').all(goalId) as {
+    db.prepare('SELECT start_day, end_day, kind FROM goal_freeze WHERE goal_id = ? ORDER BY id').all(goalId) as {
       start_day: string;
       end_day: string;
+      kind: FreezeKind;
     }[]
-  ).map((r) => ({ startDay: r.start_day, endDay: r.end_day }));
+  ).map((r) => ({ startDay: r.start_day, endDay: r.end_day, kind: r.kind }));
 }
 
 /** 対象日に凍結中の目標 id 集合（design D3。`listActiveRules`/`listDueRules` が共通利用）。 */
@@ -123,6 +153,17 @@ export function frozenGoalIdsOn(db: DB, dayKey: string): Set<number> {
   return new Set(rows.map((r) => r.goal_id));
 }
 
+/**
+ * 対象日に終了が発効済みの目標 id 集合（spec: goal-lifecycle-fork MODIFIED・design D5）。
+ * 終了は `rule` 行を書き換えず、凍結と同じ導出方式でゲートから外す（そうしないと取消が成立しない）。
+ */
+export function endedGoalIdsOn(db: DB, dayKey: string): Set<number> {
+  const rows = db
+    .prepare('SELECT id FROM goal WHERE ended_day_key IS NOT NULL AND ended_day_key <= ?')
+    .all(dayKey) as { id: number }[];
+  return new Set(rows.map((r) => r.id));
+}
+
 function toFreezeView(row: GoalFreezeRow, today: string): FreezeView {
   return {
     id: row.id,
@@ -131,6 +172,7 @@ function toFreezeView(row: GoalFreezeRow, today: string): FreezeView {
     endDay: row.end_day,
     reason: row.reason,
     state: freezeStateOn(row, today),
+    kind: row.kind,
   };
 }
 
@@ -194,10 +236,7 @@ function quotaRowForMonth(
   return row ?? null;
 }
 
-/** 今月の凍結枠の状態（使用済みか・使った目標・回復する月）。 */
-export function freezeQuota(db: DB, nowMs = Date.now()): FreezeQuota {
-  const today = todayKey(db, nowMs);
-  const month = quotaMonthOf(today);
+function quotaFor(db: DB, month: string): FreezeQuota {
   const row = quotaRowForMonth(db, month);
   return {
     month,
@@ -208,6 +247,19 @@ export function freezeQuota(db: DB, nowMs = Date.now()): FreezeQuota {
     endDay: row?.endDay ?? null,
     recoversOn: nextMonthOf(month),
   };
+}
+
+/** 期間凍結の枠の状態（発効日＝翌日の月・使用済みか・使った目標・回復する月）。 */
+export function freezeQuota(db: DB, nowMs = Date.now()): FreezeQuota {
+  return quotaFor(db, quotaMonthOf(todayKey(db, nowMs)));
+}
+
+/**
+ * 当日凍結の枠の状態（発効日＝today の月）。期間凍結と**同じ枠**を奪い合うが、
+ * 見る月が違うため月の最終日にだけ結果が食い違う（design D4）。
+ */
+export function sameDayFreezeQuota(db: DB, nowMs = Date.now()): FreezeQuota {
+  return quotaFor(db, sameDayQuotaMonthOf(todayKey(db, nowMs)));
 }
 
 /** その目標の最新の凍結（予約中/凍結中/解凍済み）を対象日から導出する。一度も凍結したことが無ければ null。 */
@@ -262,7 +314,8 @@ export function reserveFreezeMulti(
     for (const goalId of goalIds) {
       const info = db
         .prepare(
-          'INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          `INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, kind, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'period', ?, ?)`,
         )
         .run(goalId, startDay, input.endDay, reason, nowMs, nowMs);
       const id = info.lastInsertRowid as number;
@@ -286,6 +339,68 @@ export function reserveFreezeMulti(
   );
 }
 
+/**
+ * 当日凍結する（今日1日だけ・理由必須・期限は延びない・spec: goal-freeze ADDED）。
+ * 「明日の面接に持っていく課題を今夜潰す」のように**今夜ノルマを外す必要がある**正当な事情のための手段。
+ */
+export function sameDayFreeze(db: DB, goalId: number, input: { reason: string }, nowMs = Date.now()): FreezeView {
+  return sameDayFreezeMulti(db, [goalId], input, nowMs)[0]!;
+}
+
+/** 複数の目標をまとめて当日凍結する（1回の月枠機会で複数選択・期間凍結の一括予約と同じ形）。 */
+export function sameDayFreezeMulti(
+  db: DB,
+  goalIds: number[],
+  input: { reason: string },
+  nowMs = Date.now(),
+): FreezeView[] {
+  if (!goalIds || goalIds.length === 0) throw new FreezeValidationError('目標を1つ以上選択してください');
+
+  const today = todayKey(db, nowMs);
+  const reason = requireReason(input.reason);
+
+  for (const id of goalIds) {
+    requireGoal(db, id);
+    const existing = latestFreezeRow(db, id);
+    if (existing && freezeStateOn(existing, today) !== 'released') {
+      throw new FreezeStateError(`目標 ID ${id} には既に凍結の予約があります`);
+    }
+  }
+
+  // 当日凍結の枠は today の月（＝発効日の月）。期間凍結と同じ1枠を奪い合う（design D4）。
+  if (quotaRowForMonth(db, sameDayQuotaMonthOf(today))) {
+    throw new FreezeStateError('今月の凍結枠は使用済みです');
+  }
+
+  const createdIds: number[] = [];
+  const tx = db.transaction(() => {
+    for (const goalId of goalIds) {
+      const info = db
+        .prepare(
+          `INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, kind, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'same_day', ?, ?)`,
+        )
+        .run(goalId, today, today, reason, nowMs, nowMs);
+      createdIds.push(info.lastInsertRowid as number);
+      logChange(db, {
+        goalId,
+        dayKey: today,
+        op: 'reserve',
+        startDay: today,
+        beforeEndDay: null,
+        afterEndDay: today,
+        reason,
+        createdAt: nowMs,
+      });
+    }
+  });
+  tx();
+
+  return createdIds.map(
+    (id) => toFreezeView(db.prepare('SELECT * FROM goal_freeze WHERE id = ?').get(id) as GoalFreezeRow, today),
+  );
+}
+
 /** 凍結期間を変更する（発効後は後ろへのみ・理由必須・月枠は消費しない）。 */
 export function updateFreeze(
   db: DB,
@@ -298,6 +413,8 @@ export function updateFreeze(
   const reason = requireReason(input.reason);
   const row = latestFreezeRow(db, goalId);
   if (!row) throw new FreezeStateError('凍結がありません');
+  // 当日凍結を延長できると「当日発効かつ期限延長つきの期間凍結」へ化けて取引が成立しない（design D3）。
+  if (row.kind === 'same_day') throw new FreezeStateError('当日凍結は延長できません');
   const state = freezeStateOn(row, today);
   if (state === 'released') throw new FreezeStateError('凍結は既に終了しています');
   if (input.endDay < row.start_day) throw new FreezeValidationError('終了日は発効日以降にしてください');

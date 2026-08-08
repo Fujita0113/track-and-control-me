@@ -40,6 +40,12 @@ export interface GoalHistoryEntry {
   targetHours: GoalTargetHoursView | null;
   /** めざした状態の自己申告（3値）。未回答・対象外は null。 */
   outcomeMet: boolean | null;
+  /**
+   * 'ended' が**まだ発効していない**（終了予約中＝`today < ended_day_key`）か。
+   * 終了は翌日発効なので、終えた当日から「予約中」の印つきで並ぶ（spec: goal-history MODIFIED）。
+   * 'created'/'completed' は常に false。
+   */
+  pending: boolean;
   /** 証拠写真（都度解決・design D7）。無ければ両方 null。 */
   photos: { before: GoalHistoryPhoto | null; after: GoalHistoryPhoto | null };
 }
@@ -117,10 +123,13 @@ export function goalHistory(db: DB, nowMs = Date.now()): GoalHistoryEntry[] {
         targetHours: view.targetHours,
         outcomeMet: null,
         photos: { before: initialPhoto, after: null },
+        pending: false,
       },
     });
 
-    if (view.status === 'ended' && row.ended_day_key != null) {
+    // 「−終える」の行は `ended_day_key`（＝発効日）から導出する。終了は翌日発効なので、
+    // 発効前でも「予約中」として当日から並び、取消で `ended_day_key` が消えれば行も消える。
+    if (row.ended_day_key != null) {
       out.push({
         key: sortKey(row.ended_day_key, row.id, 1),
         entry: {
@@ -134,6 +143,7 @@ export function goalHistory(db: DB, nowMs = Date.now()): GoalHistoryEntry[] {
           targetHours: null,
           outcomeMet: outcomeMetOf(row),
           photos: resolvePhotos(db, row.id, row.outcome_caption),
+          pending: view.endingOn != null,
         },
       });
     } else if (view.status === 'completed') {
@@ -151,6 +161,7 @@ export function goalHistory(db: DB, nowMs = Date.now()): GoalHistoryEntry[] {
           targetHours: null,
           outcomeMet: outcomeMetOf(row),
           photos: resolvePhotos(db, row.id, row.outcome_caption),
+          pending: false,
         },
       });
     }

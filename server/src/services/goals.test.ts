@@ -298,13 +298,15 @@ describe('完走フォーク（続ける／終える・spec: goal-lifecycle-fork
     expect(() => continueGoal(db, id, NOW_COMPLETED)).toThrow(GoalLifecycleError);
   });
 
-  it('終えると永続ルールがゲートから外れ、レポート・沿革は残る', () => {
+  it('終えると永続ルールが翌日からゲートを外れ、レポート・沿革は残る', () => {
     const id = seedCompletedGoal();
     const view = endGoal(db, id, { reason: 'もう十分身についた' }, NOW_COMPLETED);
     expect(view.lifecycleChoice).toBe('ended');
     expect(view.lifecycleReason).toBe('もう十分身についた');
+    // 終了は rule 行を書き換えず、`ended_day_key` からの導出でゲートを外れる（spec: goal-lifecycle-fork MODIFIED）。
     const ruleRow = db.prepare('SELECT r.status AS status FROM goal_rule gr JOIN rule r ON r.id = gr.rule_id WHERE gr.goal_id = ?').get(id) as { status: string };
-    expect(ruleRow.status).toBe('removed');
+    expect(ruleRow.status).toBe('active');
+    expect(view.endingOn).toBe('2026-08-11');
     // レポートは開ける。
     expect(() => getGoalReport(db, id, NOW_COMPLETED)).not.toThrow();
   });

@@ -1,7 +1,7 @@
 import type { DB } from '../db/index.js';
 import { todayKey } from './summary.js';
 import { dayDiff } from './day-key.js';
-import { frozenGoalIdsOn } from './goal-freeze.js';
+import { frozenGoalIdsOn, endedGoalIdsOn } from './goal-freeze.js';
 
 /**
  * 解錠ルールの第一級レジストリ（spec: editable-rule-registry / design.md D1・D3・D4）。
@@ -349,24 +349,29 @@ function ruleGoalIds(db: DB, ruleId: number): number[] {
 }
 
 /**
- * dayKey に凍結中の目標にだけ紐づくルールか（spec: goal-check-gate / design D3）。
- * 紐づく目標が**すべて**凍結中のときにのみ true（1つでも凍結中でない目標に紐づけば false）。
+ * dayKey に休止中（凍結中または終了済み）の目標にだけ紐づくルールか
+ * （spec: goal-check-gate / goal-lifecycle-fork・design D3・D5）。
+ * 紐づく目標が**すべて**休止中のときにのみ true（1つでも生きている目標に紐づけば false）。
  * 紐づく目標が無い（想定外）ときは除外しない。
  */
-function isFullyFrozen(db: DB, ruleId: number, frozenGoalIds: Set<number>): boolean {
+function isFullyInactive(db: DB, ruleId: number, inactiveGoalIds: Set<number>): boolean {
   const goalIds = ruleGoalIds(db, ruleId);
-  return goalIds.length > 0 && goalIds.every((id) => frozenGoalIds.has(id));
+  return goalIds.length > 0 && goalIds.every((id) => inactiveGoalIds.has(id));
 }
 
-/** dayKey に「有効」＝実効ゲートへ合流するルール（design D3）。凍結中の目標のルールは除く。 */
+/**
+ * dayKey に「有効」＝実効ゲートへ合流するルール（design D3）。
+ * 凍結中の目標のルールに加え、**終了が発効済み**の目標のルールも除く（design D5）。
+ * 終了は `rule` 行を書き換えず、`ended_day_key` からの導出だけでゲートを外す。
+ */
 export function listActiveRules(db: DB, dayKey: string): RuleRow[] {
   const candidates = db
     .prepare(`SELECT * FROM rule WHERE status = 'active' AND start_day <= ? ORDER BY id`)
     .all(dayKey) as RuleRow[];
   const active = candidates.filter((r) => isRuleActiveOn(r, dayKey));
-  const frozenGoalIds = frozenGoalIdsOn(db, dayKey);
-  if (frozenGoalIds.size === 0) return active;
-  return active.filter((r) => !isFullyFrozen(db, r.id, frozenGoalIds));
+  const inactiveGoalIds = new Set([...frozenGoalIdsOn(db, dayKey), ...endedGoalIdsOn(db, dayKey)]);
+  if (inactiveGoalIds.size === 0) return active;
+  return active.filter((r) => !isFullyInactive(db, r.id, inactiveGoalIds));
 }
 
 export function listAllRules(db: DB): RuleRow[] {

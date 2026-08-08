@@ -44,11 +44,12 @@ test('作成当日に目標を終える→同日中に削除しようとする�
   await expect(page.locator('#modal-root')).toHaveClass(/open/);
   await page.locator('#modal-root textarea.gr-end-reason-input').fill('e2e: 同日中に終了させる');
   await page.locator('#modal-root').getByRole('button', { name: 'この目標を終える' }).click();
-  await expect(page.locator('.toast-ok')).toContainText('目標を終えました');
+  await expect(page.locator('.toast-ok')).toContainText('明日からこの目標を終えます');
 
-  // ステータスが「終了」になり、UI の削除ボタンは既に出ない（goals.js:264 の既存ガード）。
+  // 終了は翌日発効なので当日は「終了予約中」。削除ボタンは `ended_day_key` が入った時点で出さない
+  // （サーバの削除ガードと表示条件を一致させる・design D11）。
   const endedCard = page.locator('.gr-goal-card', { hasText: GOAL_NAME });
-  await expect(endedCard.locator('.badge', { hasText: '終了' })).toBeVisible();
+  await expect(endedCard.locator('.badge', { hasText: '終了予約中' })).toBeVisible();
   await expect(endedCard.getByRole('button', { name: '削除' })).toHaveCount(0);
 
   // サーバー側も、作成当日の削除可能ウィンドウ内であっても終了済みは拒否する。

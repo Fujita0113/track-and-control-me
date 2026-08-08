@@ -492,8 +492,13 @@ export interface GoalView {
   outcomeCaption: string | null;
   /** めざした状態の自己申告（3値）。終了・完走の時点で焼き込む（design D4-c）。 */
   outcomeMet: boolean | null;
-  /** 終了した日（`status==='ended'` のときのみ非 null・design D6）。 */
+  /** 終了が発効した日（発効後のみ非 null。発効前は `endingOn` を見る・design D9）。 */
   endedDayKey: string | null;
+  /**
+   * 終了予約中（`today < ended_day_key`）のときの**発効日**。それ以外は null（design D9）。
+   * 状態としては進行中／完走のままで、UI はこれを見て「終了予約中（明日から）」と取消導線を出す。
+   */
+  endingOn: string | null;
   /** 目標時間（1目標に最大1つ・任意・spec: goal-target-hours）。 */
   targetHours: GoalTargetHoursView | null;
   /** 目標時間を持つ進行中の目標のペース。目標時間が無ければ null（spec: goal-target-hours）。 */
@@ -502,6 +507,8 @@ export interface GoalView {
 
 function toGoalView(db: DB, row: GoalRow, today: string, nowMs: number): GoalView {
   const status = deriveStatus(db, today, row);
+  // 終了予約中（終えたが未発効）。状態は進行中／完走のままで、発効日だけを別枠で見せる（design D9）。
+  const pendingEnd = row.ended_day_key != null && today < row.ended_day_key;
   const endDay = effectiveEndDayOf(db, row, today);
   const dayCount = dayDiff(row.start_day, endDay) + 1;
   // 進行中は 1..M（未決着ルールで完走が保留されている間は M で頭打ち）。完走後・開始前は null
@@ -530,7 +537,8 @@ function toGoalView(db: DB, row: GoalRow, today: string, nowMs: number): GoalVie
     startReason: row.start_reason,
     outcomeCaption: row.outcome_caption,
     outcomeMet: row.outcome_met == null ? null : row.outcome_met === 1,
-    endedDayKey: row.ended_day_key,
+    endedDayKey: pendingEnd ? null : row.ended_day_key,
+    endingOn: pendingEnd ? row.ended_day_key : null,
     targetHours: targetHoursRow ? toTargetHoursView(db, targetHoursRow) : null,
     pace: targetHoursRow ? goalPace(db, row.id, nowMs) : null,
   };
@@ -816,8 +824,14 @@ export interface EndGoalInput {
 
 /**
  * 終える（理由必須・design D6）: 進行中・完走後のどちらからでも呼べ、問いは分岐しない。
- * 永続ルールをゲートから外し（`status='removed'`）、当日から解錠評価に含まれなくする。
+ *
+ * 発効は**翌日**（`ended_day_key = today + 1`・design D5）。終えた日の解錠評価は一切変わらない。
+ * 今夜ノルマを外す必要のある正当な事情は `goal-freeze` の当日凍結（月1枠）が担うので、
+ * 上限の無い「終える」に当日発効の力を持たせない。永続ルールは `rule` 行を書き換えず、
+ * `ended_day_key` からの導出（`listActiveRules`）で翌日からゲートを外れる。
+ *
  * 終了時点のペースを `final_pace_json` へ、めざした状態の答えを `outcome_met` へ焼き込む。
+ * 焼き込みは**要求した時点**で行う（翌日に走らせる仕掛けが無いため・design D8）。
  * 未発効の凍結予約は取り消し、適用済みの延長と凍結の沿革は残す。
  */
 export function endGoal(db: DB, goalId: number, input: EndGoalInput, nowMs = Date.now()): GoalView {
@@ -828,12 +842,10 @@ export function endGoal(db: DB, goalId: number, input: EndGoalInput, nowMs = Dat
   if (input.photo && !goal.outcome_caption)
     throw new GoalValidationError('この目標には証拠写真の設定がありません');
   const today = todayKey(db, nowMs);
+  const endedDayKey = addDaysKey(today, 1);
   const outcomeMet = input.outcomeMet === true ? 1 : input.outcomeMet === false ? 0 : null;
 
   const tx = db.transaction(() => {
-    const permanentRules = linkedRules(db, goal.id).filter((x) => x.status === 'active' && x.end_day === null);
-    for (const rule of permanentRules) removeRule(db, rule.id, reason, nowMs);
-
     if (getFreezeOn(db, goal.id, today)?.state === 'reserved') cancelFreeze(db, goal.id, nowMs);
 
     if (input.photo && goal.outcome_caption) {
@@ -859,10 +871,31 @@ export function endGoal(db: DB, goalId: number, input: EndGoalInput, nowMs = Dat
       `UPDATE goal SET ended_day_key = ?, end_reason = ?, outcome_met = ?, final_pace_json = ?,
               lifecycle_choice = 'ended', lifecycle_reason = ?, lifecycle_decided_at = ?
         WHERE id = ?`,
-    ).run(today, reason, outcomeMet, pace ? JSON.stringify(pace) : null, reason, nowMs, goal.id);
+    ).run(endedDayKey, reason, outcomeMet, pace ? JSON.stringify(pace) : null, reason, nowMs, goal.id);
   });
   tx();
   return toGoalView(db, getGoalRow(db, goal.id), todayKey(db, nowMs), nowMs);
+}
+
+/**
+ * 終了予約を取り消す（発効前のみ・design D7）。`goal-freeze` の「発効前の予約は取消できる／
+ * 発効後は取消できない」と同じ形。焼き込んだ値（理由・めざした状態の答え・ペース）も戻す。
+ *
+ * **終了時に取り消した凍結予約は復元しない**（枠を解放済みで、その間に他の目標が取っている
+ * 可能性があるため復元は成立しない）。**証拠写真も消さない**（記録は消さない既存原則）。
+ */
+export function cancelEndGoal(db: DB, goalId: number, nowMs = Date.now()): GoalView {
+  const goal = getGoalRow(db, goalId);
+  if (goal.ended_day_key == null) throw new GoalLifecycleError('この目標は終了していません');
+  const today = todayKey(db, nowMs);
+  if (today >= goal.ended_day_key) throw new GoalLifecycleError('発効後は取消できません');
+
+  db.prepare(
+    `UPDATE goal SET ended_day_key = NULL, end_reason = NULL, outcome_met = NULL, final_pace_json = NULL,
+            lifecycle_choice = NULL, lifecycle_reason = NULL, lifecycle_decided_at = NULL
+      WHERE id = ?`,
+  ).run(goal.id);
+  return toGoalView(db, getGoalRow(db, goal.id), today, nowMs);
 }
 
 // --- 日記（spec: goal-journal / D4）--------------------------------------

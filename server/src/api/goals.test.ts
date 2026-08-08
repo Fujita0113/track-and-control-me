@@ -4,6 +4,7 @@ import { openDb, type DB } from '../db/index.js';
 import { registerApiRoutes } from './index.js';
 import { todayKey } from '../services/summary.js';
 import { addDaysKey } from '../services/goals.js';
+import { evaluateDay } from '../rules/evaluate.js';
 
 /**
  * 目標日記の画像 API（tasks 3.5）: 追加 → 一覧 → バイナリ取得 → キャプション更新 → 削除の一巡と、
@@ -241,8 +242,15 @@ describe('目標・ルール API（spec: editable-rule-registry / goal-lifecycle
     const end_ = await app.inject({ method: 'POST', url: `/api/goals/${goalId2}/end`, payload: { reason: 'もう十分' } });
     expect(end_.statusCode).toBe(200);
     expect(end_.json().lifecycleChoice).toBe('ended');
+    // 終了は翌日発効で、`rule` 行は書き換えない（spec: goal-lifecycle-fork MODIFIED・design D5）。
+    // ゲートからは `ended_day_key` の導出だけで外れる。
     const ruleRow = db.prepare('SELECT status FROM rule WHERE id = ?').get(ruleId2) as { status: string };
-    expect(ruleRow.status).toBe('removed');
+    expect(ruleRow.status).toBe('active');
+    expect(end_.json().endingOn).toBe(addDaysKey(today, 1));
+    expect(evaluateDay(db, today, Date.now()).perCondition.map((c) => c.conditionKey)).toContain(`rule:${ruleId2}`);
+    expect(
+      evaluateDay(db, addDaysKey(today, 1), Date.now()).perCondition.map((c) => c.conditionKey),
+    ).not.toContain(`rule:${ruleId2}`);
   });
 
   it('6.3/6.4 今日タブの書き込みエンドポイントは存在しない（旧 /api/rules・/api/checks 系）', async () => {

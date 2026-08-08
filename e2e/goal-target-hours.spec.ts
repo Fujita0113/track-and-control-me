@@ -82,17 +82,19 @@ test('目標時間つきで作成 → カードにペース → 理由つきで�
   await expect(endModal.locator('.rf-thumb-img')).toBeVisible();
   await endModal.locator('.gr-end-reason-input').fill(END_REASON);
   await endModal.getByRole('button', { name: 'この目標を終える' }).click();
-  await expect(page.locator('.toast')).toContainText('目標を終えました');
+  await expect(page.locator('.toast')).toContainText('明日からこの目標を終えます');
 
-  // カードは「終了」バッジに変わる。
+  // 終了は翌日発効なので、当日は進行中のまま「終了予約中」バッジが付く（spec: goal-challenge MODIFIED）。
   const endedCard = page.locator('.gr-goal-card', { hasText: GOAL_NAME });
-  await expect(endedCard.locator('.badge', { hasText: '終了' })).toBeVisible();
+  await expect(endedCard.locator('.badge', { hasText: '終了予約中' })).toBeVisible();
 
   // --- 4. 大きい沿革の行に3つ（到達判定・答え・Before→After）が並ぶ -------------------
   const history = page.locator('.gr-history');
   await expect(history).toBeVisible();
+  // 発効前でも「−終える」の行は並ぶ（`ended_day_key` 由来・予約中の印つき・spec: goal-history MODIFIED）。
   const endedRow = history.locator('.gr-hist-row', { hasText: `${GOAL_NAME} を終えた` });
   await expect(endedRow).toBeVisible();
+  await expect(endedRow).toContainText('予約中');
   await expect(endedRow).toContainText(END_REASON);
   // ① 到達判定（目標2h/日に対し実測0なので未達＝×）。
   await expect(endedRow.locator('.gr-hist-tag.miss', { hasText: '平均' })).toBeVisible();

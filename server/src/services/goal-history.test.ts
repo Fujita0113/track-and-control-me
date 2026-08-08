@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { createGoal, endGoal, addRuleToGoal, removeGoalRule, addJournalImage, addDaysKey } from './goals.js';
+import { createGoal, endGoal, cancelEndGoal, addRuleToGoal, removeGoalRule, addJournalImage, addDaysKey } from './goals.js';
 import { goalHistory } from './goal-history.js';
 import { resolveIdentity, renameIdentity } from './group-identity.js';
 
@@ -23,6 +23,7 @@ const END = '2026-08-06';
 const NOW_D1 = jst(2026, 8, 1);
 const NOW_D4 = jst(2026, 8, 4);
 const NOW_D5 = jst(2026, 8, 5);
+const NOW_D6 = jst(2026, 8, 6);
 const NOW_AFTER = jst(2026, 8, 7);
 const MIN = 60_000;
 const H = 3600;
@@ -71,18 +72,48 @@ function goalWithTarget(over: Record<string, unknown> = {}) {
 describe('載るのは目標の作成・終了・完走だけ', () => {
   it('作成・終了・完走が時系列に並ぶ', () => {
     const a = createGoal(db, baseInput({ name: 'アルゴリズムを固める' }), NOW_D1);
+    // 終了は翌日発効なので、8/4 に終えた行は 8/5（＝`ended_day_key`）に並ぶ（spec: goal-history MODIFIED）。
     endGoal(db, a.id, { reason: '試験勉強はもう大丈夫。設計に切り替えたい' }, NOW_D4);
     // 期限は a と無関係に長く取る（NOW_AFTER 時点でまだ完走させないため。狙いは「作成・終了・完走」の
     // 3件だけが並ぶことの確認であり、この2つ目の目標を完走させることではない）。
     createGoal(
       db,
       baseInput({ name: '設計を固める', startReason: '競プロより今はこっちに熱がある', endDay: addDaysKey(START, 90) }),
-      NOW_D5,
+      NOW_D6,
     );
 
     const h = goalHistory(db, NOW_AFTER);
     expect(h.map((e) => e.kind)).toEqual(['created', 'ended', 'created']);
-    expect(h.map((e) => e.dayKey)).toEqual([START, '2026-08-04', '2026-08-05']);
+    expect(h.map((e) => e.dayKey)).toEqual([START, '2026-08-05', '2026-08-06']);
+  });
+
+  it('発効前（終了予約中）の終了も、予約中の印つきで当日から並ぶ', () => {
+    const a = createGoal(db, baseInput({ name: 'アルゴリズムを固める' }), NOW_D1);
+    endGoal(db, a.id, { reason: 'ここで降りる' }, NOW_D4);
+
+    // 終えたその日（8/4）に見ても「−終える」の行は並ぶ。行の日付は発効日（8/5）。
+    const h = goalHistory(db, NOW_D4);
+    const ended = h.find((e) => e.kind === 'ended')!;
+    expect(ended.dayKey).toBe('2026-08-05');
+    expect(ended.pending).toBe(true);
+    expect(ended.reason).toBe('ここで降りる');
+  });
+
+  it('終了を取り消すと「−終える」の行は消える（発効しなかった終了は起きなかった終了）', () => {
+    const a = createGoal(db, baseInput({ name: 'アルゴリズムを固める' }), NOW_D1);
+    endGoal(db, a.id, { reason: '押し間違えた' }, NOW_D4);
+    cancelEndGoal(db, a.id, NOW_D4);
+
+    const h = goalHistory(db, NOW_D4);
+    expect(h.map((e) => e.kind)).toEqual(['created']);
+    expect(JSON.stringify(h)).not.toContain('押し間違えた');
+  });
+
+  it('発効後の行は予約中ではない', () => {
+    const a = createGoal(db, baseInput({ name: 'アルゴリズムを固める' }), NOW_D1);
+    endGoal(db, a.id, { reason: 'ここで降りる' }, NOW_D4);
+    const ended = goalHistory(db, NOW_D5).find((e) => e.kind === 'ended')!;
+    expect(ended.pending).toBe(false);
   });
 
   it('期限を過ぎて終えていない目標は completed として載る', () => {

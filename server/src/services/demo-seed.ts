@@ -74,10 +74,19 @@ const GOAL3_WORK_MIN = [100, 140, 50, 130, 90];
 // 手動チェックを飛ばした日（1始まり Day 番号）。両方達成の日＝達成日数 24/30。
 const WALK_MISS_DAYS = new Set<number>([5, 12, 20]); // 朝散歩 met 27/30
 const STRETCH_MISS_DAYS = new Set<number>([8, 12, 15, 22]); // ストレッチ met 26/30
+// --- 当日凍結サンプル（既存の谷 Day12 に重ねる・spec: goal-freeze ADDED）--------------------
+// 主目標の**期間凍結**（Day11-12・翌日発効）と対にして、代金の違いを並べて読ませる:
+//   期間凍結 … 07-10 の期限が 07-12 へ**延びる**（凍結日数ぶん前へ）
+//   当日凍結 … 05-30 の期限は**延びない**（対象外にはなるが、残り日数が1日減る）
+// 既存の谷（散歩もストレッチも抜けた Day12）へ重ねるので達成日数 24/30 は変わらない
+// （未達成だった日が「対象外」に変わるだけ）。月枠はアプリ全体で月1回なので、
+// 主目標の凍結（6月）と月をまたいで衝突しない5月に置く。
+export const DEMO_GOAL2_SAME_DAY_FREEZE_DAY = addDaysKey(DEMO_GOAL2_START_DAY, 11); // Day12 = 2026-05-12
+const GOAL2_SAME_DAY_FREEZE_REASON = '翌朝いちばんの面接に持っていく課題が終わらない。今夜だけ外す。';
 // 2つ目の目標の日記（Before/After＋中盤の谷のみ・他日は空でフォールバック確認）。
 const GOAL2_JOURNAL: Record<number, string> = {
   1: '# 朝散歩を始める\n時間や量で自分を追い込むのに疲れた。今回は「やったか/やってないか」だけ。朝に外へ出て、軽くストレッチ。それだけを30日。',
-  12: '**両方飛ばした日。** 寝坊して散歩もストレッチも抜けた。数字じゃないぶん、抜けた日は白黒はっきり残る。それでいい。',
+  12: '**今日だけ凍結した。** 翌朝の面接に持っていく課題が終わらず、散歩もストレッチも今夜は無理だと分かったので「今日1日だけ」の凍結を使った。対象外にはなるが期限は延びない（5/30 のまま）。今夜を買った代金がこれ。',
   30: '# 30日を終えて\n時間で測らないチェックだけでも、続けた事実はちゃんと積み上がった。カレンダーが埋まっていくのが素直に嬉しい。',
 };
 
@@ -528,6 +537,31 @@ export function seedDemo(db: DB): void {
       const j = GOAL2_JOURNAL[i + 1];
       if (j) insJournal.run(DEMO_GOAL2_ID, dayKey, j, SEED_TS, SEED_TS);
     }
+    // 当日凍結（Day12・その日1日だけ・期限は延びない）。期間凍結と違い予約の日は無く、
+    // 打った当日がそのまま start_day = end_day になる（沿革ログの day_key も同じ日）。
+    db.prepare(
+      `INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, kind, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'same_day', ?, ?)`,
+    ).run(
+      DEMO_GOAL2_ID,
+      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
+      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
+      GOAL2_SAME_DAY_FREEZE_REASON,
+      SEED_TS,
+      SEED_TS,
+    );
+    db.prepare(
+      `INSERT INTO goal_freeze_change (goal_id, day_key, op, start_day, before_end_day, after_end_day, reason, created_at)
+       VALUES (?, ?, 'reserve', ?, NULL, ?, ?, ?)`,
+    ).run(
+      DEMO_GOAL2_ID,
+      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
+      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
+      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
+      GOAL2_SAME_DAY_FREEZE_REASON,
+      SEED_TS,
+    );
+
     // ③ Before/After 画像（1枚ずつ・同一キャプションでペア化）。
     insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY, '朝の道', IMG_BEFORE, 0, SEED_TS);
     insImg.run(DEMO_GOAL2_ID, DEMO_GOAL2_END_DAY, '朝の道', IMG_AFTER, 0, SEED_TS);

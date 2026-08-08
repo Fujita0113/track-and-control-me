@@ -102,6 +102,8 @@ export const api = {
   // （spec: goal-lifecycle-fork ADDED）。b = { reason, outcomeMet?, photo?: { dataUrl } }
   continueGoal: (goalId) => req('POST', `/api/goals/${goalId}/continue`),
   endGoal: (goalId, b) => req('POST', `/api/goals/${goalId}/end`, b),
+  // 終了は翌日発効なので、発効前（今日のうち）は取り消せる（spec: goal-lifecycle-fork ADDED）。
+  cancelEndGoal: (goalId) => req('POST', `/api/goals/${goalId}/end/cancel`),
 
   // ⑤沿革（ルール操作の年表。日記は含まない）
   getGoalChronicle: (id) => req('GET', `/api/goals/${id}/chronicle`),
@@ -112,6 +114,8 @@ export const api = {
   // 一時凍結（spec: goal-freeze）
   reserveGoalFreeze: (goalId, { endDay, reason }) => req('POST', `/api/goals/${goalId}/freeze`, { endDay, reason }),
   reserveGoalFreezeMulti: (goalIds, { endDay, reason }) => req('POST', '/api/goals/freeze/multi', { goalIds, endDay, reason }),
+  // 当日凍結（今日1日だけ・期限は送らない・spec: goal-freeze ADDED）。
+  sameDayFreezeMulti: (goalIds, { reason }) => req('POST', '/api/goals/freeze/same-day/multi', { goalIds, reason }),
   updateGoalFreeze: (goalId, { endDay, reason }) => req('PATCH', `/api/goals/${goalId}/freeze`, { endDay, reason }),
   cancelGoalFreeze: (goalId) => req('DELETE', `/api/goals/${goalId}/freeze`),
   releaseGoalFreeze: (goalId) => req('POST', `/api/goals/${goalId}/freeze/release`),

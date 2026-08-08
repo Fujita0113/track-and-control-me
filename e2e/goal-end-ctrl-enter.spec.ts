@@ -46,7 +46,7 @@ test('「目標を終える」モーダルで理由入力後に Ctrl+Enter で�
   // Ctrl+Enter を押す
   await reasonInp.press('Control+Enter');
 
-  // モーダルが閉じて「目標を終えました」トーストが表示される
+  // モーダルが閉じて翌日発効のトーストが表示される（spec: goal-lifecycle-fork MODIFIED「終了は翌日から効く」）
   await expect(page.locator('#modal-root')).not.toHaveClass(/open/);
-  await expect(page.locator('.toast-ok')).toContainText('目標を終えました');
+  await expect(page.locator('.toast-ok')).toContainText('明日からこの目標を終えます');
 });

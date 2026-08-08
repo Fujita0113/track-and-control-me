@@ -18,6 +18,7 @@ import {
   removeGoalRule,
   continueGoal,
   endGoal,
+  cancelEndGoal,
   submitRulePhoto,
   answerRuleQuestion,
   listDueRules,
@@ -40,10 +41,13 @@ import { goalHistory } from '../services/goal-history.js';
 import {
   reserveFreeze,
   reserveFreezeMulti,
+  sameDayFreeze,
+  sameDayFreezeMulti,
   updateFreeze,
   cancelFreeze,
   releaseFreeze,
   freezeQuota,
+  sameDayFreezeQuota,
   FreezeValidationError,
   FreezeStateError,
 } from '../services/goal-freeze.js';
@@ -204,6 +208,16 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     }
   });
 
+  // 終了は翌日発効なので、発効前（today < ended_day_key）は取り消せる（spec: goal-lifecycle-fork）。
+  app.post('/api/goals/:id/end/cancel', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return cancelEndGoal(db, id);
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
   // --- 大きい沿革（目標の年表・spec: goal-history）--------------------------
 
   app.get('/api/goals/history', async () => goalHistory(db));
@@ -211,12 +225,34 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
   // --- 一時凍結（spec: goal-freeze）-----------------------------------------
   // 静的パス /api/goals/freeze/quota は /api/goals/:id 系と衝突しない（find-my-way は静的優先）。
 
-  app.get('/api/goals/freeze/quota', async () => freezeQuota(db));
+  // 期間凍結の枠（発効日＝翌日の月）に、当日凍結の枠（today の月）を `sameDay` として添える。
+  // 月末は両者が違う月を指すため、モーダルは選択中の種別に対応するほうを出す（design D4）。
+  app.get('/api/goals/freeze/quota', async () => ({ ...freezeQuota(db), sameDay: sameDayFreezeQuota(db) }));
 
   app.post('/api/goals/freeze/multi', async (req, reply) => {
     const b = (req.body ?? {}) as { goalIds?: number[]; endDay?: string; reason?: string };
     try {
       return reserveFreezeMulti(db, b.goalIds ?? [], { endDay: b.endDay ?? '', reason: b.reason ?? '' });
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  // 当日凍結（今日1日だけ・期限は受け取らない・spec: goal-freeze ADDED）。
+  app.post('/api/goals/freeze/same-day/multi', async (req, reply) => {
+    const b = (req.body ?? {}) as { goalIds?: number[]; reason?: string };
+    try {
+      return sameDayFreezeMulti(db, b.goalIds ?? [], { reason: b.reason ?? '' });
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  app.post('/api/goals/:id/freeze/same-day', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const b = (req.body ?? {}) as { reason?: string };
+    try {
+      return sameDayFreeze(db, id, { reason: b.reason ?? '' });
     } catch (err) {
       return replyGoalError(err, reply);
     }

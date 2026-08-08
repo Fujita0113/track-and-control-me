@@ -174,6 +174,8 @@ function historyRow(entry, onOpen) {
       h('span', { class: 'gr-hist-name', text: entry.name }),
       ' ',
       h('span', { class: 'gr-hist-verb', text: HISTORY_KIND_VERB[entry.kind] }),
+      // 終了は翌日発効。発効前の行は「予約中」と発効日を添えて事実どおりに並べる（spec: goal-history）。
+      entry.pending ? h('span', { class: 'gr-hist-pending', text: `予約中（${shortDay(entry.dayKey)} から）` }) : null,
     ),
   );
 
@@ -234,9 +236,14 @@ function goalCard(g, root) {
   else if (g.status === 'upcoming') meta.appendChild(h('span', { class: 'badge', text: `${g.startDay} 開始` }));
   else if (g.status === 'ended') meta.appendChild(h('span', { class: 'badge', text: '終了' }));
   else meta.appendChild(h('span', { class: 'badge ok', text: '完走' }));
+  // 終了予約中（終えたが未発効）。状態は進行中/完走のままで、発効日を併記する（spec: goal-challenge MODIFIED）。
+  if (g.endingOn) meta.appendChild(h('span', { class: 'badge', text: `終了予約中（${shortDay(g.endingOn)} から）` }));
   // 一時凍結の状態（凍結中・予約中）を badge で示す（spec: goal-freeze）。
-  if (g.freeze && g.freeze.state === 'frozen') meta.appendChild(h('span', { class: 'badge gf-badge', text: '❄ 凍結中' }));
-  else if (g.freeze && g.freeze.state === 'reserved') meta.appendChild(h('span', { class: 'badge gf-badge', text: '凍結予約中' }));
+  if (g.freeze && g.freeze.state === 'frozen') {
+    meta.appendChild(h('span', { class: 'badge gf-badge', text: g.freeze.kind === 'same_day' ? '❄ 今日だけ凍結中' : '❄ 凍結中' }));
+  } else if (g.freeze && g.freeze.state === 'reserved') {
+    meta.appendChild(h('span', { class: 'badge gf-badge', text: '凍結予約中' }));
+  }
 
   const head = h('div', { class: 'row' },
     h('h3', { text: g.name }),
@@ -254,14 +261,27 @@ function goalCard(g, root) {
   }
   // 開始前はレポートを開けない（まだ1日も走っていない）ので導線を出さない。
 
-  // 「終える」導線（進行中・完走どちらからも。終了済みには出さない・spec: goal-lifecycle-fork ADDED）。
-  if (!isDemo() && (g.status === 'active' || g.status === 'completed')) {
+  // 「終える」導線（進行中・完走どちらからも。終了済み・終了予約中には出さない）。
+  // 終了予約中は代わりに「終了を取り消す」を出す（発効前だけ取り消せる・design D7・D11）。
+  if (!isDemo() && g.endingOn) {
+    const cancelBtn = h('button', { class: 'btn small', text: '終了を取り消す', type: 'button' });
+    attachTooltip(cancelBtn, { label: `${shortDay(g.endingOn)} の発効前なら取り消せます` });
+    cancelBtn.addEventListener('click', async () => {
+      if (!confirm(`「${g.name}」の終了を取り消しますか？（取り消しても凍結予約は戻りません）`)) return;
+      cancelBtn.disabled = true;
+      try { await api.cancelEndGoal(g.id); toast('終了を取り消しました', 'ok'); renderList(root); }
+      catch (err) { toast(err.data?.error || `失敗: ${err.message}`, 'err'); cancelBtn.disabled = false; }
+    });
+    head.appendChild(cancelBtn);
+  } else if (!isDemo() && (g.status === 'active' || g.status === 'completed')) {
     const endBtn = h('button', { class: 'btn small', text: '終える', type: 'button' });
     endBtn.addEventListener('click', () => openEndDialog(g, () => renderList(root)));
     head.appendChild(endBtn);
   }
 
-  if (!isDemo() && g.canDelete && g.status !== 'completed' && g.status !== 'ended') {
+  // 削除の表示条件はサーバの削除ガード（`ended_day_key != null` で拒否）と一致させる。
+  // 終了予約中も隠す（発効前でも終了を申し込んだ目標は削除できない・design D11）。
+  if (!isDemo() && g.canDelete && !g.endingOn && g.status !== 'completed' && g.status !== 'ended') {
     // デモは閲覧専用（削除手段を出さない・spec: 閲覧専用）。
     const del = h('button', { class: 'btn small danger', text: '削除', type: 'button' });
     del.addEventListener('click', async () => {
@@ -328,11 +348,17 @@ function paceBlock(g, running) {
 
 /**
  * 終える導線。めざした状態（3値）・証拠写真（`outcomeCaption` があるときのみ）・理由（必須）を問う。
- * 当日から効く旨を明示する（既存のルール削除と同じ挙動・design D6）。
+ * 発効は翌日で、今夜のノルマは今夜のノルマとして残る旨を明示する（design D5・D11）。
+ * 今夜ノルマを外したいときは一時凍結（当日凍結）が受け皿になる。
  */
 function openEndDialog(g, onDone) {
   const body = h('div', { class: 'modal-body stack' });
-  body.appendChild(h('p', { class: 'muted', text: `「${g.name}」を終えます。当日から永続ルールがパスワードの条件から外れます（過去の記録は残ります）。` }));
+  // 発効が翌日であることが一番大事なので、そこだけ太字で立てる（注記を括弧で足すと読み飛ばされる・issue #89）。
+  body.appendChild(h('p', { class: 'muted' },
+    `「${g.name}」を終えます。永続ルールは`,
+    h('strong', { text: '明日からパスワードの条件を外れます' }),
+    '。発効するまでは取り消せます。',
+  ));
 
   body.appendChild(h('label', { class: 'gr-flabel', text: `めざした状態は「${g.purpose}」できましたか？（任意）` }));
   let outcomeMet; // undefined=答えない, true/false
@@ -382,7 +408,7 @@ function openEndDialog(g, onDone) {
     save.disabled = true;
     try {
       await endGoalApi(g.id, { reason, outcomeMet, photo: photoDataUrl ? { dataUrl: photoDataUrl } : undefined });
-      toast('目標を終えました', 'ok');
+      toast('明日からこの目標を終えます', 'ok');
       closeModal();
       onDone();
     } catch (err) {

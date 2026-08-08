@@ -1304,4 +1304,15 @@ CREATE TABLE rule_group_member (
 CREATE INDEX idx_rule_group_member_rule ON rule_group_member(rule_id, sort_order);
 `,
   },
+  {
+    version: 27,
+    name: 'goal-freeze-kind',
+    // 凍結の種別（spec: goal-freeze ADDED「当日発効の凍結は『今日1日だけ』」・design D1）。
+    // 「期限を延ばすか」は `start_day` から導出できない（翌日になれば当日凍結の区間と
+    // 凍結中の期間凍結の区間が見分けられなくなる）ため、事実として保存する。
+    // 既存行はすべて `period`（従来の翌日発効・期限延長つき）になる。
+    sql: /* sql */ `
+ALTER TABLE goal_freeze ADD COLUMN kind TEXT NOT NULL DEFAULT 'period';
+`,
+  },
 ];

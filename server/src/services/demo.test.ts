@@ -26,6 +26,8 @@ import {
   DEMO_PRE_START_DAY,
   DEMO_AFTER_END_DAY,
   DEMO_GOAL2_START_DAY,
+  DEMO_GOAL2_END_DAY,
+  DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
   DEMO_ALLOC_DAY,
   RULE_TOTAL_ID,
   RULE_KIN_ID,
@@ -288,6 +290,27 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(walk.cells[0]!.thresholdSeconds).toBeNull();
     // ③④ Before/After の日記が引ける。
     expect(getJournal(db, DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY).content).toContain('朝散歩を始める');
+  });
+
+  it('当日凍結の日は対象外になるが、期限は延びない（期間凍結との代金の違い・spec: goal-freeze ADDED）', () => {
+    const g2 = getGoal(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
+    // 当日凍結は `end_day` を延ばさない。期間凍結を打った主目標は 07-10 → 07-12 に延びている
+    // （下の expect と並べて読むのがこのサンプルの狙い）。
+    expect(g2.endDay).toBe(DEMO_GOAL2_END_DAY);
+    expect(g2.freeze!.kind).toBe('same_day');
+    expect(g2.freeze!.startDay).toBe(DEMO_GOAL2_SAME_DAY_FREEZE_DAY);
+    expect(g2.freeze!.endDay).toBe(DEMO_GOAL2_SAME_DAY_FREEZE_DAY);
+    expect(getGoal(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY)).endDay).toBe(DEMO_EFFECTIVE_END_DAY);
+
+    const rep = getGoalReport(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
+    // 期限が延びないので日数は 30 のまま（期間凍結の主目標は 30 → 32 に増えている）。
+    expect(rep.goal.dayCount).toBe(30);
+    // Day12（既存の谷）は「未達成」ではなく「対象外」として並ぶ。達成日数 24 は変わらない。
+    const walk = rep.rules.find((p) => p.conditionKey === `rule:${RULE_WALK_ID}`)!;
+    expect(walk.cells[11]!.dayKey).toBe(DEMO_GOAL2_SAME_DAY_FREEZE_DAY);
+    expect(walk.cells[11]!.frozen).toBe(true);
+    expect(walk.cells[11]!.met).toBe(false);
+    expect(rep.goal.achievedDays).toBe(24);
   });
 });
 
