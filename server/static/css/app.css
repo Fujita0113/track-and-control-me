@@ -1119,14 +1119,6 @@ body.rf-page .content { max-width: none; }
 .gr-marker-delta { font-size: 12.5px; color: #46505f; font-variant-numeric: tabular-nums; }
 .gr-marker-reason { font-size: 13px; color: #57616f; }
 
-/* ③ Before / After */
-.gr-ba { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
-@media (max-width: 720px) { .gr-ba { grid-template-columns: 1fr; } }
-.gr-ba-col { min-width: 0; }
-.gr-ba-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #edf0f5; }
-.gr-ba-tag { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 700; color: var(--gr-accent); }
-.gr-ba-day { font-size: 12px; color: #97a1af; }
-
 /* ③ 画像のペア/単独並置（Before=左 / After=右） */
 .gr-ba-imgs { margin-top: 18px; padding-top: 16px; border-top: 1px solid #edf0f5; display: flex; flex-direction: column; gap: 16px; }
 .gr-ba-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: start; }
@@ -1170,15 +1162,17 @@ body.rf-page .content { max-width: none; }
 /* 作成フォームの初日写真ステージング（rf-imgzone を流用しつつ枠付きに） */
 .gr-stage { border: 1px solid #e4e9f1; border-radius: 12px; margin-top: 4px; }
 
-/* ④ 日記リーダー */
-.gr-reader-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.gr-day-select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-family: inherit; font-size: 13px; }
-.gr-reader-src { font-size: 11px; color: #97a1af; }
-.gr-reader-src.on { color: var(--gr-accent); border: 1px solid #d5ddf0; border-radius: 999px; padding: 1px 9px; }
-.gr-reader-body { min-height: 60px; }
+/* ④ 日記ストリップ（design D5。カードは固定幅・固定高、本文だけカード内で縦スクロール） */
+.gr-strip { display: flex; gap: 14px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding-bottom: 6px; }
+.gr-strip-card { flex: 0 0 auto; width: clamp(280px, 26vw, 360px); height: 360px; display: flex; flex-direction: column; scroll-snap-align: start; border: 1px solid #e4e9f1; border-radius: 12px; padding: 14px 16px; background: #fbfcfe; }
+.gr-strip-card.sel { border-color: var(--gr-accent); box-shadow: 0 0 0 2px rgba(59,91,181,0.18); }
+.gr-strip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #edf0f5; flex: 0 0 auto; }
+.gr-strip-day { font-size: 12.5px; font-weight: 700; color: #46505f; }
+.gr-strip-src { font-size: 11px; color: var(--gr-accent); border: 1px solid #d5ddf0; border-radius: 999px; padding: 1px 9px; }
+.gr-strip-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; font-size: 13.5px; line-height: 1.6; }
 .gr-empty { color: #a6afc0; font-size: 13.5px; }
-/* ④ 選択日の画像列（読み取り専用） */
-.gr-reader-imgs { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+/* ④ カード内の画像（読み取り専用・本文と同じスクロール領域に続く） */
+.gr-strip-imgs { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
 
 /* --- 振り返りタブの目標日記コーナー --- */
 .rf-journals { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; }

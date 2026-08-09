@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>④ 日記ストリップ モック（goal-report-journal-strip）</title>
+<link rel="stylesheet" href="../../server/static/css/app.css">
+<style>
+  body { margin: 0; }
+  .mock-note { max-width: 820px; margin: 0 auto 12px; font: 12px/1.5 sans-serif; color: #97a1af; }
+</style>
+</head>
+<body>
+<div class="gr-report">
+  <div class="mock-note">design D5 の実値確認用モック（本文3〜4行＋画像1枚が見える程度の高さ／scroll-snap: proximity）。カード2枚目（Day7）を .sel（強調）にしてある。</div>
+  <section class="gr-card">
+    <h2 class="gr-block-title">④ 毎日の日記</h2>
+    <div class="gr-strip">
+
+      <div class="gr-strip-card">
+        <div class="gr-strip-head">
+          <span class="gr-strip-day">Day 1（2026-06-11）</span>
+          <span class="gr-strip-src">日記</span>
+        </div>
+        <div class="gr-strip-body">
+          <p>今日から30日チャレンジ開始。まずは無理せず、続けられるペースを掴みたい。</p>
+        </div>
+      </div>
+
+      <div class="gr-strip-card sel">
+        <div class="gr-strip-head">
+          <span class="gr-strip-day">Day 7（2026-06-17）</span>
+          <span class="gr-strip-src">振り返り</span>
+        </div>
+        <div class="gr-strip-body">
+          <p>今日はかなり長めの振り返り。中盤に差し掛かって少し中だるみを感じている。集中が続かない時間帯があったので、明日は作業の合間に短い休憩を挟むようにする。夜はゲームをやりすぎず、早めに切り上げられた。</p>
+          <p>体調は悪くないが、モチベーションの波がある。写真もついでに撮っておいた。</p>
+          <div class="gr-strip-imgs">
+            <figure class="gr-fig">
+              <img class="gr-fig-img" alt="体・正面" src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='200'%3E%3Crect width='300' height='200' fill='%23dbe2ee'/%3E%3C/svg%3E">
+              <figcaption class="gr-fig-cap"><span class="gr-fig-text">体・正面</span></figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+
+      <div class="gr-strip-card">
+        <div class="gr-strip-head">
+          <span class="gr-strip-day">Day 12（2026-06-22）</span>
+        </div>
+        <div class="gr-strip-body">
+          <p class="gr-empty">この日の記録はありません</p>
+          <div class="gr-strip-imgs">
+            <figure class="gr-fig">
+              <img class="gr-fig-img" alt="体・正面" src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='200'%3E%3Crect width='300' height='200' fill='%23dbe2ee'/%3E%3C/svg%3E">
+              <figcaption class="gr-fig-cap"><span class="gr-fig-text">体・正面</span></figcaption>
+            </figure>
+          </div>
+        </div>
+      </div>
+
+      <div class="gr-strip-card">
+        <div class="gr-strip-head">
+          <span class="gr-strip-day">Day 30（2026-07-10）</span>
+          <span class="gr-strip-src">日記</span>
+        </div>
+        <div class="gr-strip-body">
+          <p>ついに完走。振り返るとよく続けられたと思う。最後の1週間は特に集中できていた。</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+</div>
+</body>
+</html>

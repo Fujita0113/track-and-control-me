@@ -720,7 +720,7 @@ async function openCreateForm(onDone) {
 }
 
 // --- 完了レポート（ヘッダ + 4ブロック・1カラム）-------------------------
-async function renderReport(root, goalId) {
+async function renderReport(root, goalId, selectedDay) {
   clear(root);
   destroyCharts();
   root.appendChild(h('div', { class: 'empty', text: 'レポートを読み込み中…' }));
@@ -759,8 +759,8 @@ async function renderReport(root, goalId) {
   const forkBlock = blockLifecycleFork(rep, root);
   if (forkBlock) page.appendChild(forkBlock);
 
-  // 読み手状態（④ で使う。①のマス/日付セレクタから連動）。
-  const readerState = { selected: 1, cellsByDay: new Map(), headerByDay: new Map(), renderReader: null };
+  // 読み手状態（④ で使う。①のマス/④ストリップから連動）。
+  const readerState = { selected: 1, cellsByDay: new Map(), headerByDay: new Map(), cardByDay: new Map(), renderReader: null };
 
   // 画像バイナリのベース URL（デモは /api/demo/… 経路へ切替・design D8）。
   const imgBase = `${isDemo() ? '/api/demo/goals/' : '/api/goals/'}${rep.goal.id}/journal`;
@@ -769,14 +769,17 @@ async function renderReport(root, goalId) {
   page.appendChild(blockCalendar(rep, readerState, root));
   // ② 時間の推移（時間型ルールがある場合のみ）
   if (rep.hasTimeType) page.appendChild(blockTimeSeries(rep));
-  // ③ Before / After（2モード＋最終日CTA）
-  page.appendChild(blockBeforeAfter(rep, imgBase));
-  // ④ 日記リーダー
-  page.appendChild(blockReader(rep, readerState, imgBase));
+  // ③ 写真の比較（2モード＋最終日CTA）
+  page.appendChild(blockPhotoCompare(rep, imgBase));
+  // ④ 日記ストリップ
+  page.appendChild(blockJournalStrip(rep, readerState, imgBase));
   // ⑤ 沿革（ルール操作の年表。日記は載らない）
   page.appendChild(blockChronicle(rep, imgBase));
 
-  readerState.renderReader();
+  // 初期選択日: 呼び出し元が渡した日 → 無ければ先頭のカードの Day → カードが無ければ 1（design D4）。
+  const firstCardDay = readerState.cardByDay.size ? readerState.cardByDay.keys().next().value : null;
+  readerState.selected = selectedDay || firstCardDay || 1;
+  readerState.renderReader(readerState.selected, false);
 }
 
 // 完走フォーク（続ける／終える・spec: goal-lifecycle-fork）。
@@ -976,8 +979,8 @@ function blockCalendar(rep, rs, root) {
   // クリックで開く日別詳細モーダル（既存の④選択・ハイライトは維持したまま追加で開く・design D5）。
   // デモモードは本番用の GET /api/summary・GET/PUT /api/reflection/:date を持たないため開かない（design D6）。
   const onDayClick = (dayNumber) => {
-    rs.renderReader(dayNumber);
-    if (!isDemo()) openDayDetailModal(rep, dayNumber, () => renderReport(root, rep.goal.id));
+    rs.renderReader(dayNumber, true);
+    if (!isDemo()) openDayDetailModal(rep, dayNumber, () => renderReport(root, rep.goal.id, dayNumber));
   };
 
   // ヘッダ行（空 + Day 番号）
@@ -1226,8 +1229,8 @@ function blockTimeSeries(rep) {
   return card;
 }
 
-// ③ Before / After（文面並置 ＋ 2モードの画像比較 ＋ 最終日CTA・design D6/D6b）
-function blockBeforeAfter(rep, imgBase) {
+// ③ 写真の比較（2モードの画像比較 ＋ 最終日CTA・design D6/D6b）
+function blockPhotoCompare(rep, imgBase) {
   const card = h('section', { class: 'gr-card' });
   const state = { mode: 'default' }; // 'default'（最古/最新）| 'all'（全枚数）
 
@@ -1250,15 +1253,10 @@ function blockBeforeAfter(rep, imgBase) {
   });
   const hasImages = () => (rep.reportImages || []).length > 0;
   card.appendChild(h('div', { class: 'gr-block-head' },
-    h('h2', { class: 'gr-block-title', style: { margin: '0' }, text: '③ Before / After' }),
+    h('h2', { class: 'gr-block-title', style: { margin: '0' }, text: '③ 写真の比較' }),
     h('div', { class: 'spacer' }),
     hasImages() ? modeSeg : null,
   ));
-
-  // 文面並置（画像とは独立）。After は完走後なら最終日、進行中なら「最も新しい記録のある日」。
-  const first = rep.days[0];
-  const last = rep.days[(rep.goal.afterDayNumber || rep.days.length) - 1] || rep.days[rep.days.length - 1];
-  card.appendChild(h('div', { class: 'gr-ba' }, baCol('Before', first), baCol('After', last)));
 
   // 最終日（Day30）の写真を追加する CTA。**完走後のみ**（進行中は最終日がまだ来ていない）。
   // デモは閲覧専用なので出さない。
@@ -1284,17 +1282,6 @@ function blockBeforeAfter(rep, imgBase) {
   };
   renderImgs();
   return card;
-}
-
-function baCol(tag, day) {
-  const col = h('div', { class: 'gr-ba-col' });
-  col.appendChild(h('div', { class: 'gr-ba-head' },
-    h('span', { class: 'gr-ba-tag', text: tag }),
-    h('span', { class: 'gr-ba-day', text: day ? `Day ${day.dayNumber}` : '' }),
-  ));
-  if (day && day.text.trim()) col.appendChild(renderMarkdown(day.text));
-  else col.appendChild(h('p', { class: 'gr-empty', text: '記録なし' }));
-  return col;
 }
 
 /**
@@ -1424,28 +1411,56 @@ function imgFig(imgBase, meta, tag) {
   return fig;
 }
 
-// ④ 日記リーダー（常に1件）
-function blockReader(rep, rs, imgBase) {
+// ④ 日記ストリップ（記録のある日を横スクロールで全件並べる・design D2/D3）
+function blockJournalStrip(rep, rs, imgBase) {
   const card = grCard('④ 毎日の日記');
 
-  const sel = h('select', { class: 'gr-day-select' });
-  for (const d of rep.days) sel.appendChild(h('option', { value: String(d.dayNumber) }, `Day ${d.dayNumber}（${d.dayKey}）`));
-  sel.addEventListener('change', () => rs.renderReader(Number(sel.value)));
+  // カードにするのは文面または画像のある日だけ（空カードを並べない・spec の MUST NOT）。
+  const cardDays = rep.days.filter((d) => d.text.trim() || (d.images && d.images.length));
 
-  const srcTag = h('span', { class: 'gr-reader-src' });
-  const head = h('div', { class: 'gr-reader-head' },
-    h('label', { class: 'gr-flabel', text: '日付', style: { margin: '0' } }),
-    sel,
-    srcTag,
-  );
-  const bodyHost = h('div', { class: 'gr-reader-body' });
-  card.appendChild(head);
-  card.appendChild(bodyHost);
+  if (!cardDays.length) {
+    card.appendChild(h('p', { class: 'gr-empty', text: 'まだ記録がありません' }));
+    // カードが無くても①からのハイライト連動は保つ（スクロールは何もしない）。
+    rs.renderReader = (dayNumber) => {
+      if (dayNumber) rs.selected = dayNumber;
+      for (const [d, cells] of rs.cellsByDay) {
+        const on = d === rs.selected;
+        for (const c of cells) c.classList.toggle('sel', on);
+        const hd = rs.headerByDay.get(d);
+        if (hd) hd.classList.toggle('sel', on);
+      }
+    };
+    return card;
+  }
 
-  rs.renderReader = (dayNumber) => {
+  const strip = h('div', { class: 'gr-strip' });
+  for (const d of cardDays) {
+    const srcLabel = d.source === 'journal' ? '日記' : d.source === 'reflection' ? '振り返り' : '';
+    const cardEl = h('div', { class: 'gr-strip-card' },
+      h('div', { class: 'gr-strip-head' },
+        h('span', { class: 'gr-strip-day', text: `Day ${d.dayNumber}（${d.dayKey}）` }),
+        srcLabel ? h('span', { class: 'gr-strip-src', text: srcLabel }) : null,
+      ),
+    );
+    const bodyHost = h('div', { class: 'gr-strip-body' });
+    if (d.text.trim()) bodyHost.appendChild(renderMarkdown(d.text));
+    else bodyHost.appendChild(h('p', { class: 'gr-empty', text: 'この日の記録はありません' }));
+    const imgs = d.images || [];
+    if (imgs.length) {
+      const gallery = h('div', { class: 'gr-strip-imgs' });
+      for (const m of imgs) gallery.appendChild(imgFig(imgBase, m, ''));
+      bodyHost.appendChild(gallery);
+    }
+    cardEl.appendChild(bodyHost);
+    rs.cardByDay.set(d.dayNumber, cardEl);
+    strip.appendChild(cardEl);
+  }
+  card.appendChild(strip);
+
+  // dayNumber を渡さない呼び出しは現在の選択を保ったまま再描画するだけ（design D2）。
+  // smooth: 初回描画は 'auto'、①クリックなどそれ以降は 'smooth'（design D3）。
+  rs.renderReader = (dayNumber, smooth) => {
     if (dayNumber) rs.selected = dayNumber;
-    const day = rep.days[rs.selected - 1];
-    sel.value = String(rs.selected);
     // ① のマス / ヘッダの選択ハイライトを更新。
     for (const [d, cells] of rs.cellsByDay) {
       const on = d === rs.selected;
@@ -1453,17 +1468,12 @@ function blockReader(rep, rs, imgBase) {
       const hd = rs.headerByDay.get(d);
       if (hd) hd.classList.toggle('sel', on);
     }
-    clear(bodyHost);
-    srcTag.textContent = day && day.source === 'journal' ? '日記' : day && day.source === 'reflection' ? '振り返り' : '';
-    srcTag.className = `gr-reader-src${day && day.source ? ' on' : ''}`;
-    if (day && day.text.trim()) bodyHost.appendChild(renderMarkdown(day.text));
-    else bodyHost.appendChild(h('p', { class: 'gr-empty', text: 'この日の記録はありません' }));
-    // 選択日の画像（読み取り専用・他日の画像は出さない・design D6 / 7.2）。
-    const imgs = (day && day.images) || [];
-    if (imgs.length) {
-      const gallery = h('div', { class: 'gr-reader-imgs' });
-      for (const m of imgs) gallery.appendChild(imgFig(imgBase, m, ''));
-      bodyHost.appendChild(gallery);
+    // 強調は常に1枚。記録の無い日を選んだら強調ゼロになる（design D2）。
+    for (const el of rs.cardByDay.values()) el.classList.remove('sel');
+    const target = rs.cardByDay.get(rs.selected);
+    if (target) {
+      target.classList.add('sel');
+      target.scrollIntoView({ block: 'nearest', inline: 'center', behavior: smooth ? 'smooth' : 'auto' });
     }
   };
   return card;
