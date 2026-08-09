@@ -119,17 +119,31 @@ export function localDateKey(d = new Date()) {
 
 // --- トースト ------------------------------------------------------------
 let toastTimer = null;
-export function toast(msg, kind = 'info') {
+/**
+ * opts.action = { label, onClick } でアクションボタン付きトーストを出せる
+ * (spec: timeline-record-deletion / design D7: 削除直後の取り消し導線)。
+ */
+export function toast(msg, kind = 'info', opts = {}) {
   let host = document.getElementById('toast-host');
   if (!host) {
     host = h('div', { id: 'toast-host', class: 'toast-host' });
     document.body.appendChild(host);
   }
   clear(host);
-  host.appendChild(h('div', { class: `toast toast-${kind}`, text: msg }));
+  const row = h('div', { class: `toast toast-${kind}` }, h('span', { text: msg }));
+  if (opts.action) {
+    const btn = h('button', { class: 'toast-action', type: 'button', text: opts.action.label });
+    btn.addEventListener('click', () => {
+      host.classList.remove('show');
+      if (toastTimer) clearTimeout(toastTimer);
+      opts.action.onClick();
+    });
+    row.appendChild(btn);
+  }
+  host.appendChild(row);
   host.classList.add('show');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => host.classList.remove('show'), 3200);
+  toastTimer = setTimeout(() => host.classList.remove('show'), opts.action ? 6000 : 3200);
 }
 
 // --- モーダル ------------------------------------------------------------

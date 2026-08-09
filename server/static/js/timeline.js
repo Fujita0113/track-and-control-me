@@ -701,8 +701,70 @@ function runBreakdown(run) {
     wrap.appendChild(list);
   }
 
-  wrap.appendChild(h('p', { class: 'muted', style: { marginTop: '10px' }, text: '自動記録ブロックは削除できません。' }));
+  wrap.appendChild(h('div', { class: 'tlc-pop-hr' }));
+  wrap.appendChild(autoDeleteSection(run));
   return wrap;
+}
+
+/**
+ * AUTO ラン削除の2段階確認導線(spec: timeline-record-deletion / design D7)。
+ * 押下で同じ場所を確認表示(対象時間帯 + 実行/取り止め)へ切り替える。取り止めは元へ戻る。
+ * 削除対象はクリックしたラン全体のスパン[run.startAt, run.endAt)。
+ */
+function autoDeleteSection(run) {
+  const host = h('div', { class: 'tlc-pop-delete-host' });
+
+  const showInitial = () => {
+    clear(host);
+    const row = h('div', { class: 'tlc-pop-delete' },
+      h('span', { class: 'tlc-pop-delete-main', text: 'この記録を削除' }),
+      h('span', { class: 'tlc-pop-delete-hint', text: '誤記録の訂正として除外します(集計・アンロック評価に反映)' }),
+    );
+    row.addEventListener('click', showConfirm);
+    host.appendChild(row);
+  };
+
+  const showConfirm = () => {
+    clear(host);
+    const cancelBtn = h('button', { class: 'btn small', type: 'button', text: '取り止め' });
+    const execBtn = h('button', { class: 'btn small danger', type: 'button', text: '実行' });
+    cancelBtn.addEventListener('click', showInitial);
+    execBtn.addEventListener('click', async () => {
+      if (execBtn.disabled) return;
+      execBtn.disabled = true;
+      try {
+        const { id } = await api.addExclusion(ctx.date, {
+          identityKey: run.identityKey,
+          startAt: run.startAt,
+          endAt: run.endAt,
+        });
+        closePopover();
+        renderCore(ctx.body, ctx.date);
+        toast('自動記録を削除しました', 'ok', {
+          action: {
+            label: '取り消す',
+            onClick: async () => {
+              try {
+                await api.removeExclusion(id);
+                toast('元に戻しました', 'ok');
+                renderCore(ctx.body, ctx.date);
+              } catch (err) { toast(`失敗: ${err.message}`, 'err'); }
+            },
+          },
+        });
+      } catch (err) {
+        toast(`失敗: ${err.message}`, 'err');
+        execBtn.disabled = false;
+      }
+    });
+    host.appendChild(h('div', { class: 'tlc-pop-delete-confirm' },
+      h('span', { class: 'tlc-pop-delete-confirm-range', text: `${fmtClock(run.startAt)} – ${fmtClock(run.endAt)} を削除しますか？` }),
+      h('div', { class: 'tlc-pop-delete-actions' }, cancelBtn, execBtn),
+    ));
+  };
+
+  showInitial();
+  return host;
 }
 
 // --- ドラッグ確定(記録)ポップオーバー ------------------------------------

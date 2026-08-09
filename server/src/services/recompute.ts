@@ -8,9 +8,9 @@ import {
   type AggregationResult,
   type RawSample,
 } from '../aggregation/index.js';
-import type { SplitOverride } from '../aggregation/aggregate.js';
-import { loadSplitOverrides } from './timeline.js';
-import { resolveIdentity } from './group-identity.js';
+import type { SplitOverride, ExclusionOptions } from '../aggregation/aggregate.js';
+import { loadSplitOverrides, loadExclusions } from './timeline.js';
+import { resolveIdentity, loadIdentityResolver } from './group-identity.js';
 
 /**
  * raw_sample → 集計 → セッション/日次合計/除外 の永続化（design.md D4/D6）。
@@ -81,15 +81,31 @@ export function loadRawSamples(db: DB, opts: { sinceMs?: number } = {}): RawSamp
   });
 }
 
-/** 集計して非確定日を作り直す。返り値は集計結果（評価に流用可）。 */
-export function recompute(db: DB, opts: { onlyDays?: string[] } = {}): AggregationResult {
+/**
+ * 集計して非確定日を作り直す。返り値は集計結果（評価に流用可）。
+ * `force`（design.md D5）は `onlyDays` を伴う場合のみ有効。対象日に限って確定ガードを外し、
+ * `daily_totals_snapshot` を確定フラグ（is_final=1）を維持したまま作り直す。
+ */
+export function recompute(db: DB, opts: { onlyDays?: string[]; force?: boolean } = {}): AggregationResult {
   const rawCfg = getConfig(db);
   const cfg = toAggregationConfig(rawCfg);
   const sinceMs = recomputeWindowStartMs(opts.onlyDays, rawCfg.tz, rawCfg.day_boundary_minutes);
   const samples = loadRawSamples(db, sinceMs !== undefined ? { sinceMs } : {});
   const overrides: SplitOverride[] = loadAllSplitOverrides(db);
-  const result = aggregateSamples(samples, cfg, overrides);
-  persist(db, result, opts.onlyDays);
+
+  const exclusions = loadAllExclusions(db);
+  let exclusionOpts: ExclusionOptions | undefined;
+  if (exclusions.length > 0) {
+    const resolver = loadIdentityResolver(db);
+    exclusionOpts = {
+      exclusions,
+      identityKeyOf: (g) => resolver.resolve(g.title, g.color, g.stableGroupId).key,
+    };
+  }
+
+  const result = aggregateSamples(samples, cfg, overrides, exclusionOpts);
+  const force = opts.force === true && !!opts.onlyDays && opts.onlyDays.length > 0;
+  persist(db, result, opts.onlyDays, force);
   return result;
 }
 
@@ -101,7 +117,15 @@ function loadAllSplitOverrides(db: DB): SplitOverride[] {
   return loadSplitOverrides(db, days);
 }
 
-function persist(db: DB, result: AggregationResult, onlyDays?: string[]): void {
+/** 全期間の除外レコードを読み込む（design.md D2・D4）。 */
+function loadAllExclusions(db: DB) {
+  const days = (db.prepare('SELECT DISTINCT day_key FROM activity_exclusion').all() as {
+    day_key: string;
+  }[]).map((r) => r.day_key);
+  return loadExclusions(db, days);
+}
+
+function persist(db: DB, result: AggregationResult, onlyDays?: string[], force = false): void {
   const finalDays = new Set(
     (db.prepare('SELECT day_key FROM daily_totals_snapshot WHERE is_final = 1').all() as {
       day_key: string;
@@ -112,6 +136,8 @@ function persist(db: DB, result: AggregationResult, onlyDays?: string[]): void {
       day_key: string;
     }[]).map((r) => r.day_key),
   );
+  // force かつ onlyDays に含まれる日だけ確定ガードを外す（design.md D5）。
+  const forceDays = force && onlyDays ? new Set(onlyDays) : new Set<string>();
 
   const touched = new Set<string>();
   for (const t of result.dailyTotals) touched.add(t.dayKey);
@@ -119,6 +145,7 @@ function persist(db: DB, result: AggregationResult, onlyDays?: string[]): void {
   for (const e of result.excluded) touched.add(e.dayKey);
 
   const target = (day: string): boolean => {
+    if (forceDays.has(day)) return true;
     if (finalDays.has(day) || finalEval.has(day)) return false;
     if (onlyDays && !onlyDays.includes(day)) return false;
     return true;
@@ -131,10 +158,17 @@ function persist(db: DB, result: AggregationResult, onlyDays?: string[]): void {
         started_at, ended_at, day_key, coactive_group_keys, n, credited_ms, close_reason, created_at)
      VALUES (@stable, @name, @color, @cat, @start, @end, @day, @coactive, @n, @credited, @reason, @now)`,
   );
+  // 通常経路: is_final=0 で作り直す（確定行は target() で既に除外済み）。
   const upTotal = db.prepare(
     `INSERT INTO daily_totals_snapshot (day_key, stable_group_id, ms, is_final, updated_at)
      VALUES (@day, @key, @ms, 0, @now)
      ON CONFLICT(day_key, stable_group_id) DO UPDATE SET ms = excluded.ms, updated_at = excluded.updated_at`,
+  );
+  // force 経路: 確定フラグを維持したまま値だけ作り直す（design.md D5）。
+  const upTotalForced = db.prepare(
+    `INSERT INTO daily_totals_snapshot (day_key, stable_group_id, ms, is_final, updated_at)
+     VALUES (@day, @key, @ms, 1, @now)
+     ON CONFLICT(day_key, stable_group_id) DO UPDATE SET ms = excluded.ms, is_final = 1, updated_at = excluded.updated_at`,
   );
   const upExcluded = db.prepare(
     `INSERT INTO daily_excluded_snapshot (day_key, reason, ms, updated_at)
@@ -146,7 +180,11 @@ function persist(db: DB, result: AggregationResult, onlyDays?: string[]): void {
     for (const day of touched) {
       if (!target(day)) continue;
       db.prepare('DELETE FROM session WHERE day_key = ?').run(day);
-      db.prepare('DELETE FROM daily_totals_snapshot WHERE day_key = ? AND is_final = 0').run(day);
+      if (forceDays.has(day)) {
+        db.prepare('DELETE FROM daily_totals_snapshot WHERE day_key = ?').run(day);
+      } else {
+        db.prepare('DELETE FROM daily_totals_snapshot WHERE day_key = ? AND is_final = 0').run(day);
+      }
       db.prepare('DELETE FROM daily_excluded_snapshot WHERE day_key = ?').run(day);
     }
     for (const s of result.sessions) {
@@ -173,7 +211,8 @@ function persist(db: DB, result: AggregationResult, onlyDays?: string[]): void {
     }
     for (const t of result.dailyTotals) {
       if (!target(t.dayKey)) continue;
-      upTotal.run({ day: t.dayKey, key: t.stableGroupId, ms: t.ms, now });
+      const stmt = forceDays.has(t.dayKey) ? upTotalForced : upTotal;
+      stmt.run({ day: t.dayKey, key: t.stableGroupId, ms: t.ms, now });
     }
     for (const e of result.excluded) {
       if (!target(e.dayKey)) continue;

@@ -480,3 +480,46 @@ export function loadSplitOverrides(
     ratios: JSON.parse(r.ratios) as Record<string, number>,
   }));
 }
+
+export interface ExclusionInput {
+  identityKey: string;
+  startAt: number;
+  endAt: number;
+}
+
+/** 自動記録の削除＝除外レコードの永続化（spec: timeline-record-deletion / design.md D1）。 */
+export function addAutoExclusion(db: DB, dayKey: string, input: ExclusionInput): number {
+  const now = Date.now();
+  const info = db
+    .prepare(
+      `INSERT INTO activity_exclusion (day_key, identity_key, start_at, end_at, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(dayKey, input.identityKey, input.startAt, input.endAt, now);
+  return info.lastInsertRowid as number;
+}
+
+/** 除外レコードの取り消し。行が無ければ例外を投げず false（冪等）。 */
+export function removeAutoExclusion(db: DB, id: number): boolean {
+  return db.prepare('DELETE FROM activity_exclusion WHERE id = ?').run(id).changes > 0;
+}
+
+/** 除外レコードの `day_key` を読む（削除前に対象日を知るため）。無ければ null。 */
+export function getExclusionDayKey(db: DB, id: number): string | null {
+  const row = db.prepare('SELECT day_key FROM activity_exclusion WHERE id = ?').get(id) as
+    | { day_key: string }
+    | undefined;
+  return row?.day_key ?? null;
+}
+
+export function loadExclusions(
+  db: DB,
+  dayKeys: string[],
+): { identityKey: string; startMs: number; endMs: number }[] {
+  if (dayKeys.length === 0) return [];
+  const placeholders = dayKeys.map(() => '?').join(',');
+  const rows = db
+    .prepare(`SELECT identity_key, start_at, end_at FROM activity_exclusion WHERE day_key IN (${placeholders})`)
+    .all(...dayKeys) as { identity_key: string; start_at: number; end_at: number }[];
+  return rows.map((r) => ({ identityKey: r.identity_key, startMs: r.start_at, endMs: r.end_at }));
+}

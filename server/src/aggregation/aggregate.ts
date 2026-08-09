@@ -57,7 +57,8 @@ export type ExcludeReason =
   | 'LOCKED'
   | 'GAP_EXCEEDED'
   | 'NEGATIVE_GAP'
-  | 'CLOCK_JUMP';
+  | 'CLOCK_JUMP'
+  | 'DELETED';
 
 export type CloseReason = 'NORMAL' | 'IDLE_TIMEOUT' | 'DAY_BOUNDARY_SPLIT' | 'SLEEP_GAP';
 
@@ -255,12 +256,55 @@ export interface SplitOverride {
   ratios: Record<string, number>; // stableGroupId -> 比率（0 可）
 }
 
+/** timeline-record-deletion（design D1・D4）: 「開いていなかった」ものとして扱う identity と区間。 */
+export interface ExclusionInput {
+  identityKey: string;
+  startMs: number;
+  endMs: number;
+}
+
+export interface ExclusionOptions {
+  exclusions: ExclusionInput[];
+  /** open グループのスナップショットを識別 identity のキーへ解決する（DB 依存を aggregation/ に持ち込まない・D4）。 */
+  identityKeyOf: (group: OpenGroup) => string;
+}
+
+/**
+ * 区間 [startMs, endMs) の中点が該当する除外レコードの identityKey 集合を返す（overrideFor と同じ規則・D2）。
+ */
+function excludedIdentitiesFor(startMs: number, endMs: number, exclusions: ExclusionInput[]): Set<string> {
+  const mid = (startMs + endMs) / 2;
+  const out = new Set<string>();
+  for (const e of exclusions) {
+    if (mid >= e.startMs && mid < e.endMs) out.add(e.identityKey);
+  }
+  return out;
+}
+
+/** openKeys から、除外された identity に解決される実グループを落とす（D2）。 */
+function filterExcludedOpenKeys(
+  openKeys: string[],
+  meta: Map<string, OpenGroup>,
+  startMs: number,
+  endMs: number,
+  opts: ExclusionOptions,
+): string[] {
+  const excludedIdentities = excludedIdentitiesFor(startMs, endMs, opts.exclusions);
+  if (excludedIdentities.size === 0) return openKeys;
+  return openKeys.filter((k) => {
+    const g = meta.get(k);
+    return g ? !excludedIdentities.has(opts.identityKeyOf(g)) : true;
+  });
+}
+
 /** メイン集計関数。 */
 export function aggregateSamples(
   samples: RawSample[],
   config: AggregationConfig = DEFAULT_AGG_CONFIG,
   overrides: SplitOverride[] = [],
+  exclusionOpts?: ExclusionOptions,
 ): AggregationResult {
+  const exclusions = exclusionOpts?.exclusions ?? [];
   const { kept, duplicates } = dedupe(samples);
   const sorted = sortSamples(kept);
 
@@ -317,20 +361,35 @@ export function aggregateSamples(
     for (const p of parts) {
       const dur = p.endMs - p.startMs;
       if (dur <= 0) continue;
+
+      const effectiveKeys =
+        openKeys.length > 0 && exclusions.length > 0
+          ? filterExcludedOpenKeys(openKeys, meta, p.startMs, p.endMs, exclusionOpts!)
+          : openKeys;
+
+      if (openKeys.length > 0 && effectiveKeys.length === 0) {
+        // 開いていた実グループが全て除外された（D3）。ungrouped ではなく非計上。
+        stream.push({ kind: 'gap', reason: 'DELETED' });
+        const ek = `${p.dayKey} DELETED`;
+        excludedMs.set(ek, (excludedMs.get(ek) ?? 0) + dur);
+        excludedTotalMs += dur;
+        continue;
+      }
+
       stream.push({
         kind: 'slab',
         startMs: p.startMs,
         endMs: p.endMs,
         dayKey: p.dayKey,
-        openKeys,
+        openKeys: effectiveKeys,
         meta,
       });
-      if (openKeys.length === 0) {
+      if (effectiveKeys.length === 0) {
         const tk = `${p.dayKey} ${UNGROUPED_KEY}`;
         totalsMs.set(tk, (totalsMs.get(tk) ?? 0) + dur);
       } else {
         const ov = overrides.length > 0 ? overrideFor(p.startMs, p.endMs, overrides) : undefined;
-        const shares = ov ? distributeWeighted(dur, openKeys, ov.ratios) : distribute(dur, openKeys);
+        const shares = ov ? distributeWeighted(dur, effectiveKeys, ov.ratios) : distribute(dur, effectiveKeys);
         for (const [k, v] of shares) {
           const tk = `${p.dayKey} ${k}`;
           totalsMs.set(tk, (totalsMs.get(tk) ?? 0) + v);

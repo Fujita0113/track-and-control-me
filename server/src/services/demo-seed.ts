@@ -2,6 +2,8 @@ import zlib from 'node:zlib';
 import type { DB } from '../db/index.js';
 import { addDaysKey } from './goals.js';
 import { resolveIdentity, renameIdentity } from './group-identity.js';
+import { recompute } from './recompute.js';
+import { evaluateDay } from '../rules/evaluate.js';
 
 /**
  * デモ（お試し）モードのサンプルデータ（spec: demo-mode / design.md D4）。
@@ -97,6 +99,43 @@ const THRESH_CHANGE_DAY = 13; // Day13 から低い閾値が効く。
 
 // seed 用の固定タイムスタンプ（Date.now() 非依存。canDelete 等の判定には使われない経路）。
 const SEED_TS = Date.UTC(2026, 5, 10, 0, 0, 0); // 2026-06-10T00:00:00Z
+
+// --- 「閉じ忘れ」自動記録の削除デモ（spec: timeline-record-deletion / issue #90）------------------
+// 既存の谷日 Day16（2026-06-26・refl=F/tmr=T の谷）へ、閉じ忘れたタブグループぶんの raw_sample を
+// 実際に積む。この日「だけ」raw_sample を持つため、削除 API の force 再集計・再評価が本物の
+// aggregateSamples 経路を通ることを実演できる（他の日は daily_totals_snapshot への直接焼き込みの
+// ままで無変化・プロジェクト必須ルール: 日数が関わる機能はデモモードで成果を明示する）。
+export const DEMO_FORGOTTEN_DAY = addDaysKey(DEMO_START_DAY, 15); // Day16 = 2026-06-26
+// 2026-06-26 の JST 時刻 → epoch ms（Date.now 非依存）。
+const forgottenMs = (h: number, mi: number): number => Date.UTC(2026, 5, 26, h - 9, mi, 0);
+const FORGOTTEN_WORK_MIN = 200; // Day16 の元の workMin と同じ（通常の作業）。
+const FORGOTTEN_BLOCK_MIN = 120; // 閉じ忘れた「動画視聴」タブグループぶん（2時間）。
+
+/**
+ * 通常の作業(09:00-12:20・200分・単独オープン)＋閉じ忘れた別タブグループ(13:00-15:00・120分・
+ * 単独オープン)を、実際の raw_sample として Day16 に積む。単独オープンのみ(divide-by-N なし)
+ * なので端数の心配がなく、集計結果は wall-clock の分数と厳密に一致する。
+ */
+function seedForgottenBlockDemo(db: DB): void {
+  const stmt = db.prepare(
+    `INSERT INTO raw_sample
+      (boot_id, seq, client_ts, monotonic_ms, tz, event_type, active_group_id,
+       active_stable_group_id, active_title, active_color, window_id, tab_id,
+       idle_state, browser_focused, open_group_keys, ext_version, received_at)
+     VALUES (?, ?, ?, ?, 'Asia/Tokyo', 'HEARTBEAT', 1, ?, ?, ?, 1, 1, 'active', 1, ?, '0.1.0-demo', ?)`,
+  );
+  const write = (bootId: string, startMs: number, endMs: number, sid: string, title: string, color: string): void => {
+    const open = JSON.stringify([{ groupId: 1, stableGroupId: sid, title, color }]);
+    let seq = 0;
+    for (let t = startMs; t <= endMs; t += 60_000) {
+      stmt.run(bootId, seq++, t, t - startMs, sid, title, color, open, t);
+    }
+  };
+  const normalStart = forgottenMs(9, 0);
+  write('demo-boot-forgotten-normal', normalStart, normalStart + FORGOTTEN_WORK_MIN * 60_000, 'demo-study', '勉強', 'blue');
+  const blockStart = forgottenMs(13, 0);
+  write('demo-boot-forgotten-video', blockStart, blockStart + FORGOTTEN_BLOCK_MIN * 60_000, 'demo-video', '動画視聴', 'pink');
+}
 
 // --- 配分バー（reflection-day-overview）用のタイムライン記録 seed（reflection-alloc-group-identity）--
 // issue #47 の再現: 同名同色（振り返り・紫）を「開き直しで別 stable_group_id」になった複数セッションとして
@@ -476,6 +515,11 @@ export function seedDemo(db: DB): void {
       insJournal.run(DEMO_GOAL_ID, dayKey, JOURNAL[i] ?? TAIL_JOURNAL[i + 1] ?? '', SEED_TS, SEED_TS);
     }
 
+    // Day16 に閉じ忘れの raw_sample を積む（timeline-record-deletion デモ）。この時点ではまだ
+    // daily_totals_snapshot は上の直接焼き込み（200分ぶん）のまま。実際の集計への反映は
+    // tx() の外で force 再集計する（recompute の transaction ネストを避けるため）。
+    seedForgottenBlockDemo(db);
+
     // 一時凍結の予約（Day10 に予約・翌日 Day11 発効・design: goal-freeze D10）。
     // 生きている凍結（goal_freeze）と、事実のログ（goal_freeze_change・op='reserve'）を両方置く。
     // 'activate'（発効）はログに書かず、この生きている行から都度合成される（design D6）。
@@ -677,4 +721,11 @@ export function seedDemo(db: DB): void {
     ).run(DEMO_ALLOC_DAY, allocMs(12, 0), allocMs(12, 45), SEED_TS, SEED_TS);
   });
   tx();
+
+  // Day16 だけ、実際の再集計・再評価パイプラインを一度通す（timeline-record-deletion デモ）。
+  // raw_sample を持つのは Day16 のみなので、他の日の daily_totals_snapshot / unlock_evaluation
+  // （直接焼き込み）には触れない。force により is_final=1 の直接焼き込み値を、閉じ忘れブロック込みの
+  // 本物の集計値（320分）へ置き換える。ここまでは POST /api/demo/reset 直後の「気づく前」の状態。
+  recompute(db, { onlyDays: [DEMO_FORGOTTEN_DAY], force: true });
+  evaluateDay(db, DEMO_FORGOTTEN_DAY, SEED_TS, { force: true });
 }

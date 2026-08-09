@@ -307,10 +307,12 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
   opacity: 0; transition: opacity 0.2s, transform 0.2s; z-index: 100; pointer-events: none;
 }
 .toast-host.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-.toast { padding: 10px 16px; border-radius: 10px; color: #fff; box-shadow: var(--shadow-lg); font-size: 13px; }
+.toast { padding: 10px 16px; border-radius: 10px; color: #fff; box-shadow: var(--shadow-lg); font-size: 13px; pointer-events: auto; display: flex; align-items: center; gap: 10px; }
 .toast-info { background: #33404d; }
 .toast-ok { background: var(--ok); }
 .toast-err { background: var(--err); }
+.toast-action { flex: none; background: rgba(255,255,255,0.18); color: #fff; border: none; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.toast-action:hover { background: rgba(255,255,255,0.3); }
 
 /* --- ショートカット提示ツールチップ / kbd チップ（shortcut-hover-hints） --- */
 .sc-tip {
@@ -458,6 +460,10 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(-
 .tlc-pop-delete:hover { background: #fad2cf; }
 .tlc-pop-delete-main { font-size: 13px; font-weight: 500; color: #c5221f; }
 .tlc-pop-delete-hint { font-size: 11px; color: #a50e0e; }
+/* AUTO ラン削除の2段階確認(spec: timeline-record-deletion / design D7)。 */
+.tlc-pop-delete-confirm { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--err-weak); }
+.tlc-pop-delete-confirm-range { font-size: 12.5px; font-weight: 500; color: #c5221f; }
+.tlc-pop-delete-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .tlc-draft-times { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
 .tlc-draft-lbl { font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
 .tlc-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

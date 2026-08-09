@@ -66,6 +66,8 @@ export const api = {
   deleteEntry: (id) => req('DELETE', `/api/timeline/entry/${id}`),
   gapToAway: (date, b) => req('POST', `/api/timeline/${date}/gap-to-away`, b),
   putSplit: (date, b) => req('PUT', `/api/timeline/${date}/split`, b),
+  addExclusion: (date, b) => req('POST', `/api/timeline/${date}/exclusions`, b),
+  removeExclusion: (id) => req('DELETE', `/api/timeline/exclusion/${id}`),
 
   // 振り返り / カンバン / PLANNING
   getReflections: () => req('GET', '/api/reflections'),

@@ -1315,4 +1315,21 @@ CREATE INDEX idx_rule_group_member_rule ON rule_group_member(rule_id, sort_order
 ALTER TABLE goal_freeze ADD COLUMN kind TEXT NOT NULL DEFAULT 'period';
 `,
   },
+  {
+    version: 28,
+    name: 'activity-exclusion',
+    // 自動記録の削除を除外レコードとして永続化する（spec: timeline-record-deletion / design.md D1）。
+    // `split_override` と同じ「再集計への持続的指示」パターン。取り消しは行の物理削除でよい。
+    sql: /* sql */ `
+CREATE TABLE activity_exclusion (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day_key TEXT NOT NULL,
+  identity_key TEXT NOT NULL,
+  start_at INTEGER NOT NULL,
+  end_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_activity_exclusion_day ON activity_exclusion(day_key);
+`,
+  },
 ];

@@ -264,13 +264,18 @@ export function filterForDisplay(perCondition: readonly ConditionResult[]): Cond
   return perCondition.filter((c) => !c.carryStale);
 }
 
-export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalResult {
+export function evaluateDay(
+  db: DB,
+  dayKey: string,
+  nowMs = Date.now(),
+  opts: { force?: boolean } = {},
+): EvalResult {
   const prev = db
     .prepare('SELECT * FROM unlock_evaluation WHERE day_key = ?')
     .get(dayKey) as UnlockRow | undefined;
 
-  // 確定済みは再評価しない（スナップショットを尊重）。
-  if (prev && prev.is_final === 1) {
+  // 確定済みは再評価しない（スナップショットを尊重）。force のときは対象日に限って上書きする（design.md D5）。
+  if (prev && prev.is_final === 1 && !opts.force) {
     return {
       dayKey,
       status: prev.status,
@@ -289,11 +294,14 @@ export function evaluateDay(db: DB, dayKey: string, nowMs = Date.now()): EvalRes
   // 全ルール AND（採用・combinator の概念は撤廃・design D3）。実効ルールが皆無なら達成不能。
   const conditionsMet = perCondition.length > 0 && perCondition.every((p) => p.met);
 
-  // latch: first_met_at は一度刻まれたら保持。
+  // latch: first_met_at は一度刻まれたら保持。ただし force（design.md D5）は削除訂正の反映のため、
+  // 条件を満たさなくなった対象日に限ってラッチを外す（未達成へ戻す）。既に met なラッチ時刻は保つ。
   const priorFirstMet = prev?.first_met_at ?? null;
   let firstMetAt = priorFirstMet;
   let justUnlocked = false;
-  if (firstMetAt === null && conditionsMet) {
+  if (opts.force && !conditionsMet) {
+    firstMetAt = null;
+  } else if (firstMetAt === null && conditionsMet) {
     firstMetAt = nowMs;
     justUnlocked = true;
   }

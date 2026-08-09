@@ -10,6 +10,9 @@ import { getDayAllocation } from './day-allocation.js';
 import { daySummary } from './summary.js';
 import { getTimeline } from './timeline.js';
 import { getDemoDb, resetDemoDb } from './demo-db.js';
+import { addAutoExclusion, removeAutoExclusion } from './timeline.js';
+import { recompute } from './recompute.js';
+import { evaluateDay } from '../rules/evaluate.js';
 import {
   seedDemo,
   DEMO_GOAL_ID,
@@ -29,6 +32,7 @@ import {
   DEMO_GOAL2_END_DAY,
   DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
   DEMO_ALLOC_DAY,
+  DEMO_FORGOTTEN_DAY,
   RULE_TOTAL_ID,
   RULE_KIN_ID,
   RULE_WALK_ID,
@@ -433,6 +437,49 @@ describe('タイムライン identity 単位化 seed（timeline-group-identity /
     expect(merged).toBeDefined();
     expect(merged!.title).toBe('英語'); // 改名前の「英会話」区間を含め、現在名の1ブロック。
     expect(tl.auto.some((b) => b.title === '英会話')).toBe(false);
+  });
+});
+
+describe('自動記録の削除デモ（timeline-record-deletion / issue #90）', () => {
+  it('閉じ忘れた「動画視聴」ブロックが谷日 Day16 に見え、削除すると総作業時間が減り取り消せる（達成日数 26 は不変）', () => {
+    const now = vnow(DEMO_AFTER_END_DAY);
+
+    // (a) デモリセット直後＝「気づく前」。閉じ忘れブロックぶんも含めて Day16 は320分（force で
+    // 一度だけ本物の集計を通した状態・seedDemo 参照）。谷日なので達成日数はまだ 26。
+    const before = getGoalReport(db, DEMO_GOAL_ID, now);
+    expect(before.goal.achievedDays).toBe(26);
+    const totalBefore = before.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
+    expect(totalBefore.cells[15]!.actualSeconds).toBe(320 * 60); // Day16(index15) = 200+120分
+
+    const tl = getTimeline(db, DEMO_FORGOTTEN_DAY);
+    const video = tl.auto.find((b) => b.title === '動画視聴')!;
+    expect(video).toBeDefined();
+    expect(video.endAt - video.startAt).toBe(120 * 60_000);
+
+    // (b) 削除（API と同じ経路: 除外レコード追加 → force 再集計 → force 再評価）。
+    const id = addAutoExclusion(db, DEMO_FORGOTTEN_DAY, {
+      identityKey: video.identityKey,
+      startAt: video.startAt,
+      endAt: video.endAt,
+    });
+    recompute(db, { onlyDays: [DEMO_FORGOTTEN_DAY], force: true });
+    evaluateDay(db, DEMO_FORGOTTEN_DAY, now, { force: true });
+
+    const after = getGoalReport(db, DEMO_GOAL_ID, now);
+    expect(after.goal.achievedDays).toBe(26); // 谷日は谷日のまま（振り返り抜けは変わらない）。
+    const totalAfter = after.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
+    expect(totalAfter.cells[15]!.actualSeconds).toBe(200 * 60); // 320分 → 200分（-2時間）。
+    expect(getTimeline(db, DEMO_FORGOTTEN_DAY).auto.some((b) => b.title === '動画視聴')).toBe(false);
+
+    // (c) 取り消し: 削除前の状態へ完全に戻る。
+    expect(removeAutoExclusion(db, id)).toBe(true);
+    recompute(db, { onlyDays: [DEMO_FORGOTTEN_DAY], force: true });
+    evaluateDay(db, DEMO_FORGOTTEN_DAY, now, { force: true });
+
+    const restored = getGoalReport(db, DEMO_GOAL_ID, now);
+    const totalRestored = restored.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
+    expect(totalRestored.cells[15]!.actualSeconds).toBe(320 * 60);
+    expect(getTimeline(db, DEMO_FORGOTTEN_DAY).auto.some((b) => b.title === '動画視聴')).toBe(true);
   });
 });
 

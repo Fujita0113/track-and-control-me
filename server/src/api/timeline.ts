@@ -8,9 +8,14 @@ import {
   deleteEntry,
   promoteGapToAway,
   setSplitOverride,
+  addAutoExclusion,
+  removeAutoExclusion,
+  getExclusionDayKey,
 } from '../services/timeline.js';
 import { todayKey } from '../services/summary.js';
 import { getDayAllocation } from '../services/day-allocation.js';
+import { recompute } from '../services/recompute.js';
+import { evaluateDay } from '../rules/evaluate.js';
 
 /** タイムライン API（tasks 6.3–6.5, 6.7）。 */
 export function registerTimelineRoutes(app: FastifyInstance, deps: ApiDeps): void {
@@ -106,6 +111,31 @@ export function registerTimelineRoutes(app: FastifyInstance, deps: ApiDeps): voi
     setSplitOverride(db, date, b.startAt, b.endAt, b.ratios);
     deps.runPipeline();
     return getTimeline(db, date);
+  });
+
+  // 自動記録の削除（除外レコード）。日付スコープ＋即時再集計（spec: timeline-record-deletion / design.md D6）。
+  app.post('/api/timeline/:date/exclusions', async (req, reply) => {
+    const { date } = req.params as { date: string };
+    const b = req.body as { identityKey?: string; startAt?: number; endAt?: number };
+    if (!b?.identityKey || b.startAt == null || b.endAt == null || b.endAt <= b.startAt) {
+      reply.code(400);
+      return { error: 'identityKey, startAt, endAt（endAt > startAt）は必須' };
+    }
+    const id = addAutoExclusion(db, date, { identityKey: b.identityKey, startAt: b.startAt, endAt: b.endAt });
+    recompute(db, { onlyDays: [date], force: true });
+    evaluateDay(db, date, Date.now(), { force: true });
+    return { id };
+  });
+
+  app.delete('/api/timeline/exclusion/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const dayKey = getExclusionDayKey(db, Number(id));
+    const restored = removeAutoExclusion(db, Number(id));
+    if (restored && dayKey) {
+      recompute(db, { onlyDays: [dayKey], force: true });
+      evaluateDay(db, dayKey, Date.now(), { force: true });
+    }
+    return { restored };
   });
 
   // 明示的に「今日」を返すユーティリティ。
