@@ -46,9 +46,14 @@ export function getPlanningSignal(db: DB, dayKey: string): PlanningSignal {
     // カンバンは期限ベースで管理するため、due=翌日 でも PLANNING を満たせる（design D4）。
     // `due` は v5 で追加のため、カラム存在をガードして後方互換にする。
     const hasDue = columnExists(db, 'task', 'due');
+    // 容れ物（子を持つタスク）は自分では手を動かせないため除外する（task-tree, design D11）。
+    const hasParentCol = columnExists(db, 'task', 'parent_task_id');
+    const notContainer = hasParentCol
+      ? 'AND NOT EXISTS (SELECT 1 FROM task c WHERE c.parent_task_id = task.id)'
+      : '';
     const sql = hasDue
-      ? "SELECT COUNT(*) AS c FROM task WHERE (planned_for = ? OR due = ?) AND status <> 'DONE'"
-      : "SELECT COUNT(*) AS c FROM task WHERE planned_for = ? AND status <> 'DONE'";
+      ? `SELECT COUNT(*) AS c FROM task WHERE (planned_for = ? OR due = ?) AND status <> 'DONE' ${notContainer}`
+      : `SELECT COUNT(*) AS c FROM task WHERE planned_for = ? AND status <> 'DONE' ${notContainer}`;
     const c = (hasDue
       ? db.prepare(sql).get(tomorrow, tomorrow)
       : db.prepare(sql).get(tomorrow)) as { c: number };

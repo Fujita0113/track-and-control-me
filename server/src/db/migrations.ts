@@ -1332,4 +1332,20 @@ CREATE TABLE activity_exclusion (
 CREATE INDEX idx_activity_exclusion_day ON activity_exclusion(day_key);
 `,
   },
+  {
+    version: 29,
+    name: 'task-tree',
+    // 深さ無制限のタスクツリー（spec: task-tree / goal-blueprint・design D1）。
+    // 新テーブルではなく task に4列足すだけ。既存行は全部 parent_task_id IS NULL /
+    // goal_id IS NULL = 根かつ目標なし＝現状と同じ挙動。ON DELETE CASCADE は付けない
+    // （子の実績が消えるため・design D8。繰り上げは deleteTask 側の責務）。
+    sql: /* sql */ `
+ALTER TABLE task ADD COLUMN parent_task_id INTEGER REFERENCES task(id);
+ALTER TABLE task ADD COLUMN goal_id INTEGER REFERENCES goal(id);
+ALTER TABLE task ADD COLUMN tree_order INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE task ADD COLUMN drop_reason TEXT;
+CREATE INDEX idx_task_parent ON task(parent_task_id, tree_order);
+CREATE INDEX idx_task_goal ON task(goal_id);
+`,
+  },
 ];

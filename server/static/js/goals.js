@@ -9,6 +9,7 @@ import { buildRuleForm, ruleDisplayLabel, ruleScheduleText, ruleKindIcon, shortD
 import { renderMarkdown } from './markdown.js';
 import { isDemo } from './demo.js';
 import { shrinkImage, isImageFile } from './images.js';
+import { render as renderBlueprint } from './blueprint.js';
 
 // デモ中は取得先を /api/demo/* + 仮想日付へ切替（通常モードは既存経路のまま）。
 function fetchGoals() {
@@ -259,6 +260,10 @@ function goalCard(g, root) {
     openBtn.addEventListener('click', () => renderReport(root, g.id));
     head.appendChild(openBtn);
   }
+  // 設計図（spec: goal-blueprint）。走る前に組むものなので、開始前の目標でも出す。
+  const blueprintBtn = h('button', { class: 'btn small', text: '設計図', type: 'button' });
+  blueprintBtn.addEventListener('click', () => openBlueprint(g, root));
+  head.appendChild(blueprintBtn);
   // 開始前はレポートを開けない（まだ1日も走っていない）ので導線を出さない。
 
   // 「終える」導線（進行中・完走どちらからも。終了済み・終了予約中には出さない）。
@@ -310,6 +315,16 @@ function goalCard(g, root) {
   for (const r of g.rules) chips.appendChild(h('span', { class: 'gr-chip', text: `${ruleKindIcon(r.target)} ${ruleDisplayLabel(r)}` }));
   card.appendChild(chips);
   return card;
+}
+
+/** 設計図を開く（spec: goal-blueprint）。レポートとは別のビューへ行き来できる（design D10）。 */
+function openBlueprint(g, root) {
+  renderBlueprint(root, g.id, {
+    goalName: g.name,
+    canOpenReport: g.status !== 'upcoming',
+    onBack: () => renderList(root),
+    onOpenReport: () => renderReport(root, g.id),
+  });
 }
 
 /**
@@ -736,6 +751,11 @@ async function renderReport(root, goalId, selectedDay) {
   const back = h('button', { class: 'gr-back', type: 'button', text: '← 目標一覧へ' });
   back.addEventListener('click', () => renderList(root));
   page.appendChild(back);
+
+  // 設計図と行き来できる（spec: goal-blueprint「設計図とレポートは互いに行き来できる」）。
+  const bpLink = h('button', { class: 'btn small', type: 'button', text: '設計図を開く' });
+  bpLink.addEventListener('click', () => openBlueprint(rep.goal, root));
+  page.appendChild(bpLink);
 
   // ヘッダ。進行中は「完走」ではなく現在の Day を出す（まだ途中の姿であることを一目で伝える）。
   const running = rep.goal.status === 'active';

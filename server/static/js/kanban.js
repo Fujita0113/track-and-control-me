@@ -133,6 +133,7 @@ export async function mount(root, opts) {
     draggingId: null,
     renamingId: null, // カード上インライン編集中のタスクID(issue #29)
     dirtyReorderCols: new Set(), // 作成中カードがいたため送信保留した列（design D2, issue #79）
+    decomposeOpen: false, // 詳細パネルの「このタスクを分解する」展開状態（task-tree）
   };
   clear(root);
   root.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
@@ -202,18 +203,21 @@ function queryAny(sel) {
 function normStatus(s) {
   return s === 'HOLD' || s === 'DOING' || s === 'DONE' ? s : 'TODO';
 }
+// 葉だけが盤面のカードになる。子を持つタスク（容れ物）は隠す（task-tree, design D3）。
 function activeTasks() {
-  return S.tasks.filter((t) => normStatus(t.status) !== 'DONE');
+  return S.tasks.filter((t) => normStatus(t.status) !== 'DONE' && !t.has_children);
 }
 function tasksFor(colKey) {
   if (colKey === 'DONE') {
     return S.tasks.filter((t) => normStatus(t.status) === 'DONE' && t.id === S.completingId);
   }
-  return S.tasks.filter((t) => normStatus(t.status) === colKey);
+  return S.tasks.filter((t) => normStatus(t.status) === colKey && !t.has_children);
 }
 function completedTodayCount() {
   return S.tasks.filter(
-    (t) => normStatus(t.status) === 'DONE' && t.done_at && localDateKey(new Date(t.done_at)) === state.today,
+    // 打ち切り（drop_reason 付き）は「やった」に数えない（task-tree, design D7）。
+    (t) => normStatus(t.status) === 'DONE' && !t.drop_reason && t.done_at
+      && localDateKey(new Date(t.done_at)) === state.today,
   ).length;
 }
 function archivedCount() {
@@ -704,6 +708,10 @@ function cardEl(t) {
         class: 'kb-card-del', type: 'button', title: '削除', draggable: 'false',
         onclick: (e) => { e.stopPropagation(); deleteTaskWithConfirm(t); },
       }, iconTrash()))));
+  // パンくずはタイトルの「上」。上から「親 › 自分」と読めないと、どちらが親か判別できない
+  // （issue #91-4。下に置くと子・タグ・カテゴリのいずれにも読めてしまう）。
+  const crumb = parentBreadcrumbEl(t);
+  if (crumb) card.appendChild(crumb);
   card.appendChild(cardTitleEl(t));
   const badge = categoryBadgeEl(t);
   if (badge) card.appendChild(badge);
@@ -768,6 +776,23 @@ function categoryBadgeEl(t) {
   }));
   badge.appendChild(h('span', { class: 'kb-cat-name', text: t.category_name }));
   return badge;
+}
+
+/**
+ * 親のパンくず（task-tree, spec: カードは親のパンくずを表示する）。
+ * 直近の親1つだけ。カテゴリバッジとは別要素で併存させる（互いを置き換えない）。
+ *
+ * カテゴリバッジと**同じ丸ピル**にすると、どちらが親か・そもそも親なのかが読めない
+ * （issue #91-4）。カテゴリ＝色ドット付きの塗りピル、パンくず＝区切り記号つきの素の小さい文字、
+ * と形ごと分ける。末尾の「›」がタイトルへ続くので、上から「親 › 自分」と読める。
+ */
+function parentBreadcrumbEl(t) {
+  if (t.parent_task_id == null) return null;
+  const parent = S.tasks.find((x) => x.id === t.parent_task_id);
+  if (!parent) return null;
+  return h('div', { class: 'kb-breadcrumb', title: `親: ${parent.title}` },
+    h('span', { class: 'kb-breadcrumb-text', text: parent.title }),
+    h('span', { class: 'kb-breadcrumb-sep', text: '›' }));
 }
 
 // --- D&D / 完了 -------------------------------------------------------------
@@ -1268,7 +1293,8 @@ function progressEl() {
 
 function logEl() {
   const rows = S.tasks
-    .filter((t) => normStatus(t.status) === 'DONE' && t.done_at
+    // 打ち切りは「完了しました」ログに出さない（やり切った完了と区別する・task-tree design D7）。
+    .filter((t) => normStatus(t.status) === 'DONE' && !t.drop_reason && t.done_at
       && localDateKey(new Date(t.done_at)) === state.today && t.id !== S.completingId)
     .sort((a, b) => b.done_at - a.done_at);
 
@@ -1305,6 +1331,7 @@ function openDetail(t) {
   S.detailId = t.id;
   S.focusNotes = !(t.notes && t.notes.trim());
   S.dueCalOpen = false;
+  S.decomposeOpen = false;
   renderAll();
   if (O.onDetailOpen) O.onDetailOpen();
 }
@@ -1313,6 +1340,7 @@ function closeDetail() {
   flushSaves();
   S.detailId = null;
   S.dueCalOpen = false;
+  S.decomposeOpen = false;
   renderAll();
 }
 
@@ -1394,7 +1422,50 @@ function detailEl(t) {
       onclick: () => deleteTaskWithConfirm(t),
     }),
     h('p', { class: 'kb-detail-hint', text: 'ノートは自動保存されます。カードはボードでドラッグして列の移動・並べ替えができます。' })));
+
+  // タブ順で削除ボタンより後ろに置く（既存 e2e: 非リスト行の Tab は削除ボタンへ到達する前提）。
+  panel.appendChild(h('div', { class: 'kb-hr' }));
+  panel.appendChild(decomposeEl(t));
   return panel;
+}
+
+/**
+ * 「このタスクを分解する」導線（task-tree, design D5）。詳細パネル内に置き、
+ * 盤面のドラッグ操作とは独立した場所なので暴発しない。1行1子タスクとして
+ * POST /api/tasks/:id/children を順番に呼ぶ。分解後は親が盤面から消えるため詳細を閉じる。
+ */
+function decomposeEl(t) {
+  const wrap = h('div', { class: 'kb-decompose' });
+  const toggle = h('button', {
+    class: 'kb-decompose-toggle', type: 'button', text: 'このタスクを分解する',
+    onclick: () => { S.decomposeOpen = !S.decomposeOpen; renderAll(); },
+  });
+  wrap.appendChild(toggle);
+  if (!S.decomposeOpen) return wrap;
+
+  const ta = h('textarea', {
+    class: 'kb-decompose-ta', rows: '3', placeholder: '1行に1つ、子タスク名を入力',
+  });
+  const submit = h('button', {
+    class: 'kb-decompose-submit', type: 'button', text: '分解する',
+    onclick: async () => {
+      const lines = ta.value.split('\n').map((s) => s.trim()).filter(Boolean);
+      if (!lines.length) return;
+      submit.disabled = true;
+      try {
+        for (const title of lines) await api.createChildTask(t.id, { title });
+        toast('分解しました', 'ok');
+        closeDetail();
+        await reload();
+      } catch (err) {
+        toast(`分解に失敗: ${err.message}`, 'err');
+        submit.disabled = false;
+      }
+    },
+  });
+  wrap.appendChild(ta);
+  wrap.appendChild(submit);
+  return wrap;
 }
 
 // --- 期限ピッカー(カレンダーポップオーバー) ------------------------------------

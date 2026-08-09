@@ -597,6 +597,19 @@ textarea.kb-composer:focus { outline: none; border-color: #BBDCC8; }
 .kb-cat-dot.neutral { background: #B7B6AF; }
 .kb-cat-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 親のパンくず（task-tree）。タイトルの上に置き、カテゴリバッジ（塗りピル）とは形ごと分ける。 */
+.kb-breadcrumb { display: flex; align-items: baseline; gap: 3px; max-width: 100%; margin-bottom: 1px; font-size: 11px; font-weight: 500; color: #9A9992; }
+.kb-breadcrumb-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-breadcrumb-sep { flex-shrink: 0; color: #C2C1BA; }
+
+/* 詳細パネルの「このタスクを分解する」（task-tree, design D5） */
+.kb-decompose { padding: 13px 16px; }
+.kb-decompose-toggle { display: flex; align-items: center; justify-content: center; width: 100%; height: 36px; background: #fff; border: 1px solid #D9DCE8; border-radius: 9px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700; color: #4A5599; }
+.kb-decompose-toggle:hover { background: #F3F4FA; }
+textarea.kb-decompose-ta { width: 100%; box-sizing: border-box; margin-top: 9px; background: #fff; border: 1px solid #D9DCE8; border-radius: 9px; padding: 9px 10px; font-family: inherit; font-size: 13px; color: #37352F; line-height: 1.45; resize: vertical; }
+.kb-decompose-submit { display: flex; align-items: center; justify-content: center; width: 100%; height: 36px; margin-top: 8px; background: #4A5599; border: none; border-radius: 9px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700; color: #fff; }
+.kb-decompose-submit:disabled { opacity: 0.6; cursor: default; }
+
 /* カテゴリ付けモードの作成後ピッカー */
 .kb-cat-pick { background: #fff; border: 1px solid #BBDCC8; border-radius: 10px; padding: 10px 11px; box-shadow: 0 0 0 3px rgba(46, 158, 99, 0.12); }
 .kb-cat-pick-lbl { font-size: 11.5px; font-weight: 700; color: #7A9A86; margin-bottom: 8px; }
@@ -1421,3 +1434,39 @@ body.rf-page .content { max-width: none; }
   .gr-chr-main { padding-left: 18px; }
   .gr-chr-plate-img { width: 120px; height: 84px; }
 }
+
+/* --- 設計図ビュー（spec: goal-blueprint） --- */
+.bp-page { max-width: 760px; margin: 0 auto; }
+.bp-back { border: none; background: transparent; color: var(--gr-accent, #3b5bb5); font-family: inherit; font-size: 13px; cursor: pointer; padding: 4px 0; margin-bottom: 14px; }
+.bp-back:hover { text-decoration: underline; }
+.bp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.bp-title { font-size: 22px; font-weight: 700; color: #26303f; margin: 0; }
+.bp-head-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.bp-mode-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; margin-bottom: 16px; }
+.bp-mode-btn { border: none; background: var(--panel-2); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 600; padding: 7px 16px; cursor: pointer; }
+.bp-mode-btn + .bp-mode-btn { border-left: 1px solid var(--line); }
+.bp-mode-btn.on { background: var(--accent); color: #fff; }
+.bp-empty { margin-top: 8px; }
+.bp-tree { display: flex; flex-direction: column; gap: 2px; }
+.bp-node { }
+.bp-node-row { display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 8px; }
+.bp-node-row:hover { background: var(--panel-2); }
+.bp-depth-1 { margin-left: 22px; }
+.bp-depth-2 { margin-left: 44px; }
+.bp-depth-3 { margin-left: 66px; }
+.bp-toggle { width: 18px; height: 18px; flex-shrink: 0; border: none; background: transparent; color: var(--muted-2); font-size: 11px; cursor: pointer; }
+.bp-toggle-spacer { width: 18px; height: 18px; flex-shrink: 0; }
+.bp-checkbox { flex-shrink: 0; }
+.bp-node-title { font-size: 14px; color: var(--text); }
+.bp-node-title.done { color: var(--muted-2); text-decoration: line-through; }
+.bp-node-notes { margin: 2px 0 4px 43px; font-size: 12.5px; color: var(--muted-2); white-space: pre-wrap; }
+.bp-node-children { display: flex; flex-direction: column; gap: 2px; }
+.bp-branch-actions { display: flex; gap: 6px; margin-left: auto; flex-shrink: 0; }
+.bp-branch-btn { border: 1px solid var(--line); background: #fff; color: var(--text); font-family: inherit; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; cursor: pointer; }
+.bp-branch-btn:hover { background: var(--panel-2); }
+.bp-branch-btn.danger { color: #b4493b; border-color: #ebd9d5; }
+.bp-branch-btn.danger:hover { background: #fbeae6; }
+.bp-import-hint { font-size: 12.5px; color: var(--muted-2); line-height: 1.6; margin: 0 0 10px; }
+.bp-import-ed { border: 1px solid var(--line); border-radius: 9px; margin-bottom: 10px; background: #fff; }
+.bp-import-ed .rf-ed { min-height: 240px; padding: 12px 14px; font-size: 13.5px; line-height: 1.7; }
+.bp-import-ph { top: 12px; left: 14px; right: 14px; font-size: 13.5px; line-height: 1.7; white-space: pre-wrap; }

@@ -5,6 +5,7 @@ import { getReflection, saveReflection, listReflections } from '../services/refl
 import { listTasks, createTask, updateTask, deleteTask, reorderTasks } from '../services/tasks.js';
 import { refreshPlanningStatus } from '../services/planning.js';
 import { todayKey } from '../services/summary.js';
+import { createChildTask, setParent, startBranch, dropBranch, TaskTreeError } from '../services/task-tree.js';
 
 /**
  * カテゴリ入力の正規化・バリデーション（kanban-task-category, design D1〜D3）。
@@ -116,6 +117,7 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
       due?: string | null;
       due_locked?: number;
       notes?: string | null;
+      parent_task_id?: number | null;
     };
     if (!b?.title) {
       reply.code(400);
@@ -126,11 +128,82 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
       reply.code(400);
       return { error: cat.error };
     }
-    const task = createTask(db, { ...b, ...(cat.value ?? {}) });
-    // 予定日/期限のどちらでも PLANNING（翌日タスク数）に影響しうるため再評価。
-    if (b.planned_for || b.due) refreshPlanningStatus(db, todayKey(db));
-    deps.runPipeline();
-    return task;
+    try {
+      // parent_task_id 付きは分解の規則（分解できない状態・列の引き継ぎ）を必ず通す（design D5）。
+      const task = b.parent_task_id
+        ? createChildTask(db, b.parent_task_id, { title: b.title, status: b.status, notes: b.notes, due: b.due })
+        : createTask(db, { ...b, ...(cat.value ?? {}) });
+      // 予定日/期限のどちらでも PLANNING（翌日タスク数）に影響しうるため再評価。
+      if (b.planned_for || b.due) refreshPlanningStatus(db, todayKey(db));
+      deps.runPipeline();
+      return task;
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // 1件だけ分解して子を作る（task-tree, design D11）。
+  app.post('/api/tasks/:id/children', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { title?: string; status?: string; notes?: string | null; due?: string | null };
+    if (!b.title) {
+      reply.code(400);
+      return { error: 'title は必須' };
+    }
+    try {
+      const child = createChildTask(db, Number(id), {
+        title: b.title,
+        status: b.status,
+        notes: b.notes,
+        due: b.due,
+      });
+      deps.runPipeline();
+      return child;
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // この枝に着手する（配下の HOLD の葉だけを TODO へ・task-tree）。
+  app.post('/api/tasks/:id/branch-start', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      startBranch(db, Number(id));
+      deps.runPipeline();
+      return { tasks: listTasks(db) };
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // この枝を打ち切る（理由必須・task-tree）。
+  app.post('/api/tasks/:id/branch-drop', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { reason?: string };
+    try {
+      dropBranch(db, Number(id), b.reason ?? '');
+      refreshPlanningStatus(db, todayKey(db));
+      deps.runPipeline();
+      return { tasks: listTasks(db) };
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
   });
 
   // 列内一括再インデックス（design D2）。影響列ごとの順序付き id 配列を 1 トランザクションで
@@ -174,10 +247,25 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
     delete patch.category_name;
     delete patch.category_color;
     if (cat.value) Object.assign(patch, cat.value);
-    const task = updateTask(db, Number(id), patch);
-    refreshPlanningStatus(db, todayKey(db));
-    deps.runPipeline();
-    return task ?? { error: 'not found' };
+    // parent_task_id の変更は必ず setParent の循環検査を通す（design D6・tasks 3.3）。
+    const parentTaskId = patch.parent_task_id;
+    delete patch.parent_task_id;
+    delete patch.tree_order;
+    try {
+      if (parentTaskId !== undefined && parentTaskId !== null) {
+        setParent(db, Number(id), Number(parentTaskId));
+      }
+      const task = updateTask(db, Number(id), patch);
+      refreshPlanningStatus(db, todayKey(db));
+      deps.runPipeline();
+      return task ?? { error: 'not found' };
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
   });
 
   app.delete('/api/tasks/:id', async (req) => {

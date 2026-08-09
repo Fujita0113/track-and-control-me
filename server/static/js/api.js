@@ -82,6 +82,15 @@ export const api = {
   deleteTask: (id) => req('DELETE', `/api/tasks/${id}`),
   getPlanning: (date) => req('GET', `/api/planning/${date}`),
 
+  // タスクツリー（分解・枝の着手/打ち切り・spec: task-tree）
+  createChildTask: (taskId, b) => req('POST', `/api/tasks/${taskId}/children`, b),
+  startBranch: (taskId) => req('POST', `/api/tasks/${taskId}/branch-start`),
+  dropBranch: (taskId, reason) => req('POST', `/api/tasks/${taskId}/branch-drop`, { reason }),
+
+  // 設計図（目標単位のタスクツリー・spec: goal-blueprint）
+  getGoalBlueprint: (goalId) => req('GET', `/api/goals/${goalId}/blueprint`),
+  importGoalBlueprint: (goalId, text) => req('POST', `/api/goals/${goalId}/blueprint/import`, { text }),
+
   // 30日チャレンジ（目標）。ルールは目標作成時／振り返りタブの目標コーナーでのみ追加できる
   // （「採用」は廃止・今日タブに書き込み動線は無い・spec: editable-rule-registry）。
   getGoals: () => req('GET', '/api/goals'),
@@ -151,6 +160,7 @@ export const api = {
     allocation: (date) => req('GET', `/api/demo/timeline/${date}/allocation`),
     dueRules: (now) => req('GET', `/api/demo/due-rules?${q({ now })}`),
     chronicle: (id, now) => req('GET', `/api/demo/goals/${id}/chronicle?${q({ now })}`),
+    blueprint: (id, now) => req('GET', `/api/demo/goals/${id}/blueprint?${q({ now })}`),
     freezeQuota: (now) => req('GET', `/api/demo/goals/freeze/quota?${q({ now })}`),
     // now = 呼び出し側が渡す state.demo.virtualDay（api.js は state.js を import しない設計のため明示で受け取る）。
     addGoalRule: (goalId, input, now) => req('POST', `/api/demo/goals/${goalId}/rules`, { ...input, now }),

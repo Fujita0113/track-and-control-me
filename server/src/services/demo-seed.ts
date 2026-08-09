@@ -302,6 +302,44 @@ const IMG_SKY = solidPng([132, 178, 214]); // 空色（範囲Check の「その�
 const IMG_DESK = solidPng([196, 172, 140]); // 木目（単発Check の「朝の机」）
 
 /**
+ * 主目標の設計図サンプル（spec: task-tree / goal-blueprint・プロジェクト必須ルール:
+ * 日数が関わる機能はデモモードで成果を明示する）。3階層・一部完了・進行中の葉を1つ持つ。
+ * 集計テーブル（task）へ直接焼き込むだけで日々の集計（daily_totals_snapshot 等）には触れない。
+ * `Date.now()` 非依存（固定タイムスタンプ SEED_TS のみ）。
+ */
+function seedBlueprintDemo(db: DB): void {
+  const insTask = db.prepare(
+    `INSERT INTO task
+       (title, description, status, planned_for, priority, due, due_locked, notes, sort_order,
+        parent_task_id, goal_id, tree_order, drop_reason, created_at, done_at, updated_at)
+     VALUES (@title, NULL, @status, NULL, 'low', NULL, 0, @notes, @order,
+             @parent, @goal, @order, NULL, @now, @doneAt, @now)`,
+  );
+  const ins = (
+    title: string,
+    status: string,
+    parent: number | null,
+    goal: number | null,
+    order: number,
+    notes: string | null = null,
+  ): number =>
+    insTask.run({ title, status, notes, parent, goal, order, now: SEED_TS, doneAt: status === 'DONE' ? SEED_TS : null })
+      .lastInsertRowid as number;
+
+  // 枝1: 質問への回答（2件完了/進行中1件のさらに下の枝で3階層を作る）。
+  const root1 = ins('苦手な質問への回答を用意する', 'HOLD', null, DEMO_GOAL_ID, 0);
+  ins('質問をピックアップする', 'DONE', root1, null, 0, '去年の資料から。20問くらいに絞る。');
+  const branch1b = ins('回答をまとめる', 'HOLD', root1, null, 1);
+  ins('Notion に下書きする', 'DOING', branch1b, null, 0); // 進行中の葉（openPath がここへ至る）
+  ins('先輩にレビューしてもらう', 'HOLD', branch1b, null, 1);
+
+  // 枝2: 志望動機（1件完了・1件未着手）。
+  const root2 = ins('志望動機を明確にする', 'HOLD', null, DEMO_GOAL_ID, 1);
+  ins('企業研究をする', 'DONE', root2, null, 0);
+  ins('自己分析をする', 'TODO', root2, null, 1);
+}
+
+/**
  * ⑤沿革のサンプル（Plan / Check / 回答 / 取り下げ）を焼き込む。
  * すべて固定 day_key・固定タイムスタンプ（`Date.now()` 非依存）。写真ルール・質問ルールは
  * 第一級 `rule` 行（旧 Plan/Check は撤去済み・design: goal-chronicle）。関連するルールは
@@ -548,6 +586,7 @@ export function seedDemo(db: DB): void {
     insImg.run(DEMO_GOAL_ID, DEMO_END_DAY, '記念', IMG_AFTER, 2, SEED_TS);
 
     seedRuleChronicle(db);
+    seedBlueprintDemo(db);
 
     // --- 2つ目のデモ目標: 手動チェックのみ（非時間型）を追った完走目標 -----------
     // 時間型ルールが無いため、完走レポートは①達成カレンダーのみ・②時間の推移は出ない。

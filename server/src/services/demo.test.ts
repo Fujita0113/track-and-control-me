@@ -13,6 +13,8 @@ import { getDemoDb, resetDemoDb } from './demo-db.js';
 import { addAutoExclusion, removeAutoExclusion } from './timeline.js';
 import { recompute } from './recompute.js';
 import { evaluateDay } from '../rules/evaluate.js';
+import { listTasks } from './tasks.js';
+import { getBlueprint, computeOpenPath, type BlueprintNode } from './task-tree.js';
 import {
   seedDemo,
   DEMO_GOAL_ID,
@@ -49,6 +51,11 @@ const vnow = (dayKey: string): number => {
   const [y, m, d] = dayKey.split('-').map(Number);
   return zonedTimeToEpoch(y!, m!, d!, 12, 0, 0, TZ);
 };
+
+/** 設計図ノードを自身+子孫すべてへ平坦化する（テストの id 探索用）。 */
+function flattenIds(node: BlueprintNode): BlueprintNode[] {
+  return [node, ...node.children.flatMap(flattenIds)];
+}
 
 let db: DB;
 beforeEach(() => {
@@ -480,6 +487,49 @@ describe('自動記録の削除デモ（timeline-record-deletion / issue #90）'
     const totalRestored = restored.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
     expect(totalRestored.cells[15]!.actualSeconds).toBe(320 * 60);
     expect(getTimeline(db, DEMO_FORGOTTEN_DAY).auto.some((b) => b.title === '動画視聴')).toBe(true);
+  });
+});
+
+describe('設計図のサンプル（spec: task-tree / goal-blueprint）', () => {
+  it('主目標の設計図は3階層・一部完了・進行中の葉を1つ持ち、達成日数の筋書きを変えない', () => {
+    const now = vnow(DEMO_AFTER_END_DAY);
+    const rep = getGoalReport(db, DEMO_GOAL_ID, now);
+    expect(rep.goal.achievedDays).toBe(26); // 設計図サンプルは task へ直接焼き込むだけ・集計は不変。
+
+    const { nodes } = getBlueprint(db, DEMO_GOAL_ID);
+    expect(nodes.map((n) => n.title)).toEqual(['苦手な質問への回答を用意する', '志望動機を明確にする']);
+
+    const branch1 = nodes[0]!;
+    const pickUp = branch1.children.find((n) => n.title === '質問をピックアップする')!;
+    expect(pickUp.done).toBe(true); // 完了済みの葉。
+    expect(pickUp.notes).toBe('去年の資料から。20問くらいに絞る。');
+
+    const summarize = branch1.children.find((n) => n.title === '回答をまとめる')!;
+    expect(summarize.children).toHaveLength(2); // 3階層目（容れ物のさらに下）。
+    const draft = summarize.children.find((n) => n.title === 'Notion に下書きする')!;
+    expect(draft.status).toBe('DOING'); // 進行中の葉。
+    expect(draft.done).toBe(false);
+    expect(summarize.done).toBe(false); // 未決着の子孫を持つため容れ物はまだ未完了。
+    expect(branch1.done).toBe(false);
+
+    const branch2 = nodes[1]!;
+    expect(branch2.children.map((n) => n.title)).toEqual(['企業研究をする', '自己分析をする']);
+    expect(branch2.children.find((n) => n.title === '企業研究をする')!.done).toBe(true);
+    expect(branch2.children.find((n) => n.title === '自己分析をする')!.done).toBe(false);
+
+    // 展開規則: 進行中の葉（Notion に下書きする）へ至る枝だけが開く（design D10）。
+    const idOf = (title: string): number => nodes.flatMap(flattenIds).find((n) => n.title === title)!.id;
+    const open = computeOpenPath(nodes);
+    expect(open).toEqual([idOf('苦手な質問への回答を用意する'), idOf('回答をまとめる')]);
+  });
+
+  it('容れ物（回答をまとめる）は葉だけがカンバンのカードになる盤面から隠れる', () => {
+    const rows = listTasks(db);
+    const summarize = rows.find((t) => t.title === '回答をまとめる')!;
+    expect(summarize.has_children).toBe(1);
+    const draft = rows.find((t) => t.title === 'Notion に下書きする')!;
+    expect(draft.has_children).toBe(0);
+    expect(draft.parent_task_id).toBe(summarize.id);
   });
 });
 

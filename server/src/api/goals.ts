@@ -38,6 +38,7 @@ import {
   type GoalStart,
 } from '../services/goals.js';
 import { goalHistory } from '../services/goal-history.js';
+import { getBlueprint, importBlueprint, computeOpenPath, TaskTreeError } from '../services/task-tree.js';
 import {
   reserveFreeze,
   reserveFreezeMulti,
@@ -179,6 +180,37 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     try {
       return getGoalReport(db, id);
     } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  // --- 設計図（目標単位のタスクツリー・spec: goal-blueprint）---------------
+
+  app.get('/api/goals/:id/blueprint', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      getGoal(db, id); // 存在確認（無ければ 404）。
+      const blueprint = getBlueprint(db, id);
+      return { nodes: blueprint.nodes, openPath: computeOpenPath(blueprint.nodes) };
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  app.post('/api/goals/:id/blueprint/import', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const b = (req.body ?? {}) as { text?: string };
+    try {
+      getGoal(db, id); // 存在確認（無ければ 404）。
+      importBlueprint(db, id, b.text ?? '');
+      deps.runPipeline();
+      const blueprint = getBlueprint(db, id);
+      return { nodes: blueprint.nodes, openPath: computeOpenPath(blueprint.nodes) };
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
       return replyGoalError(err, reply);
     }
   });

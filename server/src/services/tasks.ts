@@ -30,10 +30,28 @@ export interface TaskRow {
   created_at: number;
   done_at: number | null;
   updated_at: number;
+  /**
+   * タスクツリー（task-tree, design D1）。parent_task_id が NULL のタスクを根と呼ぶ。
+   * goal_id は根にだけ入る（子は親を辿れば分かる・design D1）。
+   * drop_reason は非 NULL で「打ち切り」を表す（status='DONE' に相乗り・design D7）。
+   */
+  parent_task_id: number | null;
+  goal_id: number | null;
+  tree_order: number;
+  drop_reason: string | null;
+  /** listTasks 限定で付与（design D3）。1 = 子を持つ「容れ物」。getTask/createTask の戻り値には無い。 */
+  has_children?: number;
 }
 
 export function listTasks(db: DB): TaskRow[] {
-  return db.prepare('SELECT * FROM task ORDER BY status, sort_order, id').all() as TaskRow[];
+  return db
+    .prepare(
+      `SELECT task.*,
+              EXISTS(SELECT 1 FROM task c WHERE c.parent_task_id = task.id) AS has_children
+       FROM task
+       ORDER BY status, sort_order, id`,
+    )
+    .all() as TaskRow[];
 }
 
 export function getTask(db: DB, id: number): TaskRow | undefined {
@@ -54,6 +72,10 @@ export interface TaskInput {
   category_group_id?: string | null;
   category_name?: string | null;
   category_color?: string | null;
+  /** タスクツリー（task-tree）。未指定は根＝現状と同じ挙動。 */
+  parent_task_id?: number | null;
+  goal_id?: number | null;
+  tree_order?: number;
 }
 
 function normPriority(v: unknown): TaskPriority {
@@ -75,8 +97,9 @@ export function createTask(db: DB, input: TaskInput): TaskRow {
   const info = db
     .prepare(
       `INSERT INTO task (title, description, status, planned_for, priority, due, due_locked, notes, sort_order,
-                         category_group_id, category_name, category_color, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                         category_group_id, category_name, category_color,
+                         parent_task_id, goal_id, tree_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.title,
@@ -91,6 +114,9 @@ export function createTask(db: DB, input: TaskInput): TaskRow {
       input.category_group_id ?? null,
       input.category_name ?? null,
       input.category_color ?? null,
+      input.parent_task_id ?? null,
+      input.goal_id ?? null,
+      input.tree_order ?? 0,
       now,
       now,
     );
@@ -111,6 +137,9 @@ const PATCHABLE = [
   'category_group_id',
   'category_name',
   'category_color',
+  // タスクツリー（task-tree）。parent_task_id の変更は呼び出し側で setParent の循環検査を通すこと（design D6）。
+  'parent_task_id',
+  'tree_order',
 ] as const;
 
 export function updateTask(
@@ -137,10 +166,12 @@ export function updateTask(
     }
   }
   // DONE へ遷移したら done_at を刻む（履歴保持）。DONE から離脱で解除。
+  // 離脱時は drop_reason も解除する（打ち切りではなく、未着手へ戻ったことになるため・design D7）。
   if (patch.status === 'DONE' && existing.status !== 'DONE') {
     fields.push('done_at = @now');
   } else if (patch.status && patch.status !== 'DONE') {
     fields.push('done_at = NULL');
+    fields.push('drop_reason = NULL');
   }
   if (fields.length > 0) {
     db.prepare(`UPDATE task SET ${fields.join(', ')}, updated_at = @now WHERE id = @id`).run(params);
@@ -148,8 +179,30 @@ export function updateTask(
   return getTask(db, id);
 }
 
+/**
+ * 削除は子を道連れにしない（task-tree, design D8）。子は「削除される行の親」へ繰り上げ、
+ * 根へ上がる場合（消える行が根だった場合）は、消える行の goal_id を子へ配る。
+ * ON DELETE CASCADE を付けていないため、繰り上げは行の削除前にアプリ側で行う。
+ */
 export function deleteTask(db: DB, id: number): boolean {
-  return db.prepare('DELETE FROM task WHERE id = ?').run(id).changes > 0;
+  const existing = getTask(db, id);
+  if (!existing) return false;
+  const tx = db.transaction(() => {
+    if (existing.parent_task_id === null) {
+      db.prepare('UPDATE task SET parent_task_id = NULL, goal_id = ? WHERE parent_task_id = ?').run(
+        existing.goal_id,
+        id,
+      );
+    } else {
+      db.prepare('UPDATE task SET parent_task_id = ? WHERE parent_task_id = ?').run(
+        existing.parent_task_id,
+        id,
+      );
+    }
+    db.prepare('DELETE FROM task WHERE id = ?').run(id);
+  });
+  tx();
+  return true;
 }
 
 /** 並べ替えの 1 列分：この status 列を ids の順に並べる（sort_order = 0,1,2,…）。 */

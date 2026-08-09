@@ -32,6 +32,7 @@ import { freezeQuota } from '../services/goal-freeze.js';
 import { daySummary } from '../services/summary.js';
 import { getDayAllocation } from '../services/day-allocation.js';
 import { getDemoDb, resetDemoDb } from '../services/demo-db.js';
+import { getBlueprint, computeOpenPath } from '../services/task-tree.js';
 import {
   DEMO_START_DAY,
   DEMO_END_DAY,
@@ -151,6 +152,23 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
       if (err instanceof GoalReportNotReadyError) {
         reply.code(409);
         return { error: err.message, notReady: true };
+      }
+      throw err;
+    }
+  });
+
+  // GET /api/demo/goals/:id/blueprint — 設計図（デモ DB・読み取り専用・spec: goal-blueprint）。
+  app.get('/api/demo/goals/:id/blueprint', async (req, reply) => {
+    const db = getDemoDb();
+    const id = Number((req.params as { id: string }).id);
+    try {
+      getGoal(db, id); // 存在確認（無ければ 404）。
+      const blueprint = getBlueprint(db, id);
+      return { nodes: blueprint.nodes, openPath: computeOpenPath(blueprint.nodes) };
+    } catch (err) {
+      if (err instanceof GoalNotFoundError) {
+        reply.code(404);
+        return { error: err.message };
       }
       throw err;
     }
