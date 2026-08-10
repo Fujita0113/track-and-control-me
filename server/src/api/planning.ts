@@ -5,7 +5,16 @@ import { getReflection, saveReflection, listReflections } from '../services/refl
 import { listTasks, createTask, updateTask, deleteTask, reorderTasks } from '../services/tasks.js';
 import { refreshPlanningStatus } from '../services/planning.js';
 import { todayKey } from '../services/summary.js';
-import { createChildTask, setParent, startBranch, dropBranch, TaskTreeError } from '../services/task-tree.js';
+import {
+  createChildTask,
+  createSiblingTask,
+  setTreePosition,
+  setSubtreeDone,
+  setParent,
+  startBranch,
+  dropBranch,
+  TaskTreeError,
+} from '../services/task-tree.js';
 
 /**
  * カテゴリ入力の正規化・バリデーション（kanban-task-category, design D1〜D3）。
@@ -163,6 +172,64 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
       });
       deps.runPipeline();
       return child;
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // Enter: 対象の部分木の直後に、同じ深さで1件足す（task-list-card-tree-ui design D5）。
+  app.post('/api/tasks/:id/siblings', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { title?: string };
+    if (!b.title || !b.title.trim()) {
+      reply.code(400);
+      return { error: 'title は必須' };
+    }
+    try {
+      const sib = createSiblingTask(db, Number(id), b.title.trim());
+      deps.runPipeline();
+      return sib;
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // Tab / Shift+Tab: 階層をその場で1段動かす（task-list-card-tree-ui design D4）。
+  app.patch('/api/tasks/:id/tree-position', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { parentId?: number | null; afterTaskId?: number | null };
+    try {
+      setTreePosition(db, Number(id), {
+        parentId: b.parentId ?? null,
+        afterTaskId: b.afterTaskId ?? null,
+      });
+      deps.runPipeline();
+      return { tasks: listTasks(db) };
+    } catch (err) {
+      if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // 容れ物のチェック / Alt+C: 部分木の葉をまとめて切り替える（task-list-card-tree-ui design D6）。
+  app.post('/api/tasks/:id/subtree-done', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { done?: boolean };
+    try {
+      setSubtreeDone(db, Number(id), !!b.done);
+      deps.runPipeline();
+      return { tasks: listTasks(db) };
     } catch (err) {
       if (err instanceof TaskTreeError) {
         reply.code(400);

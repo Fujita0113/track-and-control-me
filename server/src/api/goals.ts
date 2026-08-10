@@ -38,7 +38,7 @@ import {
   type GoalStart,
 } from '../services/goals.js';
 import { goalHistory } from '../services/goal-history.js';
-import { getBlueprint, importBlueprint, computeOpenPath, TaskTreeError } from '../services/task-tree.js';
+import { getBlueprint, importBlueprint, computeOpenPath, createRootTask, TaskTreeError } from '../services/task-tree.js';
 import {
   reserveFreeze,
   reserveFreezeMulti,
@@ -197,12 +197,30 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     }
   });
 
-  app.post('/api/goals/:id/blueprint/import', async (req, reply) => {
+  // 根に1件だけ足す（タスク一覧の「＋ 新しい枝を足す」・task-list-inline-edit design D9）。
+  app.post('/api/goals/:id/blueprint/root', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
-    const b = (req.body ?? {}) as { text?: string };
+    const b = (req.body ?? {}) as { title?: string };
     try {
       getGoal(db, id); // 存在確認（無ければ 404）。
-      importBlueprint(db, id, b.text ?? '');
+      if (!b.title || !b.title.trim()) {
+        reply.code(400);
+        return { error: 'title は必須' };
+      }
+      const task = createRootTask(db, id, b.title.trim());
+      deps.runPipeline();
+      return task;
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  app.post('/api/goals/:id/blueprint/import', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const b = (req.body ?? {}) as { text?: string; parentTaskId?: number | null };
+    try {
+      getGoal(db, id); // 存在確認（無ければ 404）。
+      importBlueprint(db, id, b.text ?? '', b.parentTaskId ?? null);
       deps.runPipeline();
       const blueprint = getBlueprint(db, id);
       return { nodes: blueprint.nodes, openPath: computeOpenPath(blueprint.nodes) };

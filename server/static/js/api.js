@@ -87,9 +87,17 @@ export const api = {
   startBranch: (taskId) => req('POST', `/api/tasks/${taskId}/branch-start`),
   dropBranch: (taskId, reason) => req('POST', `/api/tasks/${taskId}/branch-drop`, { reason }),
 
+  // タスク一覧のキーボード操作（spec: goal-blueprint「キーボードだけで組める」）
+  createSiblingTask: (taskId, title) => req('POST', `/api/tasks/${taskId}/siblings`, { title }),
+  setTaskTreePosition: (taskId, { parentId, afterTaskId }) =>
+    req('PATCH', `/api/tasks/${taskId}/tree-position`, { parentId, afterTaskId }),
+  setSubtreeDone: (taskId, done) => req('POST', `/api/tasks/${taskId}/subtree-done`, { done }),
+
   // 設計図（目標単位のタスクツリー・spec: goal-blueprint）
   getGoalBlueprint: (goalId) => req('GET', `/api/goals/${goalId}/blueprint`),
-  importGoalBlueprint: (goalId, text) => req('POST', `/api/goals/${goalId}/blueprint/import`, { text }),
+  createGoalBlueprintRoot: (goalId, title) => req('POST', `/api/goals/${goalId}/blueprint/root`, { title }),
+  importGoalBlueprint: (goalId, text, parentTaskId) =>
+    req('POST', `/api/goals/${goalId}/blueprint/import`, { text, parentTaskId }),
 
   // 30日チャレンジ（目標）。ルールは目標作成時／振り返りタブの目標コーナーでのみ追加できる
   // （「採用」は廃止・今日タブに書き込み動線は無い・spec: editable-rule-registry）。

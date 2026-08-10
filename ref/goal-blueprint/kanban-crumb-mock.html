@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>参照実装 — カンバンカードのパンくず帯（design doc t2/2a）</title>
+<!--
+  Claude Design プロジェクト「プロジェクト進捗管理UI改修」
+  https://claude.ai/design/p/ad0c8cf7-83be-4c95-af88-60b4e1038451?file=Task+Tree.dc.html
+  の t2 / 2a「カンバン — カード上段が『目標 › 親タスク』のパンくず」を静的 HTML へ写したもの。
+
+  design doc からの意図的な差異が2つある（change `task-list-card-tree-ui` design D1/D3 に対応）:
+
+  1. **パンくずの親は「直近の親」にした。** design doc の「コースを決める」は直近の親が
+     「朝の散歩を20分」なのに帯は「運動を習慣にする」と出ており、同じモック内で
+     「朝の散歩を20分」自体もカード化されている（＝葉のはずなのに子を持つ）。モックが
+     自己矛盾しているので、既存 spec `task-tree`「深いツリーでも親は1つだけ」と整合する
+     読み方を採り、ツリーを「どのカードも葉」に整えて描き直した。結果として
+     直近の親＝根の枝になり、design doc と同じ絵になる。
+  2. **帯はカードの最上段**。現行の `.kb-card` は優先度ピル＋期日の行（`.kb-card-top`）が
+     先頭にあるので、帯はその**上**へ入る。design doc も帯が最上段。
+
+  色はカードの属する**根の枝**で決まる（同じ目標の中でも枝ごとに変わる）。
+  これは見た目の正典であって実装ではない。値を変えるときは delta spec も直すこと。
+-->
+<style>
+body { margin: 0; background: #eceef2; font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+.shell { width: 1300px; margin: 24px auto; background: #fff; border: 1px solid rgba(0,0,0,.08); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06); overflow: hidden; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 22px; background: #fff; border-bottom: 1px solid #e3e8ef; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-dot { width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg,#1a73e8,#7c4dff); }
+.brand-name { font-weight: 700; font-size: 15px; color: #1b2733; }
+.topbar-meta { color: #66727f; font-size: 12.5px; }
+.tabs { display: flex; gap: 4px; padding: 8px 16px 0; background: #fff; border-bottom: 1px solid #e3e8ef; }
+.tab { color: #66727f; padding: 9px 14px; font-size: 13.5px; border-bottom: 2px solid transparent; }
+.tab.active { color: #1a73e8; font-weight: 600; border-bottom-color: #1a73e8; }
+.stage { background: #F6F5F2; padding: 20px; color: #37352F; }
+
+.board { display: flex; gap: 14px; align-items: flex-start; }
+.col { display: flex; flex-direction: column; background: #FBFBF9; border: 1px solid #ECEBE7; border-radius: 13px; padding: 12px; width: 300px; flex-shrink: 0; }
+.col-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; padding: 0 2px; }
+.col-name { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 700; }
+.col-dot { width: 9px; height: 9px; border-radius: 3px; transform: rotate(45deg); background: #C7C5BE; }
+.col-count { min-width: 22px; height: 20px; padding: 0 7px; border-radius: 6px; background: #F0EFEB; color: #8A8983; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.col-list { display: flex; flex-direction: column; gap: 9px; padding: 2px; }
+
+.card { background: #fff; border: 1px solid #EAE9E4; border-radius: 10px; padding: 12px; box-shadow: 0 1px 2px rgba(40,38,32,.04); }
+.card.lift { box-shadow: 0 7px 20px rgba(40,38,32,.10); }
+
+/* パンくず帯。カードの padding を打ち消して上端いっぱいに敷く。 */
+.crumb { display: flex; align-items: center; gap: 6px; margin: -12px -12px 9px; padding: 7px 11px 6px; border-radius: 9px 9px 0 0; }
+.crumb-icon { display: block; width: 13px; height: 10px; flex-shrink: 0; border-radius: 2px 3px 3px 3px; opacity: .85; clip-path: polygon(0 0,42% 0,52% 22%,100% 22%,100% 100%,0 100%); }
+.crumb-text { display: flex; align-items: baseline; min-width: 0; font-size: 11px; font-weight: 600; }
+.crumb-goal { flex: 0 1 auto; min-width: 0; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb-sep { flex: none; opacity: .45; padding: 0 4px; }
+.crumb-parent { flex: 0 1 auto; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.crumb.c-green { background: #E9F5EE; border-bottom: 1px solid #CFE7D8; color: #2E7D54; }
+.crumb.c-green .crumb-icon { background: #2E7D54; }
+.crumb.c-blue { background: #E7F0FA; border-bottom: 1px solid #D3E3F5; color: #2C5C8C; }
+.crumb.c-blue .crumb-icon { background: #2C5C8C; }
+.crumb.c-purple { background: #F3F0FA; border-bottom: 1px solid #E2DBF2; color: #5B4A9A; }
+.crumb.c-purple .crumb-icon { background: #5B4A9A; }
+
+.card-title { font-size: 14.5px; font-weight: 600; line-height: 1.45; }
+.card-title.done { color: #9B9A94; text-decoration: line-through; }
+.card-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.cat { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 7px; background: #F4F3EF; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: #5E5D57; }
+.cat-dot { width: 8px; height: 8px; border-radius: 50%; }
+.due { font-size: 11.5px; color: #9B9A94; }
+.addcard { display: flex; align-items: center; gap: 7px; width: 100%; padding: 8px 10px; background: transparent; border: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; color: #9B9A94; text-align: left; }
+
+.note { width: 1300px; margin: 0 auto 8px; font-size: 12px; color: #66727f; }
+</style>
+</head>
+<body>
+
+<p class="note">
+  想定ツリー: 目標「メンタルを安定させる」の下に3つの枝 —
+  <b style="color:#2C5C8C">睡眠のリズムを整える（青）</b> /
+  <b style="color:#2E7D54">運動を習慣にする（緑）</b> /
+  <b style="color:#5B4A9A">週次で気分を振り返る（紫）</b>。カードはすべて葉。
+</p>
+
+<div class="shell">
+  <div class="topbar">
+    <div class="brand"><span class="brand-dot"></span><span class="brand-name">Track &amp; Control Me</span></div>
+    <div class="topbar-meta">作業日 2026-08-09 · tz Asia/Tokyo</div>
+  </div>
+  <div class="tabs">
+    <div class="tab">今日</div><div class="tab">振り返り</div><div class="tab active">カンバン</div><div class="tab">目標</div><div class="tab">設定</div>
+  </div>
+  <div class="stage">
+    <div class="board">
+
+      <div class="col">
+        <div class="col-head">
+          <div class="col-name"><span class="col-dot"></span>保留</div>
+          <span class="col-count">1</span>
+        </div>
+        <div class="col-list">
+          <div class="card">
+            <div class="crumb c-green">
+              <span class="crumb-icon"></span>
+              <span class="crumb-text"><span class="crumb-goal">メンタルを安定させる</span><span class="crumb-sep">/</span><span class="crumb-parent">運動を習慣にする</span></span>
+            </div>
+            <div class="card-title">コースを決める</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="col-head">
+          <div class="col-name"><span class="col-dot"></span>未着手</div>
+          <span class="col-count">2</span>
+        </div>
+        <div class="col-list">
+          <div class="card">
+            <div class="crumb c-blue">
+              <span class="crumb-icon"></span>
+              <span class="crumb-text"><span class="crumb-goal">メンタルを安定させる</span><span class="crumb-sep">/</span><span class="crumb-parent">睡眠のリズムを整える</span></span>
+            </div>
+            <div class="card-title">起床時間を1週間記録する</div>
+            <div class="card-foot">
+              <span class="cat"><span class="cat-dot" style="background:#5f6368"></span>生活</span>
+              <span class="due">8/12</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="crumb c-purple">
+              <span class="crumb-icon"></span>
+              <span class="crumb-text"><span class="crumb-goal">メンタルを安定させる</span><span class="crumb-sep">/</span><span class="crumb-parent">週次で気分を振り返る</span></span>
+            </div>
+            <div class="card-title">日曜に10分の振り返り枠を取る</div>
+          </div>
+          <button class="addcard" type="button">＋ 新規タスク</button>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="col-head">
+          <div class="col-name" style="color:#2C5C8C"><span class="col-dot" style="background:#4F86C7"></span>進行中</div>
+          <span class="col-count" style="background:#E7F0FA;color:#2C5C8C">1</span>
+        </div>
+        <div class="col-list">
+          <div class="card lift">
+            <div class="crumb c-green">
+              <span class="crumb-icon"></span>
+              <span class="crumb-text"><span class="crumb-goal">メンタルを安定させる</span><span class="crumb-sep">/</span><span class="crumb-parent">運動を習慣にする</span></span>
+            </div>
+            <div class="card-title">朝の散歩を20分</div>
+            <div class="card-foot">
+              <span class="cat"><span class="cat-dot" style="background:#2E9E63"></span>運動</span>
+              <span class="due">今日</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="col-head">
+          <div class="col-name" style="color:#2E7D54"><span class="col-dot" style="background:#2E9E63"></span>完了</div>
+          <span class="col-count" style="background:#E9F5EE;color:#2E7D54">2</span>
+        </div>
+        <div class="col-list">
+          <div class="card">
+            <div class="crumb c-blue">
+              <span class="crumb-icon"></span>
+              <span class="crumb-text"><span class="crumb-goal">メンタルを安定させる</span><span class="crumb-sep">/</span><span class="crumb-parent">睡眠のリズムを整える</span></span>
+            </div>
+            <div class="card-title done">23時にアラームを設定する</div>
+          </div>
+          <div class="card">
+            <div class="crumb c-blue">
+              <span class="crumb-icon"></span>
+              <span class="crumb-text"><span class="crumb-goal">メンタルを安定させる</span><span class="crumb-sep">/</span><span class="crumb-parent">睡眠のリズムを整える</span></span>
+            </div>
+            <div class="card-title done">寝室からPCを出す</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  ② 目標に属さないタスク（`POST /api/tasks` で直接作った根）を分解した場合。目標名が引けないので
+  帯には親だけが出て、区切りの「/」も出ない。色は根の枝の id から決まる。
+</p>
+<div class="shell" style="width:340px">
+  <div class="stage" style="padding:14px">
+    <div class="card" style="background:#fff;border:1px solid #EAE9E4;border-radius:10px;padding:12px">
+      <div class="crumb c-purple">
+        <span class="crumb-icon"></span>
+        <span class="crumb-text"><span class="crumb-parent">買い物リストを作る</span></span>
+      </div>
+      <div class="card-title">牛乳を買う</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

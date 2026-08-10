@@ -260,8 +260,8 @@ function goalCard(g, root) {
     openBtn.addEventListener('click', () => renderReport(root, g.id));
     head.appendChild(openBtn);
   }
-  // 設計図（spec: goal-blueprint）。走る前に組むものなので、開始前の目標でも出す。
-  const blueprintBtn = h('button', { class: 'btn small', text: '設計図', type: 'button' });
+  // タスク一覧（spec: goal-blueprint）。走る前に組むものなので、開始前の目標でも出す。
+  const blueprintBtn = h('button', { class: 'btn small', text: 'タスク一覧', type: 'button' });
   blueprintBtn.addEventListener('click', () => openBlueprint(g, root));
   head.appendChild(blueprintBtn);
   // 開始前はレポートを開けない（まだ1日も走っていない）ので導線を出さない。
@@ -317,7 +317,7 @@ function goalCard(g, root) {
   return card;
 }
 
-/** 設計図を開く（spec: goal-blueprint）。レポートとは別のビューへ行き来できる（design D10）。 */
+/** タスク一覧を開く（spec: goal-blueprint）。レポートとは別のビューへ行き来できる（design D10）。 */
 function openBlueprint(g, root) {
   renderBlueprint(root, g.id, {
     goalName: g.name,
@@ -752,8 +752,8 @@ async function renderReport(root, goalId, selectedDay) {
   back.addEventListener('click', () => renderList(root));
   page.appendChild(back);
 
-  // 設計図と行き来できる（spec: goal-blueprint「設計図とレポートは互いに行き来できる」）。
-  const bpLink = h('button', { class: 'btn small', type: 'button', text: '設計図を開く' });
+  // タスク一覧と行き来できる（spec: goal-blueprint「タスク一覧とレポートは互いに行き来できる」）。
+  const bpLink = h('button', { class: 'btn small', type: 'button', text: 'タスク一覧を開く' });
   bpLink.addEventListener('click', () => openBlueprint(rep.goal, root));
   page.appendChild(bpLink);
 

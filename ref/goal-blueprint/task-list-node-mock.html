@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>タスク一覧 ノード行モック（issue #91 / task-list-inline-edit）</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background: #eef1f5; padding: 40px; }
+  .bp-page { max-width: 760px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 2px 10px rgba(20,24,33,.08); }
+  .bp-title { font-size: 22px; font-weight: 700; color: #26303f; margin: 0 0 18px; }
+  .bp-tree-wrap { display: flex; flex-direction: column; gap: 10px; }
+  .bp-tree { display: flex; flex-direction: column; gap: 2px; }
+  .bp-node { }
+  .bp-node-row { display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 8px; }
+  .bp-node-row:hover, .bp-node-row.hover-sim { background: #f8fafc; }
+  .bp-depth-1 { margin-left: 22px; }
+  .bp-depth-2 { margin-left: 44px; }
+  .bp-depth-3 { margin-left: 66px; }
+  .bp-toggle { width: 18px; height: 18px; flex-shrink: 0; border: none; background: transparent; color: #91a0b0; font-size: 11px; cursor: pointer; }
+  .bp-toggle-spacer { width: 18px; height: 18px; flex-shrink: 0; }
+  .bp-checkbox { flex-shrink: 0; }
+  .bp-node-title { font-size: 14px; color: #1b2733; }
+  .bp-node-title.done { color: #91a0b0; text-decoration: line-through; }
+  .bp-node-notes { margin: 2px 0 4px 43px; font-size: 12.5px; color: #91a0b0; white-space: pre-wrap; }
+  .bp-node-children { display: flex; flex-direction: column; gap: 2px; }
+
+  .bp-node-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
+  .bp-node-add-btn { width: 20px; height: 20px; flex-shrink: 0; border: none; background: transparent; color: #91a0b0; font-size: 13px; line-height: 1; cursor: pointer; border-radius: 5px; }
+  .bp-node-add-btn:hover { background: #eef1f5; color: #1b2733; }
+  .bp-node-menu { position: relative; }
+  .bp-node-menu-btn { width: 20px; height: 20px; flex-shrink: 0; border: none; background: transparent; color: #91a0b0; font-size: 13px; line-height: 1; cursor: pointer; border-radius: 5px; opacity: 0; }
+  .bp-node-row:hover .bp-node-menu-btn, .bp-node-row.hover-sim .bp-node-menu-btn, .bp-node-menu-btn.open { opacity: 1; }
+  .bp-node-menu-btn:hover { background: #eef1f5; color: #1b2733; }
+  .bp-menu { position: absolute; top: 100%; right: 0; z-index: 5; margin-top: 2px; min-width: 172px; background: #fff; border: 1px solid #e3e8ef; border-radius: 9px; box-shadow: 0 6px 20px rgba(20,24,33,.14); padding: 4px; display: flex; flex-direction: column; }
+  .bp-menu-item { border: none; background: transparent; color: #1b2733; font-family: inherit; font-size: 12.5px; text-align: left; padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+  .bp-menu-item:hover { background: #eef1f5; }
+  .bp-menu-item.danger { color: #b4493b; }
+  .bp-menu-item.danger:hover { background: #fbeae6; }
+
+  .bp-node-title-edit { font-size: 14px; font-family: inherit; border: 1px solid #3b5bb5; border-radius: 5px; padding: 2px 6px; flex: 1 1 auto; min-width: 60px; }
+  .bp-checkbox-spacer { width: 14px; flex-shrink: 0; }
+  .bp-add-input { flex: 1 1 auto; min-width: 120px; font-size: 14px; font-family: inherit; border: 1px solid #e3e8ef; border-radius: 6px; padding: 4px 8px; }
+  .bp-root-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .btn.small { font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid #e3e8ef; background: #fff; color: #1b2733; cursor: pointer; }
+
+  .bp-bulk { border: 1px solid #e3e8ef; border-radius: 9px; padding: 10px; margin: 4px 0; background: #f8fafc; }
+  .bp-import-hint { font-size: 12.5px; color: #91a0b0; line-height: 1.6; margin: 0 0 8px; }
+  .bp-bulk-ta { width: 100%; box-sizing: border-box; min-height: 90px; border: 1px solid #e3e8ef; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .bp-bulk-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+  .caption { max-width: 760px; margin: 10px auto 0; font-size: 12.5px; color: #55606c; }
+</style>
+</head>
+<body>
+  <div class="bp-page">
+    <h1 class="bp-title">タスク一覧 — 面接対策</h1>
+    <div class="bp-tree-wrap">
+      <div class="bp-tree">
+
+        <!-- 容れ物・展開済み・ホバー状態を固定表示（＋常時／⋯もホバーで見える例） -->
+        <div class="bp-node">
+          <div class="bp-node-row hover-sim">
+            <button class="bp-toggle open" type="button">▾</button>
+            <input type="checkbox" class="bp-checkbox" disabled title="容れ物の完了は子から自動的に決まります">
+            <span class="bp-node-title">苦手な質問への回答を用意する</span>
+            <span class="bp-node-actions">
+              <button class="bp-node-add-btn" type="button" title="子を足す">＋</button>
+              <span class="bp-node-menu">
+                <button class="bp-node-menu-btn open" type="button" title="操作メニュー">⋯</button>
+              </span>
+            </span>
+          </div>
+          <div class="bp-node-children">
+
+            <div class="bp-node">
+              <div class="bp-node-row">
+                <span class="bp-toggle-spacer"></span>
+                <input type="checkbox" class="bp-checkbox">
+                <span class="bp-node-title">質問をピックアップする</span>
+                <span class="bp-node-actions">
+                  <button class="bp-node-add-btn" type="button" title="子を足す">＋</button>
+                  <span class="bp-node-menu"><button class="bp-node-menu-btn" type="button" title="操作メニュー">⋯</button></span>
+                </span>
+              </div>
+              <div class="bp-node-notes">まず去年の資料から。20問くらいに絞る。</div>
+            </div>
+
+            <!-- ⋯ メニューを開いた例：容れ物なので 着手/打ち切り/削除 まで全部見える -->
+            <div class="bp-node">
+              <div class="bp-node-row hover-sim">
+                <span class="bp-toggle-spacer"></span>
+                <input type="checkbox" class="bp-checkbox">
+                <span class="bp-node-title">Notion にまとめる</span>
+                <span class="bp-node-actions">
+                  <button class="bp-node-add-btn" type="button" title="子を足す">＋</button>
+                  <span class="bp-node-menu">
+                    <button class="bp-node-menu-btn open" type="button" title="操作メニュー">⋯</button>
+                    <div class="bp-menu">
+                      <button class="bp-menu-item" type="button">まとめて追加</button>
+                      <button class="bp-menu-item danger" type="button">削除</button>
+                    </div>
+                  </span>
+                </span>
+              </div>
+            </div>
+
+            <!-- ＋ から開いたインライン入力（連打で兄弟を足せる） -->
+            <div class="bp-node-row bp-add-row">
+              <span class="bp-toggle-spacer"></span>
+              <span class="bp-checkbox-spacer"></span>
+              <input class="bp-add-input" type="text" placeholder="タイトルを入力" value="録画で練習する">
+            </div>
+          </div>
+        </div>
+
+        <!-- 容れ物：着手ラベルに件数が入り、打ち切りも並ぶ例（容れ物のメニュー） -->
+        <div class="bp-node">
+          <div class="bp-node-row hover-sim">
+            <button class="bp-toggle" type="button">▸</button>
+            <input type="checkbox" class="bp-checkbox" disabled title="容れ物の完了は子から自動的に決まります">
+            <span class="bp-node-title">エントリーシートを仕上げる</span>
+            <span class="bp-node-actions">
+              <button class="bp-node-add-btn" type="button" title="子を足す">＋</button>
+              <span class="bp-node-menu">
+                <button class="bp-node-menu-btn open" type="button" title="操作メニュー">⋯</button>
+                <div class="bp-menu">
+                  <button class="bp-menu-item" type="button">まとめて追加</button>
+                  <button class="bp-menu-item" type="button">保留の3件を未着手へ</button>
+                  <button class="bp-menu-item" type="button">この枝を打ち切る</button>
+                  <button class="bp-menu-item danger" type="button">削除</button>
+                </div>
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <!-- 深い階層（4段目）でも読める例：MAX_VISUAL_DEPTH で頭打ちする -->
+        <div class="bp-node">
+          <div class="bp-node-row">
+            <button class="bp-toggle open" type="button">▾</button>
+            <input type="checkbox" class="bp-checkbox" disabled>
+            <span class="bp-node-title">A</span>
+            <span class="bp-node-actions"><button class="bp-node-add-btn" type="button">＋</button><span class="bp-node-menu"><button class="bp-node-menu-btn" type="button">⋯</button></span></span>
+          </div>
+          <div class="bp-node-children">
+            <div class="bp-node">
+              <div class="bp-node-row bp-depth-1">
+                <button class="bp-toggle open" type="button">▾</button>
+                <input type="checkbox" class="bp-checkbox" disabled>
+                <span class="bp-node-title">A1</span>
+                <span class="bp-node-actions"><button class="bp-node-add-btn" type="button">＋</button><span class="bp-node-menu"><button class="bp-node-menu-btn" type="button">⋯</button></span></span>
+              </div>
+              <div class="bp-node-children">
+                <div class="bp-node">
+                  <div class="bp-node-row bp-depth-2">
+                    <button class="bp-toggle open" type="button">▾</button>
+                    <input type="checkbox" class="bp-checkbox" disabled>
+                    <span class="bp-node-title">A11（3階層目）</span>
+                    <span class="bp-node-actions"><button class="bp-node-add-btn" type="button">＋</button><span class="bp-node-menu"><button class="bp-node-menu-btn" type="button">⋯</button></span></span>
+                  </div>
+                  <div class="bp-node-children">
+                    <div class="bp-node">
+                      <div class="bp-node-row bp-depth-3">
+                        <span class="bp-toggle-spacer"></span>
+                        <input type="checkbox" class="bp-checkbox">
+                        <span class="bp-node-title">A111（4階層目・視覚的な頭打ち＝3段目と同じインデント）</span>
+                        <span class="bp-node-actions"><button class="bp-node-add-btn" type="button">＋</button><span class="bp-node-menu"><button class="bp-node-menu-btn" type="button">⋯</button></span></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 改名中の入力状態 -->
+        <div class="bp-node">
+          <div class="bp-node-row">
+            <span class="bp-toggle-spacer"></span>
+            <input type="checkbox" class="bp-checkbox">
+            <input class="bp-node-title-edit" type="text" value="改名中のタイトル">
+            <span class="bp-node-actions"><button class="bp-node-add-btn" type="button">＋</button><span class="bp-node-menu"><button class="bp-node-menu-btn" type="button">⋯</button></span></span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- まとめて追加パネル（根の下に開いた例） -->
+      <div class="bp-bulk">
+        <p class="bp-import-hint">インデントの深さが階層になります。「- 」で始まる行がタスク、それ以外の行は直前のタスクの本文になります。<br>既存のタスクは書き換えません（追加のみ）。取り込んだ葉は既定で保留に入ります。</p>
+        <textarea class="bp-bulk-ta">- 苦手な質問への回答を用意する
+  - 質問をピックアップする
+  - Notion にまとめる</textarea>
+        <div class="bp-bulk-actions">
+          <button class="btn small" type="button" style="background:#1a73e8;color:#fff;border-color:#1a73e8;">まとめて追加</button>
+          <button class="btn small" type="button">キャンセル</button>
+        </div>
+      </div>
+
+      <div class="bp-root-actions">
+        <button class="btn small" type="button">＋ 新しい枝を足す</button>
+        <button class="btn small" type="button">まとめて追加</button>
+      </div>
+    </div>
+  </div>
+  <p class="caption">
+    モック（issue #91・change task-list-inline-edit）: 「＋」は常時表示、「⋯」は行ホバーで現れる（この画面では確認用に固定表示）。
+    ⋯ メニューは葉なら「まとめて追加・削除」のみ、容れ物なら「まとめて追加・保留のN件を未着手へ（0件なら非表示）・この枝を打ち切る・削除」。
+    深い階層でも 3 段目以降は同じインデントに頭打ちして読める。
+  </p>
+</body>
+</html>

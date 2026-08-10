@@ -697,6 +697,10 @@ function cardEl(t) {
     stopVAutoScroll();
   });
 
+  // パンくずは帯としてカードの最上段いっぱいに敷く（task-list-card-tree-ui design D1〜D3・
+  // spec: カードは親のパンくずを表示する「帯はカードの最上段」）。
+  const crumb = parentBreadcrumbEl(t);
+  if (crumb) card.appendChild(crumb);
   card.appendChild(h('div', { class: 'kb-card-top' },
     h('span', { class: `kb-pri ${pri}`, text: PRI[pri].label }),
     h('div', { class: 'kb-card-top-right' },
@@ -708,10 +712,6 @@ function cardEl(t) {
         class: 'kb-card-del', type: 'button', title: '削除', draggable: 'false',
         onclick: (e) => { e.stopPropagation(); deleteTaskWithConfirm(t); },
       }, iconTrash()))));
-  // パンくずはタイトルの「上」。上から「親 › 自分」と読めないと、どちらが親か判別できない
-  // （issue #91-4。下に置くと子・タグ・カテゴリのいずれにも読めてしまう）。
-  const crumb = parentBreadcrumbEl(t);
-  if (crumb) card.appendChild(crumb);
   card.appendChild(cardTitleEl(t));
   const badge = categoryBadgeEl(t);
   if (badge) card.appendChild(badge);
@@ -778,21 +778,30 @@ function categoryBadgeEl(t) {
   return badge;
 }
 
+// 帯の色パレット（design D2）。根の枝の id（root_task_id）から決定的に引く。3色。
+const CRUMB_COLORS = ['c-green', 'c-blue', 'c-purple'];
+
 /**
- * 親のパンくず（task-tree, spec: カードは親のパンくずを表示する）。
- * 直近の親1つだけ。カテゴリバッジとは別要素で併存させる（互いを置き換えない）。
- *
- * カテゴリバッジと**同じ丸ピル**にすると、どちらが親か・そもそも親なのかが読めない
- * （issue #91-4）。カテゴリ＝色ドット付きの塗りピル、パンくず＝区切り記号つきの素の小さい文字、
- * と形ごと分ける。末尾の「›」がタイトルへ続くので、上から「親 › 自分」と読める。
+ * 親のパンくず帯（task-list-card-tree-ui design D1〜D3、spec: カードは親のパンくずを表示する）。
+ * カードの上端いっぱいに敷く帯として「目標名 / 直近の親」を表示する。目標に属さないタスクは
+ * 親だけを表示し、区切りの記号も出さない（design D3）。根のタスクには帯を出さない。
+ * 色は根の枝（root_task_id）の id % 3 から決まり、並べ替えや完了では変わらない（design D2）。
  */
 function parentBreadcrumbEl(t) {
   if (t.parent_task_id == null) return null;
   const parent = S.tasks.find((x) => x.id === t.parent_task_id);
   if (!parent) return null;
-  return h('div', { class: 'kb-breadcrumb', title: `親: ${parent.title}` },
-    h('span', { class: 'kb-breadcrumb-text', text: parent.title }),
-    h('span', { class: 'kb-breadcrumb-sep', text: '›' }));
+  const colorCls = CRUMB_COLORS[((t.root_task_id ?? 0) % 3 + 3) % 3];
+  const text = h('span', { class: 'kb-breadcrumb-text' });
+  if (t.goal_name) {
+    text.appendChild(h('span', { class: 'kb-breadcrumb-goal', text: t.goal_name }));
+    text.appendChild(h('span', { class: 'kb-breadcrumb-sep', text: '/' }));
+  }
+  text.appendChild(h('span', { class: 'kb-breadcrumb-parent', text: parent.title }));
+  return h('div', {
+    class: `kb-breadcrumb ${colorCls}`,
+    title: t.goal_name ? `${t.goal_name} / ${parent.title}` : `親: ${parent.title}`,
+  }, h('span', { class: 'kb-breadcrumb-icon' }), text);
 }
 
 // --- D&D / 完了 -------------------------------------------------------------

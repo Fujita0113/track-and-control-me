@@ -9,7 +9,11 @@ import {
   getBlueprint,
   computeOpenPath,
   createChildTask,
+  createRootTask,
+  createSiblingTask,
   setParent,
+  setTreePosition,
+  setSubtreeDone,
   startBranch,
   dropBranch,
   resolveLineageRootGoalId,
@@ -513,5 +517,329 @@ describe('getBlueprint は枝への着手の対象件数を返す', () => {
     updateTask(db, idOf('b'), { status: 'DONE' });
 
     expect(getBlueprint(db, goalId).nodes[0]!.holdLeafCount).toBe(0);
+  });
+});
+
+// ==========================================================================
+// createRootTask: タスク一覧の「＋ 新しい枝を足す」（apply が追記・task-list-inline-edit）。
+// importBlueprint 経由にすると parseBlueprintText の連番読み捨てが素のタイトルにも働いてしまう
+// （例:「2つ目のタスク」の先頭「2」が消える）ため、テキスト取り込みを経由しない単発追加として分離した。
+// ==========================================================================
+
+describe('createRootTask: 根への単発追加', () => {
+  it('目標直下に1件だけ足せる（既定は TODO）', () => {
+    const goalId = insertGoal('面接対策');
+    const task = createRootTask(db, goalId, '最初のタスク');
+    expect(task.parent_task_id).toBe(null);
+    expect(task.goal_id).toBe(goalId);
+    expect(task.status).toBe('TODO');
+  });
+
+  it('先頭が数字のタイトルでも欠けない', () => {
+    const goalId = insertGoal('面接対策');
+    const task = createRootTask(db, goalId, '2つ目のタスク');
+    expect(task.title).toBe('2つ目のタスク');
+  });
+
+  it('継続チェインの根へ紐づく', () => {
+    const first = insertGoal('面接対策');
+    const second = insertGoal('面接対策');
+    db.prepare('UPDATE goal SET continued_goal_id = ? WHERE id = ?').run(second, first);
+
+    const task = createRootTask(db, second, 'あとから足した');
+
+    expect(task.goal_id).toBe(first);
+  });
+});
+
+// ===========================================================================
+// ここから下は change `task-list-card-tree-ui` が凍結したもの（apply は触るの禁止）。
+// design doc `Task Tree.dc.html` の t1 が持つキーボード操作（Enter / Tab / Shift+Tab /
+// Alt+C）と、カンバンのパンくず帯が要る情報を、サービス層の契約として固定する。
+// ===========================================================================
+
+/** getBlueprint の子の並び（tree_order 順）をタイトルで取り出す。 */
+function childTitles(db: DB, goalId: number, path: number[] = []): string[] {
+  let nodes = getBlueprint(db, goalId).nodes;
+  for (const idx of path) nodes = nodes[idx]!.children;
+  return nodes.map((n) => n.title);
+}
+
+// --- Enter: 兄弟の追加（design D5） -----------------------------------------
+
+describe('createSiblingTask: 部分木の直後に同じ深さで足す', () => {
+  it('同じ親の子になり、対象の直後に入る', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 容れ物\n  - A1\n  - A2');
+    const a1 = getBlueprint(db, goalId).nodes[0]!.children[0]!;
+
+    createSiblingTask(db, a1.id, 'A1.5');
+
+    expect(childTitles(db, goalId, [0])).toEqual(['A1', 'A1.5', 'A2']);
+  });
+
+  it('対象の列（status）を引き継ぐ', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 容れ物\n  - A1');
+    const a1 = getBlueprint(db, goalId).nodes[0]!.children[0]!;
+    updateTask(db, a1.id, { status: 'DOING' });
+
+    const sib = createSiblingTask(db, a1.id, 'A2');
+
+    expect(sib.status).toBe('DOING');
+  });
+
+  it('根の兄弟は根になり、同じ目標を引き継ぐ', () => {
+    const goalId = insertGoal('面接対策');
+    const root = createRootTask(db, goalId, '枝1');
+
+    const sib = createSiblingTask(db, root.id, '枝2');
+
+    expect(sib.parent_task_id).toBe(null);
+    expect(sib.goal_id).toBe(goalId);
+    expect(childTitles(db, goalId)).toEqual(['枝1', '枝2']);
+  });
+
+  it('継続チェインの2代目から足しても根の目標に紐づく', () => {
+    const first = insertGoal('面接対策');
+    const second = insertGoal('面接対策');
+    db.prepare('UPDATE goal SET continued_goal_id = ? WHERE id = ?').run(second, first);
+    const root = createRootTask(db, second, '枝1');
+
+    const sib = createSiblingTask(db, root.id, '枝2');
+
+    expect(sib.goal_id).toBe(first);
+  });
+
+  it('存在しないタスクの兄弟は作れない', () => {
+    expect(() => createSiblingTask(db, 9999, 'どこにも付かない')).toThrow(TaskTreeError);
+  });
+});
+
+// --- Tab / Shift+Tab: 階層を1段動かす（design D4） --------------------------
+
+describe('setTreePosition: 1段深く / 1段浅く', () => {
+  it('新しい親の末尾の子になる（1段深く）', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- A\n  - A1\n- B');
+    const [a, b] = getBlueprint(db, goalId).nodes;
+
+    setTreePosition(db, b!.id, { parentId: a!.id, afterTaskId: null });
+
+    expect(childTitles(db, goalId)).toEqual(['A']);
+    expect(childTitles(db, goalId, [0])).toEqual(['A1', 'B']);
+  });
+
+  it('子孫は一緒に動く', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- A\n- B\n  - B1\n    - B1a');
+    const [a, b] = getBlueprint(db, goalId).nodes;
+
+    setTreePosition(db, b!.id, { parentId: a!.id, afterTaskId: null });
+
+    expect(childTitles(db, goalId, [0])).toEqual(['B']);
+    expect(childTitles(db, goalId, [0, 0])).toEqual(['B1']);
+    expect(childTitles(db, goalId, [0, 0, 0])).toEqual(['B1a']);
+  });
+
+  it('afterTaskId で親の直後に並ぶ（1段浅く）', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 根\n  - P\n    - C1\n    - C2\n    - C3\n  - Q');
+    const rootNode = getBlueprint(db, goalId).nodes[0]!;
+    const p = rootNode.children[0]!;
+    const c2 = p.children[1]!;
+
+    setTreePosition(db, c2.id, { parentId: rootNode.id, afterTaskId: p.id });
+
+    // P の3番目の子の後ろではなく、P の直後。
+    expect(childTitles(db, goalId, [0])).toEqual(['P', 'C2', 'Q']);
+    expect(childTitles(db, goalId, [0, 0])).toEqual(['C1', 'C3']);
+  });
+
+  it('根まで浅くすると祖先の目標を引き継ぐ', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- P\n  - C1\n  - C2');
+    const p = getBlueprint(db, goalId).nodes[0]!;
+    const c1 = p.children[0]!;
+
+    setTreePosition(db, c1.id, { parentId: null, afterTaskId: p.id });
+
+    const moved = listTasks(db).find((t) => t.id === c1.id)!;
+    expect(moved.parent_task_id).toBe(null);
+    expect(moved.goal_id).toBe(goalId);
+    expect(childTitles(db, goalId)).toEqual(['P', 'C1']);
+  });
+
+  it('自分の子孫の下へは動かせない', () => {
+    const a = createTask(db, { title: 'A' });
+    const b = createChildTask(db, a.id, { title: 'B' });
+    const c = createChildTask(db, b.id, { title: 'C' });
+
+    expect(() => setTreePosition(db, a.id, { parentId: c.id, afterTaskId: null })).toThrow(
+      TaskTreeError,
+    );
+    expect(listTasks(db).find((t) => t.id === a.id)!.parent_task_id).toBe(null);
+  });
+
+  it('自分自身を親にはできない', () => {
+    const a = createTask(db, { title: 'A' });
+    expect(() => setTreePosition(db, a.id, { parentId: a.id, afterTaskId: null })).toThrow(
+      TaskTreeError,
+    );
+  });
+
+  it('存在しないタスクは動かせない', () => {
+    expect(() => setTreePosition(db, 9999, { parentId: null, afterTaskId: null })).toThrow(
+      TaskTreeError,
+    );
+  });
+});
+
+// --- 容れ物のチェック / Alt+C: 部分木の一括完了（design D6） ----------------
+
+describe('setSubtreeDone: 部分木の葉をまとめて切り替える', () => {
+  it('未完了の葉が全部完了になり、容れ物も完了として導出される', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝\n  - a\n  - b\n  - c');
+    const branch = getBlueprint(db, goalId).nodes[0]!;
+
+    setSubtreeDone(db, branch.id, true);
+
+    const after = getBlueprint(db, goalId).nodes[0]!;
+    expect(after.done).toBe(true);
+    expect(after.children.every((c) => c.done)).toBe(true);
+  });
+
+  it('外すと配下の葉が未着手へ戻る', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝\n  - a\n  - b');
+    const branch = getBlueprint(db, goalId).nodes[0]!;
+    setSubtreeDone(db, branch.id, true);
+
+    setSubtreeDone(db, branch.id, false);
+
+    const after = getBlueprint(db, goalId).nodes[0]!;
+    expect(after.done).toBe(false);
+    expect(after.children.map((c) => c.status)).toEqual(['TODO', 'TODO']);
+  });
+
+  it('打ち切り済みの葉はどちらの向きでも動かない', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝\n  - 打ち切る側\n- 別枝\n  - a\n  - b');
+    const dropped = getBlueprint(db, goalId).nodes[0]!;
+    dropBranch(db, dropped.id, '志望先が変わったため');
+    // 打ち切り済みの葉を、これから一括操作する枝の下へ移す。
+    const target = getBlueprint(db, goalId).nodes[1]!;
+    const droppedLeafId = getBlueprint(db, goalId).nodes[0]!.children[0]!.id;
+    setTreePosition(db, droppedLeafId, { parentId: target.id, afterTaskId: null });
+
+    setSubtreeDone(db, target.id, true);
+    setSubtreeDone(db, target.id, false);
+
+    const leaf = listTasks(db).find((t) => t.id === droppedLeafId)!;
+    expect(leaf.status).toBe('DONE');
+    expect(leaf.drop_reason).toBe('志望先が変わったため');
+  });
+
+  it('葉なら自分だけが変わる', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝\n  - a\n  - b');
+    const branch = getBlueprint(db, goalId).nodes[0]!;
+    const a = branch.children[0]!;
+
+    setSubtreeDone(db, a.id, true);
+
+    const after = getBlueprint(db, goalId).nodes[0]!;
+    expect(after.children.map((c) => c.done)).toEqual([true, false]);
+    expect(after.done).toBe(false);
+  });
+
+  it('容れ物の status を完了の根拠にしない（導出のまま）', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝\n  - a\n  - b');
+    const branch = getBlueprint(db, goalId).nodes[0]!;
+
+    setSubtreeDone(db, branch.id, true);
+    // 子を1つ未着手へ戻せば、容れ物は再び未完了として導出される。
+    const a = getBlueprint(db, goalId).nodes[0]!.children[0]!;
+    updateTask(db, a.id, { status: 'TODO' });
+
+    expect(getBlueprint(db, goalId).nodes[0]!.done).toBe(false);
+  });
+
+  it('深い部分木でも一度で終わる', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝\n  - 中\n    - x\n    - y\n  - z');
+    const branch = getBlueprint(db, goalId).nodes[0]!;
+
+    setSubtreeDone(db, branch.id, true);
+
+    const after = getBlueprint(db, goalId).nodes[0]!;
+    expect(after.done).toBe(true);
+    expect(after.children[0]!.children.every((c) => c.done)).toBe(true);
+  });
+
+  it('存在しないタスクは切り替えられない', () => {
+    expect(() => setSubtreeDone(db, 9999, true)).toThrow(TaskTreeError);
+  });
+});
+
+// --- カンバンのパンくず帯が要る情報（design D2・D3） ------------------------
+
+describe('listTasks は根の枝と目標名を返す', () => {
+  it('葉から根の枝の id と目標名が引ける', () => {
+    const goalId = insertGoal('メンタルを安定させる');
+    importBlueprint(db, goalId, '- 睡眠のリズムを整える\n  - 起床時間を1週間記録する');
+    const branch = getBlueprint(db, goalId).nodes[0]!;
+    const leaf = branch.children[0]!;
+
+    const row = listTasks(db).find((t) => t.id === leaf.id)!;
+
+    expect(row.root_task_id).toBe(branch.id);
+    expect(row.goal_name).toBe('メンタルを安定させる');
+  });
+
+  it('根自身の root_task_id は自分', () => {
+    const goalId = insertGoal('メンタルを安定させる');
+    const root = createRootTask(db, goalId, '枝1');
+
+    const row = listTasks(db).find((t) => t.id === root.id)!;
+
+    expect(row.root_task_id).toBe(root.id);
+  });
+
+  it('同じ枝の葉は同じ root_task_id を持ち、別の枝とは異なる', () => {
+    const goalId = insertGoal('メンタルを安定させる');
+    importBlueprint(db, goalId, '- 枝1\n  - a\n  - b\n- 枝2\n  - c');
+    const [b1, b2] = getBlueprint(db, goalId).nodes;
+    const rows = listTasks(db);
+    const rootOf = (id: number) => rows.find((t) => t.id === id)!.root_task_id;
+
+    expect(rootOf(b1!.children[0]!.id)).toBe(b1!.id);
+    expect(rootOf(b1!.children[1]!.id)).toBe(b1!.id);
+    expect(rootOf(b2!.children[0]!.id)).toBe(b2!.id);
+    expect(rootOf(b1!.children[0]!.id)).not.toBe(rootOf(b2!.children[0]!.id));
+  });
+
+  it('目標に属さないツリーの葉は goal_name が null', () => {
+    const parent = createTask(db, { title: '買い物リストを作る' });
+    const child = createChildTask(db, parent.id, { title: '牛乳を買う' });
+
+    const row = listTasks(db).find((t) => t.id === child.id)!;
+
+    expect(row.root_task_id).toBe(parent.id);
+    expect(row.goal_name).toBe(null);
+  });
+
+  it('継続チェインでは根の目標の名前が出る', () => {
+    const first = insertGoal('1代目の目標');
+    const second = insertGoal('2代目の目標');
+    db.prepare('UPDATE goal SET continued_goal_id = ? WHERE id = ?').run(second, first);
+    const root = createRootTask(db, second, '枝1');
+    const leaf = createChildTask(db, root.id, { title: '葉' });
+
+    const row = listTasks(db).find((t) => t.id === leaf.id)!;
+
+    expect(row.goal_name).toBe('1代目の目標');
   });
 });

@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>参照実装 — タスク一覧 カード型ツリー（design doc t1/1b）</title>
+<!--
+  Claude Design プロジェクト「プロジェクト進捗管理UI改修」
+  https://claude.ai/design/p/ad0c8cf7-83be-4c95-af88-60b4e1038451?file=Task+Tree.dc.html
+  の t1 / 1b「カード型ツリー（操作可能・カンバン連携）」を、DC ランタイム抜きの静的 HTML へ写したもの。
+
+  これは **見た目の正典** であって実装ではない。change `task-list-card-tree-ui` の
+  delta spec が寸法・色・配置をここへ紐づける。値を変えるときは spec も直すこと。
+  サンプルデータは design doc の state.tasks と同じ（葉5・完了2 → 40%）。
+
+  design doc からの意図的な差異が1つある（design D10）:
+  **行ホバーで出る「⋯」を残し、中身は削除だけにした。** design doc の t1 は行から操作を
+  全部外しているが、容れ物はカンバンに出ない（`task-tree`「葉だけがカンバンのカードになる」）ため、
+  ツリーから消せないとアプリのどこからも消せなくなる。ほかの操作（子を足す・取り込み先の指定・
+  枝への着手・打ち切り）と違い、代わりの入口が無いのは削除だけ。
+  「⋯」に削除以外を足さないことは delta spec の MUST NOT で縛ってある。
+-->
+<style>
+body { margin: 0; background: #eceef2; font-family: -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+.shell { width: 1240px; margin: 24px auto; background: #fff; border: 1px solid rgba(0,0,0,.08); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06); overflow: hidden; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 22px; background: #fff; border-bottom: 1px solid #e3e8ef; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-dot { width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg,#1a73e8,#7c4dff); }
+.brand-name { font-weight: 700; font-size: 15px; letter-spacing: .2px; color: #1b2733; }
+.topbar-meta { color: #66727f; font-size: 12.5px; }
+.tabs { display: flex; gap: 4px; padding: 8px 16px 0; background: #fff; border-bottom: 1px solid #e3e8ef; }
+.tab { color: #66727f; padding: 9px 14px; font-size: 13.5px; border-bottom: 2px solid transparent; }
+.tab.active { color: #1a73e8; font-weight: 600; border-bottom-color: #1a73e8; }
+.stage { background: #f4f6fa; padding: 20px 20px 28px; position: relative; }
+.page { max-width: 1180px; margin: 0 auto; }
+
+.back { color: #3b5bb5; font-size: 13px; padding: 4px 0; margin-bottom: 10px; cursor: pointer; }
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .12em; color: #91a0b0; margin-bottom: 5px; }
+.head h1 { font-size: 24px; font-weight: 700; color: #1b2733; margin: 0; letter-spacing: -.01em; }
+.head-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.head-actions button { font-family: inherit; font-size: 12px; border-radius: 8px; border: 1px solid #e3e8ef; background: #fff; color: #1b2733; padding: 5px 9px; cursor: pointer; }
+
+/* 進捗バー。分母は葉の数（容れ物は数えない）。 */
+.progress { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.progress-track { flex: 1; height: 6px; border-radius: 999px; background: #e3e8ef; overflow: hidden; max-width: 280px; }
+.progress-bar { height: 100%; border-radius: 999px; background: #1a73e8; }
+.progress-label { font-size: 12.5px; color: #66727f; }
+.progress-label b { font-weight: 700; color: #1b2733; }
+
+.tree { display: flex; flex-direction: column; gap: 6px; }
+/* 行はカード。深さ 26px 刻みでインデントし、深さ3で頭打ち。 */
+.d0 { padding-left: 0; } .d1 { padding-left: 26px; } .d2 { padding-left: 52px; } .d3 { padding-left: 78px; }
+.row { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid #e3e8ef; border-radius: 10px; padding: 9px 12px; box-shadow: 0 1px 2px rgba(20,33,51,.05); }
+.row:hover { border-color: #c8d4e4; box-shadow: 0 4px 14px rgba(20,33,51,.08); }
+.row.sel { border-color: #1a73e8; }
+.caret { width: 18px; height: 18px; flex-shrink: 0; border: none; background: transparent; color: #91a0b0; font-size: 10px; cursor: pointer; padding: 0; }
+.check { width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; border: 1.5px solid #cfd8e4; background: #fff; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 11px; line-height: 1; }
+.check.on { border-color: #188038; background: #188038; }
+.title { flex: 1; min-width: 0; font-family: inherit; font-size: 14px; font-weight: 500; color: #1b2733; border: none; background: transparent; padding: 2px 0; outline: none; }
+.title.container { font-weight: 700; }
+.title.done { color: #91a0b0; text-decoration: line-through; }
+.childcount { font-size: 11.5px; color: #91a0b0; flex-shrink: 0; }
+
+/* 行ホバーで出る「⋯」。中身は削除だけ（design D10）。 */
+.menu-btn { width: 20px; height: 20px; flex-shrink: 0; border: none; background: transparent; color: #91a0b0; font-size: 13px; line-height: 1; cursor: pointer; border-radius: 5px; padding: 0; opacity: 0; }
+.row:hover .menu-btn, .menu-btn.open { opacity: 1; }
+.menu-btn:hover { background: #eef2f7; color: #1b2733; }
+.menu-wrap { position: relative; display: flex; align-items: center; }
+.menu { position: absolute; top: 100%; right: 0; z-index: 5; margin-top: 2px; min-width: 120px; background: #fff; border: 1px solid #e3e8ef; border-radius: 9px; box-shadow: 0 6px 20px rgba(20,33,51,.14); padding: 4px; display: flex; flex-direction: column; }
+.menu-item { border: none; background: transparent; font-family: inherit; font-size: 12.5px; text-align: left; padding: 7px 9px; border-radius: 6px; cursor: pointer; color: #b4493b; }
+.menu-item:hover { background: #fbeae6; }
+
+.add { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; background: transparent; border: 1px dashed #d4dbe6; border-radius: 10px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600; color: #91a0b0; text-align: left; }
+.add:hover { background: #fff; border-color: #1a73e8; color: #1a73e8; }
+.add .plus { font-size: 15px; line-height: 1; }
+.add .key { margin-left: auto; font-size: 11px; font-weight: 600; color: #b8c2cf; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 18px; padding-top: 14px; border-top: 1px solid #e3e8ef; font-size: 11.5px; color: #91a0b0; }
+.legend b { color: #66727f; }
+
+/* 詳細モーダル（Ctrl+Enter で開く）。 */
+.veil { position: absolute; inset: 0; background: rgba(20,33,51,.28); display: flex; align-items: center; justify-content: center; z-index: 20; }
+.modal { width: 80%; height: 82%; background: #fff; border: 1px solid #e3e8ef; border-radius: 14px; box-shadow: 0 24px 64px rgba(20,33,51,.30); display: flex; flex-direction: column; overflow: hidden; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #eef2f7; flex-shrink: 0; }
+.modal-crumb { font-size: 11px; font-weight: 600; color: #91a0b0; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-title { font-size: 16px; font-weight: 700; color: #1b2733; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-close { border: none; background: transparent; cursor: pointer; font-size: 16px; color: #91a0b0; padding: 4px 8px; border-radius: 6px; font-family: inherit; flex-shrink: 0; }
+.modal-body { flex: 1; min-height: 0; width: 100%; border: none; outline: none; resize: none; padding: 26px 32px; font-family: inherit; font-size: 15px; line-height: 1.9; color: #1b2733; background: #fff; }
+.modal-foot { display: flex; align-items: center; gap: 14px; padding: 9px 20px; border-top: 1px solid #eef2f7; font-size: 11.5px; color: #b8c2cf; flex-shrink: 0; }
+.modal-foot b { color: #91a0b0; }
+.modal-foot .right { margin-left: auto; }
+
+.note { width: 1240px; margin: 0 auto 8px; font-size: 12px; color: #66727f; }
+</style>
+</head>
+<body>
+
+<p class="note">
+  ① 通常状態。選択行（1行目）は枠が #1a73e8。1行目は「⋯」を開いた状態で描いてある
+  （実際は行ホバーで現れ、中身は削除の1項目だけ）。
+</p>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand"><span class="brand-dot"></span><span class="brand-name">Track &amp; Control Me</span></div>
+    <div class="topbar-meta">作業日 2026-08-09 · tz Asia/Tokyo</div>
+  </div>
+  <div class="tabs">
+    <div class="tab">今日</div><div class="tab">振り返り</div><div class="tab">カンバン</div><div class="tab active">目標</div><div class="tab">設定</div>
+  </div>
+  <div class="stage">
+    <div class="page">
+      <div class="back">← 戻る</div>
+      <header class="head">
+        <div>
+          <div class="eyebrow">タスク一覧</div>
+          <h1>メンタルを安定させる</h1>
+        </div>
+        <div class="head-actions">
+          <button type="button">まとめて追加</button>
+          <button type="button">レポートを開く</button>
+        </div>
+      </header>
+
+      <div class="progress">
+        <div class="progress-track"><div class="progress-bar" style="width:40%"></div></div>
+        <div class="progress-label"><b>2</b> / 5 完了</div>
+      </div>
+
+      <div class="tree">
+        <div class="d0"><div class="row sel">
+          <button class="caret" type="button">▾</button>
+          <button class="check" type="button"></button>
+          <input class="title container" type="text" value="睡眠のリズムを整える">
+          <span class="childcount">2/3</span>
+          <span class="menu-wrap">
+            <button class="menu-btn open" type="button">⋯</button>
+            <div class="menu"><button class="menu-item" type="button">削除</button></div>
+          </span>
+        </div></div>
+        <div class="d1"><div class="row">
+          <button class="caret" type="button"></button>
+          <button class="check on" type="button">✓</button>
+          <input class="title done" type="text" value="23時にアラームを設定する">
+          <span class="childcount"></span>
+          <span class="menu-wrap"><button class="menu-btn" type="button">⋯</button></span>
+        </div></div>
+        <div class="d1"><div class="row">
+          <button class="caret" type="button"></button>
+          <button class="check on" type="button">✓</button>
+          <input class="title done" type="text" value="寝室からPCを出す">
+          <span class="childcount"></span>
+          <span class="menu-wrap"><button class="menu-btn" type="button">⋯</button></span>
+        </div></div>
+        <div class="d1"><div class="row">
+          <button class="caret" type="button"></button>
+          <button class="check" type="button"></button>
+          <input class="title" type="text" value="起床時間を1週間記録する">
+          <span class="childcount"></span>
+          <span class="menu-wrap"><button class="menu-btn" type="button">⋯</button></span>
+        </div></div>
+        <div class="d0"><div class="row">
+          <button class="caret" type="button">▾</button>
+          <button class="check" type="button"></button>
+          <input class="title container" type="text" value="運動を習慣にする">
+          <span class="childcount">0/1</span>
+          <span class="menu-wrap"><button class="menu-btn" type="button">⋯</button></span>
+        </div></div>
+        <div class="d1"><div class="row">
+          <button class="caret" type="button">▾</button>
+          <button class="check" type="button"></button>
+          <input class="title container" type="text" value="朝の散歩を20分">
+          <span class="childcount">0/1</span>
+          <span class="menu-wrap"><button class="menu-btn" type="button">⋯</button></span>
+        </div></div>
+        <div class="d2"><div class="row">
+          <button class="caret" type="button"></button>
+          <button class="check" type="button"></button>
+          <input class="title" type="text" value="コースを決める">
+          <span class="childcount"></span>
+          <span class="menu-wrap"><button class="menu-btn" type="button">⋯</button></span>
+        </div></div>
+        <div class="d0"><div class="row">
+          <button class="caret" type="button"></button>
+          <button class="check" type="button"></button>
+          <input class="title" type="text" value="週次で気分を振り返る">
+          <span class="childcount"></span>
+          <span class="menu-wrap"><button class="menu-btn" type="button">⋯</button></span>
+        </div></div>
+        <div class="d0">
+          <button class="add" type="button"><span class="plus">＋</span>タスクを追加<span class="key">Enter</span></button>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><b>Enter</b> 新規タスク</span>
+        <span><b>Tab</b> 子タスク化</span>
+        <span><b>Shift+Tab</b> 親に戻す</span>
+        <span><b>Alt+C</b> 完了</span>
+        <span><b>↑↓</b> 選択移動</span>
+        <span><b>Ctrl+Enter</b> 詳細を開く</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note">② Ctrl+Enter で開く詳細モーダル。パンくずは「目標 › 祖先 › …」、本文は Markdown。</p>
+<div class="shell">
+  <div class="topbar">
+    <div class="brand"><span class="brand-dot"></span><span class="brand-name">Track &amp; Control Me</span></div>
+    <div class="topbar-meta">作業日 2026-08-09 · tz Asia/Tokyo</div>
+  </div>
+  <div class="tabs">
+    <div class="tab">今日</div><div class="tab">振り返り</div><div class="tab">カンバン</div><div class="tab active">目標</div><div class="tab">設定</div>
+  </div>
+  <div class="stage" style="min-height:560px">
+    <div class="page">
+      <div class="back">← 戻る</div>
+      <header class="head">
+        <div>
+          <div class="eyebrow">タスク一覧</div>
+          <h1>メンタルを安定させる</h1>
+        </div>
+        <div class="head-actions">
+          <button type="button">まとめて追加</button>
+          <button type="button">レポートを開く</button>
+        </div>
+      </header>
+      <div class="progress">
+        <div class="progress-track"><div class="progress-bar" style="width:40%"></div></div>
+        <div class="progress-label"><b>2</b> / 5 完了</div>
+      </div>
+    </div>
+    <div class="veil">
+      <div class="modal">
+        <div class="modal-head">
+          <div style="min-width:0">
+            <div class="modal-crumb">メンタルを安定させる › 運動を習慣にする › 朝の散歩を20分</div>
+            <div class="modal-title">コースを決める</div>
+          </div>
+          <button class="modal-close" type="button">✕</button>
+        </div>
+        <textarea class="modal-body" placeholder="Markdown でメモを書く"></textarea>
+        <div class="modal-foot">
+          <span><b>Tab</b> インデント</span>
+          <span><b>- </b> 箇条書きの継続</span>
+          <span class="right"><b>Esc</b> 閉じる</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

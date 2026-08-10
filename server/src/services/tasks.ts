@@ -41,15 +41,43 @@ export interface TaskRow {
   drop_reason: string | null;
   /** listTasks 限定で付与（design D3）。1 = 子を持つ「容れ物」。getTask/createTask の戻り値には無い。 */
   has_children?: number;
+  /**
+   * listTasks 限定で付与（task-list-card-tree-ui design D2・D3）。カンバンのパンくず帯が使う。
+   * root_task_id … 根まで辿った先の id（根自身は自分）。同じ枝の葉は同じ値を持つ。
+   * goal_name … その根の継続チェインの根の目標名。目標に属さない根の子は null。
+   */
+  root_task_id?: number;
+  goal_name?: string | null;
 }
 
 export function listTasks(db: DB): TaskRow[] {
   return db
     .prepare(
-      `SELECT task.*,
-              EXISTS(SELECT 1 FROM task c WHERE c.parent_task_id = task.id) AS has_children
+      `WITH RECURSIVE
+         task_root(id, root_id) AS (
+           SELECT id, id FROM task WHERE parent_task_id IS NULL
+           UNION ALL
+           SELECT t.id, tr.root_id FROM task t JOIN task_root tr ON t.parent_task_id = tr.id
+         ),
+         goal_lineage(id, root_id) AS (
+           SELECT id, id FROM goal
+           UNION ALL
+           SELECT gl.id, g.id FROM goal_lineage gl JOIN goal g ON g.continued_goal_id = gl.root_id
+         ),
+         goal_root(id, root_id) AS (
+           SELECT id, root_id FROM goal_lineage gl
+           WHERE NOT EXISTS (SELECT 1 FROM goal g WHERE g.continued_goal_id = gl.root_id)
+         )
+       SELECT task.*,
+              EXISTS(SELECT 1 FROM task c WHERE c.parent_task_id = task.id) AS has_children,
+              tr.root_id AS root_task_id,
+              rg.name AS goal_name
        FROM task
-       ORDER BY status, sort_order, id`,
+       JOIN task_root tr ON tr.id = task.id
+       LEFT JOIN task root_task ON root_task.id = tr.root_id
+       LEFT JOIN goal_root gr ON gr.id = root_task.goal_id
+       LEFT JOIN goal rg ON rg.id = gr.root_id
+       ORDER BY status, sort_order, task.id`,
     )
     .all() as TaskRow[];
 }

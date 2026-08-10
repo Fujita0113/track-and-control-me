@@ -135,9 +135,25 @@ export function createChildTask(db: DB, parentId: number, input: CreateChildInpu
   });
 }
 
+/**
+ * 根（目標直下）へ1件だけ足す（タスク一覧の「＋ 新しい枝を足す」・task-list-inline-edit design D9）。
+ * テキスト取り込み（importBlueprint/parseBlueprintText）は経由しない: 行頭の連番読み捨て規則が
+ * 素のタイトル入力に対しても働いてしまい、例えば「2つ目のタスク」の先頭の「2」を意図せず削ってしまうため。
+ */
+export function createRootTask(db: DB, goalId: number, title: string): TaskRow {
+  const rootGoalId = resolveLineageRootGoalId(db, goalId);
+  return createTask(db, {
+    title,
+    goal_id: rootGoalId,
+    parent_task_id: null,
+    tree_order: nextTreeOrder(db, null),
+  });
+}
+
 // --- 再親付け・循環検査（design D6） ----------------------------------------
 
-export function setParent(db: DB, taskId: number, parentId: number): void {
+/** taskId を parentId の下へ付け替えても循環にならないか検査する（自分自身・自分の子孫は拒否）。 */
+function assertNoCycle(db: DB, taskId: number, parentId: number): void {
   if (taskId === parentId) {
     throw new TaskTreeError('自分自身を親にはできません');
   }
@@ -156,8 +172,105 @@ export function setParent(db: DB, taskId: number, parentId: number): void {
       | undefined;
     current = row ? row.parent_task_id : null;
   }
+}
+
+export function setParent(db: DB, taskId: number, parentId: number): void {
+  assertNoCycle(db, taskId, parentId);
   const treeOrder = nextTreeOrder(db, parentId);
   updateTask(db, taskId, { parent_task_id: parentId, tree_order: treeOrder });
+}
+
+/**
+ * parentId（親、または null=根）の子（または根）の中で、afterTaskId の直後に置くための
+ * tree_order を確保する。afterTaskId が null なら末尾。既存の兄弟の tree_order は
+ * MAX+1 で採番された連番の整数（nextTreeOrder）であることを前提に、
+ * 挿入位置以降を +1 ずつ後ろへずらす。
+ */
+function insertOrderAfter(db: DB, parentId: number | null, afterTaskId: number | null): number {
+  if (afterTaskId === null) {
+    return nextTreeOrder(db, parentId);
+  }
+  const after = getTask(db, afterTaskId);
+  if (!after) {
+    return nextTreeOrder(db, parentId);
+  }
+  const insertOrder = after.tree_order + 1;
+  if (parentId === null) {
+    db.prepare('UPDATE task SET tree_order = tree_order + 1 WHERE parent_task_id IS NULL AND tree_order >= ?').run(
+      insertOrder,
+    );
+  } else {
+    db.prepare(
+      'UPDATE task SET tree_order = tree_order + 1 WHERE parent_task_id = ? AND tree_order >= ?',
+    ).run(parentId, insertOrder);
+  }
+  return insertOrder;
+}
+
+// --- Enter: 兄弟の追加（design D5） -----------------------------------------
+
+/**
+ * 対象の部分木の直後に、同じ深さで1件足す。対象が根なら新しい根（同じ目標を継ぐ）、
+ * そうでなければ同じ親の子。status は対象から継ぐ（取り込みの HOLD 固定とは別の操作）。
+ */
+export function createSiblingTask(db: DB, taskId: number, title: string): TaskRow {
+  const target = getTask(db, taskId);
+  if (!target) {
+    throw new TaskTreeError('対象のタスクが見つかりません');
+  }
+  const parentId = target.parent_task_id;
+  const treeOrder = insertOrderAfter(db, parentId, taskId);
+  if (parentId === null) {
+    return createTask(db, {
+      title,
+      status: target.status,
+      goal_id: target.goal_id,
+      parent_task_id: null,
+      tree_order: treeOrder,
+    });
+  }
+  return createTask(db, {
+    title,
+    status: target.status,
+    parent_task_id: parentId,
+    tree_order: treeOrder,
+  });
+}
+
+// --- Tab / Shift+Tab: 階層を1段動かす（design D4） --------------------------
+
+export interface TreePosition {
+  parentId: number | null;
+  afterTaskId: number | null;
+}
+
+/**
+ * 対象を部分木ごと1段深く（parentId 指定）／1段浅く（parentId は新しい親、根なら null）動かす。
+ * parentId が非 null のときは setParent と同じ循環検査を必ず通す。parentId が null（根へ戻す）
+ * ときは、移動前の祖先チェインを辿って根の goal_id を継ぐ（目標を持たない根を作らない）。
+ */
+export function setTreePosition(db: DB, taskId: number, { parentId, afterTaskId }: TreePosition): void {
+  const target = getTask(db, taskId);
+  if (!target) {
+    throw new TaskTreeError('対象のタスクが見つかりません');
+  }
+  if (parentId !== null) {
+    assertNoCycle(db, taskId, parentId);
+    const parent = getTask(db, parentId);
+    if (!parent) {
+      throw new TaskTreeError('移動先の親が見つかりません');
+    }
+    const treeOrder = insertOrderAfter(db, parentId, afterTaskId);
+    db.prepare(
+      'UPDATE task SET parent_task_id = ?, goal_id = NULL, tree_order = ?, updated_at = ? WHERE id = ?',
+    ).run(parentId, treeOrder, Date.now(), taskId);
+  } else {
+    const goalId = findTreeRootGoalId(db, taskId);
+    const treeOrder = insertOrderAfter(db, null, afterTaskId);
+    db.prepare(
+      'UPDATE task SET parent_task_id = NULL, goal_id = ?, tree_order = ?, updated_at = ? WHERE id = ?',
+    ).run(goalId, treeOrder, Date.now(), taskId);
+  }
 }
 
 // --- 取り込み（design D9・追加のみの一方向） --------------------------------
@@ -188,15 +301,40 @@ function insertParsedNode(
   }
 }
 
-export function importBlueprint(db: DB, goalId: number, text: string): void {
+/** parentTaskId から根まで辿り、根の goal_id を返す（goal_id は根にだけ入る・design D1）。 */
+function findTreeRootGoalId(db: DB, taskId: number): number | null {
+  let current = getTask(db, taskId);
+  if (!current) {
+    throw new TaskTreeError('取り込み先のタスクが見つかりません');
+  }
+  while (current.parent_task_id != null) {
+    const parent = getTask(db, current.parent_task_id);
+    if (!parent) break;
+    current = parent;
+  }
+  return current.goal_id;
+}
+
+export function importBlueprint(
+  db: DB,
+  goalId: number,
+  text: string,
+  parentTaskId: number | null = null,
+): void {
   if (text.trim() === '') {
     throw new TaskTreeError('取り込むテキストがありません');
   }
   const rootGoalId = resolveLineageRootGoalId(db, goalId);
+  if (parentTaskId != null) {
+    const treeRootGoalId = findTreeRootGoalId(db, parentTaskId);
+    if (treeRootGoalId !== rootGoalId) {
+      throw new TaskTreeError('取り込み先は別の目標のツリーに属しています');
+    }
+  }
   const nodes = parseBlueprintText(text);
   const tx = db.transaction(() => {
     for (const node of nodes) {
-      insertParsedNode(db, node, null, rootGoalId);
+      insertParsedNode(db, node, parentTaskId, parentTaskId == null ? rootGoalId : null);
     }
   });
   tx();
@@ -211,6 +349,7 @@ export interface BlueprintNode {
   status: string;
   done: boolean;
   drop_reason: string | null;
+  holdLeafCount: number;
   children: BlueprintNode[];
 }
 
@@ -236,6 +375,12 @@ export function getBlueprint(db: DB, goalId: number): Blueprint {
   function build(t: TaskRow): BlueprintNode {
     const children = (byParent.get(t.id) ?? []).map(build);
     const done = children.length > 0 ? children.every((c) => c.done) : t.status === 'DONE';
+    const holdLeafCount =
+      children.length > 0
+        ? children.reduce((sum, c) => sum + c.holdLeafCount, 0)
+        : t.status === 'HOLD'
+          ? 1
+          : 0;
     return {
       id: t.id,
       title: t.title,
@@ -243,6 +388,7 @@ export function getBlueprint(db: DB, goalId: number): Blueprint {
       status: t.status,
       done,
       drop_reason: t.drop_reason,
+      holdLeafCount,
       children,
     };
   }
@@ -276,6 +422,35 @@ export function computeOpenPath(nodes: BlueprintNode[]): number[] {
   if (doingPath !== null) return doingPath;
   const undonePath = findFirstMatchingLeafPath(nodes, (n) => !n.done);
   return undonePath ?? [];
+}
+
+// --- 容れ物のチェック / Alt+C: 部分木の一括完了（design D6） ----------------
+
+/**
+ * 部分木の葉をまとめて DONE / TODO へ切り替える。対象が葉なら自分1つだけ。
+ * 打ち切り済み（drop_reason 非 NULL）の葉はどちらの向きでも動かさない。
+ * 容れ物自身の status は書かない（完了は導出のまま）。1回の UPDATE で完結させる。
+ */
+export function setSubtreeDone(db: DB, taskId: number, done: boolean): void {
+  const target = getTask(db, taskId);
+  if (!target) {
+    throw new TaskTreeError('対象のタスクが見つかりません');
+  }
+  const leafIds = collectDescendantLeafIds(db, taskId);
+  const targetIds = leafIds.length > 0 ? leafIds : [taskId];
+  const now = Date.now();
+  const placeholders = targetIds.map(() => '?').join(',');
+  if (done) {
+    db.prepare(
+      `UPDATE task SET status = 'DONE', done_at = ?, updated_at = ?
+       WHERE id IN (${placeholders}) AND drop_reason IS NULL`,
+    ).run(now, now, ...targetIds);
+  } else {
+    db.prepare(
+      `UPDATE task SET status = 'TODO', done_at = NULL, updated_at = ?
+       WHERE id IN (${placeholders}) AND drop_reason IS NULL`,
+    ).run(now, ...targetIds);
+  }
 }
 
 // --- 枝への着手・打ち切り（design D7） ---------------------------------------
