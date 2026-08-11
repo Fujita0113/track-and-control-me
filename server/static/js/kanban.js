@@ -7,7 +7,9 @@
 //  - CSP(style-src 'self')適合: スタイルは全てクラス + CSSOM。サウンドは設定ポップオーバー(既定 OFF)
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, addDays, localDateKey, toast, colorHex } from './util.js';
+import {
+  h, clear, addDays, localDateKey, toast, colorHex, openModal, closeModal,
+} from './util.js';
 import { createMarkdownEditor } from './md-editor.js';
 
 const NOTES_PLACEHOLDER = 'クリックして入力…   # 見出し ／ [ ] チェック ／ - リスト';
@@ -27,6 +29,7 @@ const WD_JP = ['日', '月', '火', '水', '木', '金', '土'];
 const SOUND_KEY = 'tcm_kanban_sound';
 const TOMORROW_KEY = 'tcm_kanban_tomorrow'; // {date, on} その日限りの「明日の計画モード」
 const CATEGORIZE_KEY = 'tcm_kanban_categorize'; // {date, on} その日限りの「カテゴリ付けモード」
+const SKIP_DELETE_CONFIRM_KEY = 'tcm_kanban_skip_delete_confirm'; // '1'/'0'。日付スコープなし（SOUND_KEY と同型）
 const HOLD_AHEAD_DAYS = 7; // 保留カードの既定 due（作業日 +7）
 const MAX_GROUP_CHIPS = 12; // カテゴリ候補チップの上限（timeline の MAX_CHIPS 相当。あふれは自由入力で拾う）
 const NS = 'http://www.w3.org/2000/svg';
@@ -77,6 +80,17 @@ export function computeDue(fromCol, toCol, tomorrowOn, workday) {
   }
   // 非HOLD → 非HOLD の移動は据え置き。
   return { change: false };
+}
+
+/**
+ * 削除確認の起点別スキップ判定（design D1, issue #95）。ゴミ箱アイコン起点かつ
+ * 「次回から確認しない」が有効なときだけ true。右クリック・詳細パネルは常に false
+ * （スキップ設定の値によらず、これらは必ず確認を経る）。
+ * @param {'trash'|'contextmenu'|'detail'} source
+ * @param {boolean} skipPref
+ */
+export function shouldSkipDeleteConfirm(source, skipPref) {
+  return source === 'trash' && !!skipPref;
 }
 
 // --- 画面状態 -------------------------------------------------------------
@@ -639,11 +653,19 @@ function colEl(col) {
   return el;
 }
 
-/** 確認ダイアログを経てタスクを削除する（詳細パネルの削除ボタン／カードのゴミ箱アイコン／
- * カードの右クリックの3箇所から共通で呼ばれる）。
- * Optimistic UI: サーバー応答を待たずに即座にボードから消し、失敗時のみ元の位置へ戻す。 */
-async function deleteTaskWithConfirm(t) {
-  if (!confirm('このタスクを削除しますか?')) return;
+// --- 削除確認スキップ設定（design D3, issue #95） ---------------------------
+// 「次回から確認しない」はゴミ箱アイコン起点にのみ効く。localStorage は日付スコープなし
+// （SOUND_KEY と同じ単純な '1'/'0' フラグ）。
+function deleteConfirmSkipEnabled() {
+  return localStorage.getItem(SKIP_DELETE_CONFIRM_KEY) === '1';
+}
+function setDeleteConfirmSkip(on) {
+  localStorage.setItem(SKIP_DELETE_CONFIRM_KEY, on ? '1' : '0');
+}
+
+/** 削除の実行本体（Optimistic UI）。3つの起点が確認を終えた後に共通で呼ぶ。
+ * サーバー応答を待たずに即座にボードから消し、失敗時のみ元の位置へ戻す。 */
+async function execDelete(t) {
   const prevTasks = S.tasks;
   S.tasks = prevTasks.filter((x) => x.id !== t.id);
   if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; }
@@ -656,6 +678,48 @@ async function deleteTaskWithConfirm(t) {
     toast(`削除に失敗: ${err.message}`, 'err');
     renderAll();
   }
+}
+
+/** 確認を経てタスクを削除する（詳細パネルの削除ボタン／カードのゴミ箱アイコン／
+ * カードの右クリックの3箇所から共通で呼ばれる）。source ごとに確認方法が異なる（design D2）:
+ * - 'trash'（ゴミ箱アイコン）: 「次回から確認しない」を持つカスタムモーダル。有効化後は無確認。
+ * - 'contextmenu'（右クリック）／'detail'（詳細パネル）: window.confirm() のまま変えない
+ *   （右クリックだけで消せてしまう事故を避けるため、スキップの効果を及ぼさない・issue #95）。
+ * @param {object} t
+ * @param {'trash'|'contextmenu'|'detail'} source
+ */
+async function deleteTaskWithConfirm(t, source) {
+  if (shouldSkipDeleteConfirm(source, deleteConfirmSkipEnabled())) {
+    await execDelete(t);
+    return;
+  }
+  if (source === 'trash') {
+    openDeleteConfirmModal(t);
+    return;
+  }
+  if (!confirm('このタスクを削除しますか?')) return;
+  await execDelete(t);
+}
+
+/** ゴミ箱アイコン起点のカスタム確認モーダル（design D4）。チェックして削除すると、
+ * 以後ゴミ箱アイコンからの削除は確認を挟まなくなる（右クリック・詳細パネルには効かない）。 */
+function openDeleteConfirmModal(t) {
+  const skipChk = h('input', { type: 'checkbox' });
+  const body = h('div', { class: 'modal-body stack' },
+    h('p', { text: 'このタスクを削除しますか?' }),
+    h('label', { class: 'inline' }, skipChk, '次回から確認しない（ゴミ箱アイコンのみ）'));
+  const execBtn = h('button', {
+    class: 'btn small danger', type: 'button', text: '削除',
+    onclick: async () => {
+      if (skipChk.checked) setDeleteConfirmSkip(true);
+      closeModal();
+      await execDelete(t);
+    },
+  });
+  body.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', type: 'button', text: 'キャンセル', onclick: closeModal }),
+    execBtn));
+  openModal(body, 'タスクを削除');
 }
 
 function cardEl(t) {
@@ -678,7 +742,7 @@ function cardEl(t) {
   card.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    deleteTaskWithConfirm(t);
+    deleteTaskWithConfirm(t, 'contextmenu');
   });
   card.addEventListener('dragstart', (e) => {
     S.draggingId = t.id;
@@ -710,7 +774,7 @@ function cardEl(t) {
       }, fmtDue(t.due), t.due_locked ? ' 🔒' : null),
       h('button', {
         class: 'kb-card-del', type: 'button', title: '削除', draggable: 'false',
-        onclick: (e) => { e.stopPropagation(); deleteTaskWithConfirm(t); },
+        onclick: (e) => { e.stopPropagation(); deleteTaskWithConfirm(t, 'trash'); },
       }, iconTrash()))));
   card.appendChild(cardTitleEl(t));
   const badge = categoryBadgeEl(t);
@@ -1428,7 +1492,7 @@ function detailEl(t) {
   panel.appendChild(h('div', { class: 'kb-detail-foot' },
     h('button', {
       class: 'kb-del-btn', type: 'button', text: 'タスクを削除',
-      onclick: () => deleteTaskWithConfirm(t),
+      onclick: () => deleteTaskWithConfirm(t, 'detail'),
     }),
     h('p', { class: 'kb-detail-hint', text: 'ノートは自動保存されます。カードはボードでドラッグして列の移動・並べ替えができます。' })));
 
