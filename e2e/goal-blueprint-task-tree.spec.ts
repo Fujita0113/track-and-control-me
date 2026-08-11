@@ -3,7 +3,6 @@ import { test, expect } from './fixtures.js';
 /**
  * タスクツリーがカンバンへどう出るかの通し E2E（issue #91 / spec: task-tree・goal-blueprint）。
  *   1. ツリーを投入する → カンバンの保留列に葉が並び、容れ物は盤面に出ない
- *   2. 盤面のカードを分解する → そのカードが消えて子が同じ列に現れ、親のパンくずを持つ
  * 完了操作は D&D が不安定なため PATCH で代替する（既存 e2e の流儀・kanban-restore.spec.ts 参照）。
  *
  * change `task-list-card-tree-ui` で、タスク一覧側の DOM を踏んでいた2本
@@ -13,6 +12,11 @@ import { test, expect } from './fixtures.js';
  * 成立しなくなる。差し替え後のセレクタは実装が発明するので、ここで書くと当てずっぽうになる。
  * 挙動そのものは vitest（`has_children と完了の導出` / `computeOpenPath: 現在地までの祖先だけを開く`）が
  * 押さえており、画面越しの確認は apply が新しい DOM に対して書き直す（tasks.md §0）。
+ *
+ * change `kanban-detail-overlay`（issue #92）で、詳細パネルから「このタスクを分解する」導線
+ * （`.kb-decompose-toggle` 等）を撤去した（テキスト欄を広く使うため、いったんカンバンから外す
+ * 判断）。それに伴い「盤面のカードを分解する→子が同じ列に現れる」のケースはここから削除した。
+ * 分解機能自体（`POST /api/tasks/:id/children`）とその vitest（task-tree.test.ts）は健在。
  */
 
 async function createGoal(request: import('@playwright/test').APIRequestContext, name: string) {
@@ -61,31 +65,4 @@ test('ツリーを投入する → カンバンの保留列に葉が並び、容
   await expect(holdCol.locator('.kb-card', { hasText: 'Notion にまとめる' })).toBeVisible();
   // 容れ物は盤面のどの列にも出ない（カードのタイトル要素で判定: 葉のパンくずと同名でも誤検出しない）。
   await expect(page.locator('.kb-card-title', { hasText: '苦手な質問への回答を用意する' })).toHaveCount(0);
-});
-
-test('盤面のカードを分解する → そのカードが消えて子が同じ列に現れる', async ({ page, request }) => {
-  const title = `分解対象e2e${Date.now()}`;
-  await request.post('/api/tasks', { data: { title, status: 'TODO' } });
-
-  await page.locator('#tabs button[data-target="kanban"]').click();
-  const todoCol = page.locator('.kb-col[data-col="TODO"]');
-  await expect(todoCol.locator('.kb-card', { hasText: title })).toBeVisible();
-  await todoCol.locator('.kb-card', { hasText: title }).click();
-
-  await page.locator('.kb-decompose-toggle').click();
-  await page.locator('.kb-decompose-ta').fill('子タスクA\n子タスクB');
-  await page.locator('.kb-decompose-submit').click();
-
-  // 親カードは盤面から消える（タイトル要素で判定: 子カードのパンくずと同名でも誤検出しない）。
-  await expect(page.locator('.kb-card-title', { hasText: title })).toHaveCount(0);
-  // 子は同じ列（未着手）に現れ、親のパンくずを持つ。
-  // `task-list-card-tree-ui` でパンくずは帯になり、目標名の要素が増えうる。`.kb-breadcrumb`
-  // （帯そのもの）に親の名前が含まれることだけを見て、内側の分割には踏み込まない。
-  // ここは目標に属さないタスクなので、帯には親だけが出る。
-  const childA = todoCol.locator('.kb-card', { hasText: '子タスクA' });
-  await expect(childA).toBeVisible();
-  await expect(childA.locator('.kb-breadcrumb')).toContainText(title);
-  const childB = todoCol.locator('.kb-card', { hasText: '子タスクB' });
-  await expect(childB).toBeVisible();
-  await expect(childB.locator('.kb-breadcrumb')).toContainText(title);
 });

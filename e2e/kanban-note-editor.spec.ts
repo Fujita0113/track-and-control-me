@@ -59,9 +59,8 @@ test('todo 行で Tab を押すとネストされ、フォーカスがエディ�
   await editor.locator('.rf-ed-task-text').click();
   await page.keyboard.press('Tab');
 
-  // フォーカスはノートエディタ内に留まる（「タスクを削除」ボタンへ移動しない）。
+  // フォーカスはノートエディタ内に留まる（Tab がリスト行のネストとして処理され、既定のフォーカス移動は起きない）。
   await expect(editor).toBeFocused();
-  await expect(page.locator('.kb-del-btn')).not.toBeFocused();
 
   // 確定保存されたことを確認（詳細を閉じて flushSaves を通す）。
   await page.locator('.kb-detail-close').click();
@@ -99,8 +98,10 @@ test('見出し・段落など非リスト行では Tab がフォーカス移動
   await editor.click();
   await page.keyboard.press('Tab');
 
-  // 非リスト行では既定のフォーカス移動が働き、詳細パネル内の次のコントロール（削除ボタン）へ到達する。
-  await expect(page.locator('.kb-del-btn')).toBeFocused();
+  // 非リスト行では既定のフォーカス移動が働き、エディタは preventDefault せずフォーカスを手放す
+  // （kanban-detail-overlay 以降、詳細パネルにボタンが無くフォーカス移動先は定めないため、
+  //   「エディタに留まっていない」ことだけを見る）。
+  await expect(editor).not.toBeFocused();
 });
 
 test('チェックボックストグルが保存される', async ({ page }) => {

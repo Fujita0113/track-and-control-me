@@ -104,6 +104,12 @@ let O = null;
 const saveTimers = new Map(); // `${id}:${field}` → { timer, run }
 let isRendering = false; // renderAll() の再入ガード（issue #85: フォーカス除去に伴う同期blurからの再入クラッシュ防止）
 let renderQueued = false;
+// ダブルクリックでのカードリネーム用（issue #92: detail オーバーレイのスクリムが全画面を覆うため、
+// dblclick の1回目の click が開いた overlay に2回目の click/dblclick が奪われ、カード自身では
+// 拾えなくなった。overlay 側の背景クリックで「直前にこのカードがクリックされた」と分かった
+// 場合はリネームへ切り替える）。
+let lastCardClickId = null;
+let lastCardClickAt = 0;
 
 const DEFAULT_OPTS = {
   bodyClass: 'kb-page', // body へ付けるクラス。埋め込み時は null（rf-page を壊さない）
@@ -147,7 +153,6 @@ export async function mount(root, opts) {
     draggingId: null,
     renamingId: null, // カード上インライン編集中のタスクID(issue #29)
     dirtyReorderCols: new Set(), // 作成中カードがいたため送信保留した列（design D2, issue #79）
-    decomposeOpen: false, // 詳細パネルの「このタスクを分解する」展開状態（task-tree）
   };
   clear(root);
   root.appendChild(h('div', { class: 'empty', text: '読み込み中…' }));
@@ -304,6 +309,8 @@ function renderAll() {
       main.appendChild(boardEl());
       main.appendChild(asideEl());
       page.appendChild(main);
+      const detailTask = S.detailId != null ? findTask(S.detailId) : null;
+      if (detailTask) page.appendChild(detailOverlayEl(detailTask));
       rootEl.appendChild(page);
     }
     afterRender();
@@ -574,10 +581,7 @@ function onDocDragLeaveV(e) {
 
 // --- ボード -----------------------------------------------------------------
 function boardEl() {
-  const scroll = h('div', {
-    class: 'kb-board-scroll',
-    onclick: () => { if (S.detailId != null || S.dueCalOpen) closeDetail(); },
-  });
+  const scroll = h('div', { class: 'kb-board-scroll' });
   // ドラッグ中の端寄せで自動横スクロール。dragover はバブリングするため、列側の
   // 挿入インジケータ経路(kanban-task-reorder)と衝突せず祖先で clientX を拾える。
   scroll.addEventListener('dragover', (e) => {
@@ -730,6 +734,8 @@ function cardEl(t) {
   // それを閉じてリネームへ切り替える（下の dblclick ハンドラ）。
   card.addEventListener('click', (e) => {
     e.stopPropagation();
+    lastCardClickId = t.id;
+    lastCardClickAt = Date.now();
     openDetail(t);
   });
   // カードのどこをダブルクリックしてもタイトルのインライン編集に入る。
@@ -1315,14 +1321,31 @@ function advanceAfterCategorize(col) {
 // --- サイドバー ---------------------------------------------------------------
 function asideEl() {
   const aside = h('div', { class: 'kb-aside' });
-  const t = S.detailId != null ? findTask(S.detailId) : null;
-  if (t) {
-    aside.appendChild(detailEl(t));
-  } else {
-    aside.appendChild(progressEl());
-    aside.appendChild(logEl());
-  }
+  aside.appendChild(progressEl());
+  aside.appendChild(logEl());
   return aside;
+}
+
+/** 独立カンバンタブでの detail オーバーレイ（design D1）: 背景クリック(スクリム)で閉じる。
+ * パネル内クリックは e.target !== overlay なので閉じない（.modal-backdrop と同じ判定方式）。 */
+function detailOverlayEl(t) {
+  const overlay = h('div', { class: 'kb-detail-overlay' });
+  overlay.addEventListener('click', (e) => {
+    if (e.target !== overlay) return;
+    // dblclick の2回目の click は、1回目の click が開いたこの overlay に奪われて
+    // カードへは届かない。直前にこのカードがクリックされていれば dblclick とみなし、
+    // 既存の「ダブルクリックでリネーム」へ切り替える（閉じない）。
+    if (lastCardClickId === t.id && Date.now() - lastCardClickAt < 500) {
+      S.detailId = null;
+      S.dueCalOpen = false;
+      S.renamingId = t.id;
+      renderAll();
+      return;
+    }
+    closeDetail();
+  });
+  overlay.appendChild(detailEl(t));
+  return overlay;
 }
 
 function progressEl() {
@@ -1404,7 +1427,6 @@ function openDetail(t) {
   S.detailId = t.id;
   S.focusNotes = !(t.notes && t.notes.trim());
   S.dueCalOpen = false;
-  S.decomposeOpen = false;
   renderAll();
   if (O.onDetailOpen) O.onDetailOpen();
 }
@@ -1413,7 +1435,6 @@ function closeDetail() {
   flushSaves();
   S.detailId = null;
   S.dueCalOpen = false;
-  S.decomposeOpen = false;
   renderAll();
 }
 
@@ -1490,55 +1511,8 @@ function detailEl(t) {
   panel.appendChild(body);
 
   panel.appendChild(h('div', { class: 'kb-detail-foot' },
-    h('button', {
-      class: 'kb-del-btn', type: 'button', text: 'タスクを削除',
-      onclick: () => deleteTaskWithConfirm(t, 'detail'),
-    }),
     h('p', { class: 'kb-detail-hint', text: 'ノートは自動保存されます。カードはボードでドラッグして列の移動・並べ替えができます。' })));
-
-  // タブ順で削除ボタンより後ろに置く（既存 e2e: 非リスト行の Tab は削除ボタンへ到達する前提）。
-  panel.appendChild(h('div', { class: 'kb-hr' }));
-  panel.appendChild(decomposeEl(t));
   return panel;
-}
-
-/**
- * 「このタスクを分解する」導線（task-tree, design D5）。詳細パネル内に置き、
- * 盤面のドラッグ操作とは独立した場所なので暴発しない。1行1子タスクとして
- * POST /api/tasks/:id/children を順番に呼ぶ。分解後は親が盤面から消えるため詳細を閉じる。
- */
-function decomposeEl(t) {
-  const wrap = h('div', { class: 'kb-decompose' });
-  const toggle = h('button', {
-    class: 'kb-decompose-toggle', type: 'button', text: 'このタスクを分解する',
-    onclick: () => { S.decomposeOpen = !S.decomposeOpen; renderAll(); },
-  });
-  wrap.appendChild(toggle);
-  if (!S.decomposeOpen) return wrap;
-
-  const ta = h('textarea', {
-    class: 'kb-decompose-ta', rows: '3', placeholder: '1行に1つ、子タスク名を入力',
-  });
-  const submit = h('button', {
-    class: 'kb-decompose-submit', type: 'button', text: '分解する',
-    onclick: async () => {
-      const lines = ta.value.split('\n').map((s) => s.trim()).filter(Boolean);
-      if (!lines.length) return;
-      submit.disabled = true;
-      try {
-        for (const title of lines) await api.createChildTask(t.id, { title });
-        toast('分解しました', 'ok');
-        closeDetail();
-        await reload();
-      } catch (err) {
-        toast(`分解に失敗: ${err.message}`, 'err');
-        submit.disabled = false;
-      }
-    },
-  });
-  wrap.appendChild(ta);
-  wrap.appendChild(submit);
-  return wrap;
 }
 
 // --- 期限ピッカー(カレンダーポップオーバー) ------------------------------------
