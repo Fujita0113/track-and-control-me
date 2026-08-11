@@ -69,6 +69,14 @@ npx playwright test e2e/<new-spec>.spec.ts                # 通ること
 起動済みサーバを使い回し、stash したのに新しいコードで走って**偽の緑**になる（実測で確認済み）。
 stash 側が通ってしまったら、その spec は今回の変更について何も主張していないので書き直す。
 
+**worktree では実行前に `npm install` を済ませること。** `git worktree add` で作った worktree は
+`node_modules` を共有しない（真っ新な状態）。インストールし忘れたまま上記コマンドを実行すると、
+`e2e/fixtures.ts` が worker ごとに spawn するサーバーが `MODULE_NOT_FOUND` で即死してポートが開かず、
+`Fixture "workerServerURL" timeout of 30000ms exceeded` という**一見インフラ由来に見えるエラー**で
+全テストが失敗する（実測: issue #92 の worktree で「残留プロセスが原因」と誤診断し、手動起動サーバへの
+代替確認に逃げて実際のコードを検証できないまま「確認済み」と記録してしまった）。
+`workerServerURL timeout` が出たら、残留プロセスやマシン負荷を疑う前にまず `node_modules` の有無を確認する。
+
 ### 凍結側の誤りが見つかったときの例外（1回だけ投げ返す）
 
 実装を直しても通らず、**凍結側が間違っている**と判断した場合に限り、
