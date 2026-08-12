@@ -410,6 +410,86 @@ function seedRuleChronicle(db: DB): void {
   );
 }
 
+// --- 家計簿のサンプル月（design.md「数字の筋書き」・kakeibo-forecast.test.ts の seedAll() と同一） ---
+// 家計簿は既存データに一切依存しないため、目標の Day1-30（2026-06-11〜）とは無関係の固定日付
+// （2026-07/2026-08）を使う。デモの家計簿 API（/api/demo/kakeibo/*）は仮想 day_key を無視し、
+// 常にこの固定シナリオ（today=2026-08-11）を返す＝目標タブのスライダー位置に関わらず
+// 「デモを開始した直後から中身の入った状態」を保証する（spec: demo-mode）。
+export const DEMO_KAKEIBO_MONTH = '2026-08';
+export const DEMO_KAKEIBO_TODAY = '2026-08-11';
+
+function seedKakeiboDemo(db: DB): void {
+  const insEntry = db.prepare(
+    `INSERT INTO kakeibo_entry
+      (day_key, name, amount_yen, category, importance, planned_days, actual_days, covers_from, bulk_from, bulk_to, receipt_id, created_at, updated_at)
+     VALUES (@dayKey, @name, @amountYen, @category, @importance, @plannedDays, @actualDays, @coversFrom, @bulkFrom, @bulkTo, NULL, @now, @now)`,
+  );
+  const entry = (
+    dayKey: string, name: string, amountYen: number, category: string, importance: string | null,
+    plannedDays: number, actualDays: number | null, coversFrom = dayKey, bulkFrom: string | null = null, bulkTo: string | null = null,
+  ): void => {
+    insEntry.run({ dayKey, name, amountYen, category, importance, plannedDays, actualDays, coversFrom, bulkFrom, bulkTo, now: SEED_TS });
+  };
+
+  // 業務スーパーの確定履歴（7/18 6日 / 7/26 3日 / 8/01 予定7日・実績5日）。
+  entry('2026-07-18', '業務スーパー', 3_600, 'FOOD', 'MUST', 6, 6);
+  entry('2026-07-26', '業務スーパー', 1_050, 'FOOD', 'MUST', 3, 3);
+  entry('2026-08-01', '業務スーパー', 4_200, 'FOOD', 'MUST', 7, 5);
+  // ドラッグストアの確定履歴（合計 3,130円・44日）。
+  entry('2026-07-01', 'ドラッグストア', 1_850, 'DAILY', 'MUST', 30, 30);
+  entry('2026-07-12', 'ドラッグストア', 1_280, 'DAILY', 'SEMI', 14, 14);
+  // 8月の在庫もの（未確定・暫定。母数には入らない＝「未確定1」バッジの実例）。
+  entry('2026-08-06', '業務スーパー', 2_600, 'FOOD', 'MUST', 5, null);
+  entry('2026-08-02', 'ドラッグストア', 1_850, 'DAILY', 'MUST', 30, null);
+  entry('2026-08-10', 'ドラッグストア', 1_280, 'DAILY', 'SEMI', 14, null);
+  // 8月の散発（食品）。
+  entry('2026-08-08', 'コンビニ', 820, 'FOOD', 'WASTE', 1, 1);
+  entry('2026-08-09', '一蘭（外食）', 1_100, 'FOOD', 'SEMI', 1, 1);
+  entry('2026-08-11', 'コンビニ', 620, 'FOOD', 'WASTE', 1, 1);
+  // 8月の娯楽・急な出費（日数を持たない）。
+  entry('2026-08-07', 'Steam サマーセール', 3_480, 'FUN', 'WASTE', 0, 0);
+  entry('2026-08-09', '歯医者', 3_300, 'SUDDEN', 'MUST', 0, 0);
+  // 未記録期間の一括入力（内訳なし・重要度の帯に「内訳なし」区画を作る）。
+  entry('2026-08-02', '', 3_400, 'NONE', null, 4, 4, '2026-08-02', '2026-08-02', '2026-08-05');
+  // 娯楽・急な出費の過去3か月（月枠の残りの算出材料）。
+  for (const [day, fun, sudden] of [
+    ['2026-05-15', 4_000, 3_000],
+    ['2026-06-15', 5_000, 3_000],
+    ['2026-07-15', 4_500, 3_000],
+  ] as const) {
+    entry(day, '娯楽（過去）', fun, 'FUN', 'WASTE', 0, 0);
+    entry(day, '急な出費（過去）', sudden, 'SUDDEN', 'MUST', 0, 0);
+  }
+
+  db.prepare(
+    'INSERT INTO kakeibo_budget (month_key, cap_yen, waste_cap_yen, updated_at) VALUES (?, ?, ?, ?)',
+  ).run(DEMO_KAKEIBO_MONTH, 62_000, 4_000, SEED_TS);
+
+  const insFixed = db.prepare(
+    'INSERT INTO kakeibo_fixed_cost (month_key, name, amount_yen, sort_order) VALUES (?, ?, ?, ?)',
+  );
+  insFixed.run(DEMO_KAKEIBO_MONTH, '電気代', 8_500, 0);
+  insFixed.run(DEMO_KAKEIBO_MONTH, 'ガス代', 3_000, 1);
+  insFixed.run(DEMO_KAKEIBO_MONTH, '通信費', 4_400, 2);
+  insFixed.run(DEMO_KAKEIBO_MONTH, 'サブスク', 1_480, 3);
+  // 前月（7月）の実績も置く（固定費の「前月から取り込む」「前月の参考値」の実例）。
+  insFixed.run('2026-07', '電気代', 8_200, 0);
+  insFixed.run('2026-07', 'ガス代', 3_100, 1);
+  insFixed.run('2026-07', '通信費', 4_400, 2);
+  insFixed.run('2026-07', 'サブスク', 1_480, 3);
+
+  db.prepare(
+    `INSERT INTO kakeibo_planned_expense (name, category, cycle_days, next_day_key, amount_yen, sort_order, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('床屋', 'SUDDEN', 30, '2026-08-20', 1_800, 0, SEED_TS);
+
+  // 業務スーパーは「前回の値」を表示中の基準にする（design D5・上限超過が見えている筋書きの実例）。
+  db.prepare(
+    `INSERT INTO kakeibo_forecast_basis (name, basis, recent_n, manual_cycle_days, manual_amount_yen, updated_at)
+     VALUES (?, 'LAST', 3, NULL, NULL, ?)`,
+  ).run('業務スーパー', SEED_TS);
+}
+
 /** デモ用サンプルを空の（マイグレーション済み）DB へ seed する。 */
 export function seedDemo(db: DB): void {
   const tx = db.transaction(() => {
@@ -758,6 +838,9 @@ export function seedDemo(db: DB): void {
           n, co_record_group_id, edited, created_at, updated_at)
        VALUES (?, ?, ?, 'MANUAL', '休憩', 'grey', '休憩', '[]', 1, NULL, 0, ?, ?)`,
     ).run(DEMO_ALLOC_DAY, allocMs(12, 0), allocMs(12, 45), SEED_TS, SEED_TS);
+
+    // 家計簿（design.md「数字の筋書き」・目標の Day1-30 とは無関係の固定シナリオ）。
+    seedKakeiboDemo(db);
   });
   tx();
 

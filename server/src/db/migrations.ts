@@ -1348,4 +1348,81 @@ CREATE INDEX idx_task_parent ON task(parent_task_id, tree_order);
 CREATE INDEX idx_task_goal ON task(goal_id);
 `,
   },
+  {
+    version: 30,
+    name: 'kakeibo',
+    // 家計簿（spec: kakeibo-ledger / kakeibo-day-rate / kakeibo-forecast / kakeibo-budget /
+    // kakeibo-analysis / kakeibo-gate・design.md D1）。新規テーブル7本のみ。既存テーブルへの
+    // ALTER はゼロ＝家計簿タブを開かない限り既存の挙動は完全に同じ（Migration Plan）。
+    sql: /* sql */ `
+CREATE TABLE kakeibo_entry (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  amount_yen INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  importance TEXT,
+  planned_days INTEGER NOT NULL DEFAULT 1,
+  actual_days INTEGER,
+  covers_from TEXT NOT NULL,
+  bulk_from TEXT,
+  bulk_to TEXT,
+  receipt_id INTEGER REFERENCES kakeibo_receipt(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_kakeibo_entry_day ON kakeibo_entry(day_key);
+CREATE INDEX idx_kakeibo_entry_name ON kakeibo_entry(name, day_key);
+
+CREATE TABLE kakeibo_receipt (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mime TEXT NOT NULL,
+  bytes BLOB NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE kakeibo_zero_day (
+  day_key TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE kakeibo_budget (
+  month_key TEXT PRIMARY KEY,
+  cap_yen INTEGER NOT NULL,
+  waste_cap_yen INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE kakeibo_fixed_cost (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  month_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  amount_yen INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (month_key, name)
+);
+
+CREATE TABLE kakeibo_planned_expense (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  cycle_days INTEGER NOT NULL,
+  next_day_key TEXT NOT NULL,
+  amount_yen INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE kakeibo_forecast_basis (
+  name TEXT PRIMARY KEY,
+  basis TEXT NOT NULL,
+  recent_n INTEGER NOT NULL DEFAULT 3,
+  manual_cycle_days INTEGER,
+  manual_amount_yen INTEGER,
+  updated_at INTEGER NOT NULL
+);
+`,
+  },
 ];

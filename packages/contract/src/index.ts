@@ -456,3 +456,102 @@ export const GoalHistoryEntrySchema = z.object({
   }),
 });
 export type GoalHistoryEntry = z.infer<typeof GoalHistoryEntrySchema>;
+
+// ---------------------------------------------------------------------------
+// 家計簿（spec: kakeibo-ledger / kakeibo-day-rate / kakeibo-forecast / kakeibo-budget /
+// kakeibo-analysis / kakeibo-gate・design.md「数字の筋書き」）。
+// ---------------------------------------------------------------------------
+
+/** 支出のカテゴリ（4値＋まとめ登録用の NONE・design D1）。 */
+export const KakeiboCategorySchema = z.enum(['FOOD', 'DAILY', 'FUN', 'SUDDEN', 'NONE']);
+export type KakeiboCategory = z.infer<typeof KakeiboCategorySchema>;
+
+/** 支出の重要度（3値。まとめ登録は null=内訳なし・design D10）。 */
+export const KakeiboImportanceSchema = z.enum(['MUST', 'SEMI', 'WASTE']);
+export type KakeiboImportance = z.infer<typeof KakeiboImportanceSchema>;
+
+/** 予想の計算基準（4種・design D5）。既定は ALL_AVG。 */
+export const KakeiboForecastBasisSchema = z.enum(['LAST', 'ALL_AVG', 'RECENT_N', 'MANUAL']);
+export type KakeiboForecastBasis = z.infer<typeof KakeiboForecastBasisSchema>;
+
+/** 実績日数の確認1問の3択（design D3）。 */
+export const KakeiboConfirmChoiceSchema = z.enum(['REMAINING', 'TODAY', 'EARLIER']);
+export type KakeiboConfirmChoice = z.infer<typeof KakeiboConfirmChoiceSchema>;
+
+/** 支出レコードの3状態（design D4）。 */
+export const KakeiboEntryStateSchema = z.enum(['CONFIRMED', 'PROVISIONAL', 'PENDING']);
+export type KakeiboEntryState = z.infer<typeof KakeiboEntryStateSchema>;
+
+/** 予想の計算基準の一覧の行の種別（design D2）。 */
+export const KakeiboForecastSourceKindSchema = z.enum(['STOCK', 'SPORADIC', 'MONTHLY_ROOM', 'RESERVATION']);
+export type KakeiboForecastSourceKind = z.infer<typeof KakeiboForecastSourceKindSchema>;
+
+/** 支出レコードの記録入力（design D1・API POST /entries）。 */
+export const KakeiboCreateEntryInputSchema = z.object({
+  dayKey: DayKeySchema,
+  name: z.string(),
+  amountYen: z.number(),
+  category: KakeiboCategorySchema,
+  importance: KakeiboImportanceSchema,
+  plannedDays: z.number().int().nonnegative().optional(),
+  receiptId: z.number().int().nullish(),
+  confirm: z
+    .object({
+      choice: KakeiboConfirmChoiceSchema,
+      n: z.number().int().positive().optional(),
+    })
+    .optional(),
+});
+export type KakeiboCreateEntryInput = z.infer<typeof KakeiboCreateEntryInputSchema>;
+
+/** 記録済みレコードの後追い修正（design D1・API PATCH /entries/:id）。 */
+export const KakeiboUpdateEntryInputSchema = z.object({
+  plannedDays: z.number().int().nonnegative().optional(),
+  actualDays: z.number().int().positive().nullable().optional(),
+  amountYen: z.number().optional(),
+  category: KakeiboCategorySchema.optional(),
+  importance: KakeiboImportanceSchema.nullable().optional(),
+  receiptId: z.number().int().nullable().optional(),
+});
+export type KakeiboUpdateEntryInput = z.infer<typeof KakeiboUpdateEntryInputSchema>;
+
+/** 未記録期間の一括入力（design D10・API POST /entries/bulk）。 */
+export const KakeiboBulkEntryInputSchema = z.object({
+  fromDayKey: DayKeySchema,
+  toDayKey: DayKeySchema,
+  amountYen: z.number(),
+});
+export type KakeiboBulkEntryInput = z.infer<typeof KakeiboBulkEntryInputSchema>;
+
+/** 予想の計算基準の保存入力（design D5・API PUT /basis/:name）。 */
+export const KakeiboSetBasisInputSchema = z.object({
+  basis: KakeiboForecastBasisSchema,
+  recentN: z.number().int().positive().optional(),
+  manualCycleDays: z.number().int().positive().optional(),
+  manualAmountYen: z.number().int().positive().optional(),
+});
+export type KakeiboSetBasisInput = z.infer<typeof KakeiboSetBasisInputSchema>;
+
+/** 月の上限・「いらない」の上限の入力（design D8・API PUT /budget）。 */
+export const KakeiboSetBudgetInputSchema = z.object({
+  capYen: z.number().int().nonnegative().optional(),
+  wasteCapYen: z.number().int().nonnegative().optional(),
+});
+export type KakeiboSetBudgetInput = z.infer<typeof KakeiboSetBudgetInputSchema>;
+
+/** 固定費の予想1件の入力（design D8・API POST/PATCH /fixed-costs）。 */
+export const KakeiboFixedCostInputSchema = z.object({
+  name: z.string().min(1),
+  amountYen: z.number().int().nonnegative(),
+});
+export type KakeiboFixedCostInput = z.infer<typeof KakeiboFixedCostInputSchema>;
+
+/** 毎月の予定出費1件の入力（design D9・API POST/PATCH /planned-expenses）。 */
+export const KakeiboPlannedExpenseInputSchema = z.object({
+  name: z.string().min(1),
+  category: KakeiboCategorySchema,
+  cycleDays: z.number().int().positive(),
+  nextDayKey: DayKeySchema,
+  amountYen: z.number().int().nonnegative(),
+});
+export type KakeiboPlannedExpenseInput = z.infer<typeof KakeiboPlannedExpenseInputSchema>;

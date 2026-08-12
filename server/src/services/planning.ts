@@ -1,6 +1,7 @@
 import type { DB } from '../db/index.js';
 import { getConfig } from '../db/index.js';
 import { nextDayKey } from '../aggregation/index.js';
+import { isKakeiboRecorded } from './kakeibo.js';
 
 /**
  * 「翌日計画完了」シグナル（PLANNING）。既定は「当日の振り返り記録済み」かつ
@@ -78,6 +79,7 @@ export const PLANNING_SIGNAL_KEYS = [
   'tomorrow_planned',
   'reflection_done',
   'tomorrow_tasks_registered',
+  'kakeibo_recorded',
 ] as const;
 export type PlanningSignalKey = (typeof PLANNING_SIGNAL_KEYS)[number];
 
@@ -91,6 +93,8 @@ export function resolvePlanningSignal(db: DB, dayKey: string, signalKey: string 
       return sig.reflectionDone;
     case 'tomorrow_tasks_registered':
       return sig.tomorrowTaskCount >= getConfig(db).planning_min_tomorrow_tasks;
+    case 'kakeibo_recorded':
+      return tableExists(db, 'kakeibo_entry') && isKakeiboRecorded(db, dayKey);
     default:
       console.warn(`[planning] 未知の signal_key=${JSON.stringify(signalKey)} → false（非解錠）`);
       return false;

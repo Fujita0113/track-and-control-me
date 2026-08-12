@@ -12,6 +12,7 @@ import { registerTimelineRoutes } from './timeline.js';
 import { registerPlanningRoutes } from './planning.js';
 import { registerGoalRoutes } from './goals.js';
 import { registerDemoRoutes } from './demo.js';
+import { registerKakeiboRoutes } from './kakeibo.js';
 import type { ApiDeps } from './types.js';
 
 export type { ApiDeps };
@@ -139,4 +140,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiDeps): Pr
 
   // --- デモ（お試し）モード: 読み取り専用・本番ゲート非到達（design.md D3）---
   registerDemoRoutes(app, deps);
+
+  // --- 家計簿 -----------------------------------------------------------
+  registerKakeiboRoutes(app, deps);
 }

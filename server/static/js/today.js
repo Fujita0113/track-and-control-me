@@ -6,13 +6,36 @@
 // 30秒リフレッシュはゲート領域(ヒーロー/条件/reveal)のみ。モーダルが開いている間はスキップ。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, fmtDur, fmtHM, colorHex, copyText, toast, emptyState } from './util.js';
+import { h, clear, fmtDur, fmtHM, colorHex, copyText, toast, emptyState, attachTooltip, isTypingTarget } from './util.js';
 import { targetLabel, planningSignalLabel } from './targets.js';
 import { isDemo } from './demo.js';
 import { shortDay } from './rule-form.js';
 
 let charts = [];
 let timer = null;
+let activeToday = false;
+
+/** 「0円だった」を宣言してゲートを更新する（今日タブの条件行・グローバル 0 キー共通・spec: kakeibo-gate）。 */
+async function declareZeroDayFlow(date) {
+  try {
+    await api.kakeibo.declareZeroDay(date);
+    toast('0円だったを記録しました', 'ok');
+    refreshGate();
+  } catch (err) {
+    toast(`記録に失敗しました: ${err.message}`, 'err');
+  }
+}
+
+// グローバル 0 キー: 今日タブが表示中・入力中でない・モーダルが開いていないときだけ発火。
+document.addEventListener('keydown', (e) => {
+  if (!activeToday || isDemo()) return;
+  if (e.key !== '0' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  if (isTypingTarget(e)) return;
+  const modal = document.getElementById('modal-root');
+  if (modal && modal.classList.contains('open')) return;
+  e.preventDefault();
+  void declareZeroDayFlow(state.today);
+});
 /**
  * ゲート領域の再描画関数（show() が設定）。Check の回答・取り下げ後に条件行から呼び、
  * 解錠状態（＝パスワードの出現）まで即座に反映させる。タブ非表示中は no-op。
@@ -30,11 +53,13 @@ export function hide() {
   destroyCharts();
   if (timer) { clearInterval(timer); timer = null; }
   refreshGate = () => undefined;
+  activeToday = false;
 }
 
 export async function show(root) {
   clear(root);
   hide();
+  activeToday = true;
 
   // デモ中は仮想日付のサンプル（解錠状態・条件進捗・ダミーパスワード）を静的表示。
   // 本物の reveal / ルール編集（本番書き込み）は動かさない。
@@ -281,6 +306,8 @@ function condRow(c, planning, date, pending = new Map()) {
         sub = `振り返り: ${planning.reflectionDone ? '✓ 記録済み' : '✗ 未記録'}`;
       } else if (c.signalKey === 'tomorrow_tasks_registered') {
         sub = `明日のタスク: ${planning.tomorrowTaskCount} 件`;
+      } else if (c.signalKey === 'kakeibo_recorded') {
+        sub = met ? '今日ぶんを記録済み' : '今日ぶんが1件もない';
       } else {
         sub = `振り返り: ${planning.reflectionDone ? '✓' : '✗'} / 明日のタスク: ${planning.tomorrowTaskCount} 件`;
       }
@@ -306,6 +333,28 @@ function condRow(c, planning, date, pending = new Map()) {
     bar.firstChild.style.width = `${pct}%`;
     main.appendChild(bar);
   }
+
+  // 家計簿の条件が未達成のとき、「家計簿へ」「0円だった」の導線を出す（spec: kakeibo-gate）。
+  if (c.target === 'PLANNING' && c.signalKey === 'kakeibo_recorded' && !met && !isDemo()) {
+    const kids = [main];
+    const gotoBtn = h('button', { class: 'btn small', type: 'button', text: '家計簿へ' });
+    gotoBtn.addEventListener('click', () => {
+      const tab = document.querySelector('.tab[data-target="kakeibo"]');
+      if (tab) tab.click();
+    });
+    kids.push(gotoBtn);
+    const zeroBtn = h('button', { class: 'btn small', type: 'button', text: '0円だった' });
+    zeroBtn.addEventListener('click', async () => {
+      zeroBtn.disabled = true;
+      try { await declareZeroDayFlow(date); } finally { zeroBtn.disabled = false; }
+    });
+    attachTooltip(zeroBtn, { label: '今日は使わなかった', keys: ['0'] });
+    const zeroHint = h('span', { class: 'kb-hint' }, zeroBtn);
+    kids.push(zeroHint);
+    kids.push(h('span', { class: `mark ${met ? 'yes' : 'no'}`, text: met ? '✓' : '✗' }));
+    return h('div', { class: `cond ${met ? 'met' : ''}` }, ...kids);
+  }
+
   return h('div', { class: `cond ${met ? 'met' : ''}` },
     main,
     h('span', { class: `mark ${met ? 'yes' : 'no'}`, text: met ? '✓' : '✗' }),
