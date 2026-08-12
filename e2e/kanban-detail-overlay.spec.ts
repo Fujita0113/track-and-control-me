@@ -137,3 +137,44 @@ test('ノートが空でも、detail パネルはデフォルトで縦に長く�
   const [scrollHeight, clientHeight] = await panel.evaluate((el) => [el.scrollHeight, el.clientHeight]);
   expect(scrollHeight).toBeGreaterThan(clientHeight);
 });
+
+test('detailパネルの左端をドラッグして画面占有率を変更でき、次回開いたときも幅が保持される（issue #92 追加要望）', async ({ page }) => {
+  const title = `リサイズe2eタスク${Date.now()}`;
+  await seedTask(page.request, title);
+  await page.reload();
+  await page.getByRole('button', { name: 'あとで' }).click({ timeout: 2000 }).catch(() => {});
+  await page.locator('#tabs button[data-target="kanban"]').click();
+
+  await page.locator('.kb-card', { hasText: title }).click();
+  const panel = page.locator('.kb-detail-overlay .kb-detail');
+  await expect(panel).toBeVisible();
+  const before = await panel.boundingBox();
+  expect(before).not.toBeNull();
+
+  const handle = page.locator('.kb-detail-overlay .kb-detail-resize');
+  const handleBox = await handle.boundingBox();
+  expect(handleBox).not.toBeNull();
+  const startX = handleBox!.x + handleBox!.width / 2;
+  const startY = handleBox!.y + handleBox!.height / 2;
+
+  // 左端を左へドラッグして幅を広げる。
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX - 150, startY, { steps: 5 });
+  await page.mouse.up();
+
+  await expect.poll(async () => {
+    const box = await panel.boundingBox();
+    return box ? box.width : null;
+  }).toBeGreaterThan(before!.width + 100);
+
+  // ✕で閉じて再度開いても、変更した幅が保持されている。
+  await page.locator('.kb-detail-close').click();
+  await expect(page.locator('.kb-detail-overlay')).toHaveCount(0);
+  await page.locator('.kb-card', { hasText: title }).click();
+  const panel2 = page.locator('.kb-detail-overlay .kb-detail');
+  await expect(panel2).toBeVisible();
+  const after = await panel2.boundingBox();
+  expect(after).not.toBeNull();
+  expect(after!.width).toBeGreaterThan(before!.width + 100);
+});

@@ -13,6 +13,10 @@
 - ノート本文だけが独立してスクロールし、タイトル・優先度・期限が据え置きになる現状の挙動をやめ、パネル全体を一体のスクロール領域にする。
 - ノート入力欄のプレースホルダーは、フォーカス時（入力前でも）に隠れるようにする。
 
+**追記3（ユーザーとのセッション内フィードバック、2026-08-12）**: D6/D7/D8実装後、ユーザーから (a) detail の画面占有率を手動で調整したい、(b) `kb-detail-foot` のヒント文（「ノートは自動保存されます。カードは…」）がノート欄を狭く見せるので削除してほしい、との追加要望があり、以下を変更している（D9）:
+- detail パネルの左端をドラッグして幅を変更できるようにする（`localStorage` に保存し、次回開いたときも保持する）。
+- `kb-detail-foot`（ヒント文 `kb-detail-hint`）を撤去する。この要素は独立カンバンタブ・埋め込み（明日の計画）の両方の detail パネルに影響する（`detailEl(t)` 自体の変更のため）。
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -22,6 +26,8 @@
 - 詳細パネルのフッターから「タスクを削除」「このタスクを分解する」ボタンを撤去し、ノート編集欄（テキスト欄）が占める視覚的な割合を広げる。
 - ノート本文が長くなっても、タイトル・優先度・期限とノートを別々のスクロール領域に分けず、パネル全体を一体でスクロールさせる。
 - ノート入力欄のプレースホルダーは、内容の有無だけでなくフォーカスの有無にも連動して隠す。
+- detail パネルの左端をドラッグして画面占有率（幅）を手動調整できるようにし、選んだ幅は次回開いたときも保持する。
+- `kb-detail-foot` のヒント文を撤去し、ノート編集欄が占める視覚的な割合をさらに広げる。
 
 **Non-Goals:**
 - 明日の計画（reflection画面埋め込み）の detail の**表示位置**（オーバーレイ化）は変更しない。ただしフッターボタン撤去は共有関数の変更として埋め込み側にも及ぶ（Non-Goal は位置決め・スクリムのみ）。
@@ -67,6 +73,14 @@ D1で `kb-detail-overlay`（`inset:0` のスクリム）を導入したことで
 - 代替案: 遅延なしで即座に開きつつ、overlay 側で「これはdblclickの一部だった」と事後的に検出する各種ヒューリスティック（D5・`e.detail`・座標比較など）を検討したが、いずれも「2回目のクリックがどの要素に落ちるか」というレンダリング結果に依存し、カードの画面上の位置によって挙動が変わる（＝本質的に頑健でない）ため全て不採用。
 - 検証: 診断用一時spec（`_diag-evtest.spec.ts`、確認後に削除）で実際の `click`/`dblclick` イベントの `target`/`detail` をログ出力し、上記の問題を実測で特定した。実装後、`git stash push -- server/` → `CI=1 npx playwright test e2e/kanban-detail-overlay.spec.ts e2e/kanban-card-quick-actions.spec.ts e2e/kanban-rename-reorder-reentrancy.spec.ts`（新規3specは赤・既存13件green）→ `git stash pop` → 同コマンド（16件全green）で red/green 証明済み。加えて `kanban-*`/`goal-blueprint-*`/`tomorrow-plan-*` 系 e2e 52件・vitest 555件を通しで実行し他への影響がないことを確認した。
 - **スコープ修正（3巡目コメント対応中に発覚）**: `cardEl(t)` は独立カンバンタブと埋め込み盤面（明日の計画、`O.asideHost` あり）の両方で共有される。当初 D8 の遅延を無条件に適用したところ、埋め込み側の既存e2e（`tomorrow-plan-board-detail-sidebar.spec.ts`）が1回だけ flaky になった（1敗→retryでpass）。埋め込み盤面は `renderAll()` の `O.asideHost` 分岐（`kanban.js:298`）でオーバーレイ自体を生成しないため、そもそも D8 が解決したい「2回目のclickがoverlayに奪われる」問題が存在しない。遅延は不要な副作用でしかないため、`card` の click ハンドラで `O.asideHost` が真のとき（埋め込み時）は従来通り `openDetail(t)` を即時呼ぶよう分岐し、`CARD_OPEN_DELAY_MS` は独立カンバンタブ限定にスコープを絞った。修正後、`tomorrow-plan-board-detail-sidebar.spec.ts` を `--repeat-each=5`（10回）実行し安定してpassすることを確認した。
+
+### D9: detail パネルの左端に手動リサイズハンドルを追加し、`kb-detail-foot` のヒント文を撤去する
+`detailOverlayEl(t)` で組み立てるパネルの左端に `.kb-detail-resize`（幅6px、`position:absolute; left:0`）を重ね、`mousedown`→`mousemove`（`document` に一時リスナー）→`mouseup` でドラッグ幅を計算し `panel.style.width` に直接反映する。ドラッグ終了時（`mouseup`）に `localStorage`（`tcm_kanban_detail_width`、px数値、日付スコープなし。`SKIP_DELETE_CONFIRM_KEY` と同型）へ保存し、次回オーバーレイを開く際 `applyStoredDetailWidth` で読み出して inline `width` として適用する（保存が無ければ CSS の `min(70vw, 840px)` が既定値として効く）。`kb-detail-foot`（ヒント文 `kb-detail-hint`）は `detailEl(t)` から丸ごと削除した。
+- 幅の上下限（`clampDetailWidth`）: 下限 `DETAIL_WIDTH_MIN=360px`（これ未満はタイトル・優先度ピル等のレイアウトが崩れる）、上限 `window.innerWidth - 40px`（左に最低40pxのスクリムを残し、余白クリックでの close 導線を潰さない）。
+- 狭幅ブレークポイント（`max-width:1100px`）との整合: 既存の `.kb-detail-overlay .kb-detail { width: 100vw; }` は本来メディアクエリよりインラインスタイルの詳細度が高く上書きされてしまうため、`!important` を追加して常に優先されるようにした（保存済みの手動幅があっても、狭幅では全幅表示を維持する）。あわせて `mousedown` ハンドラ自体も `window.innerWidth <= 1100` ではリサイズを開始しないようガードしている。
+- `kb-detail-foot` 撤去の影響確認: `.kb-del-btn`（既に前回撤去済みの旧ボタン）を除き、`kb-detail-foot`/`kb-detail-hint` を参照する e2e・vitest は存在しないことを確認済み（grep）。`detailEl(t)` は共有関数のため、この撤去は独立カンバンタブ・埋め込み（明日の計画）双方に及ぶ。
+- 代替案: リサイズを `S`（アプリの再描画対象state）で管理する案も検討したが、ドラッグ中に `renderAll()` が何度も走るとコストが高く・カーソル位置の再計算も複雑になるため、ドラッグ中は DOM を直接操作し（`panel.style.width` を都度更新）、確定時（`mouseup`）にだけ永続化する方式にした。
+- 検証: `git stash push -- server/` → `CI=1 npx playwright test e2e/kanban-detail-overlay.spec.ts`（新規リサイズspecが赤・既存5件green）→ `git stash pop` → 同コマンド（6件全green）で red/green 証明済み。加えて `kanban-*`/`goal-blueprint-*`/`tomorrow-plan-*` 系 e2e 55件・vitest 555件を通しで実行し他への影響がないことを確認した。
 
 ### D6: オーバーレイのスクロールはパネル自体で行い、`.kb-detail-body` の独立スクロールをやめる
 `.kb-detail-overlay .kb-detail` に `overflow-y: auto` を付け、パネル（`kb-detail-close-row`〜`kb-detail-foot` までの flex column 全体）をスクロールコンテナにする。`.kb-detail-body` 側は `flex: none; overflow: visible; max-height: none; min-height: 0;` でリセットし、独自のスクロール領域を持たせない。

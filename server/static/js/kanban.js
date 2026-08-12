@@ -30,6 +30,8 @@ const SOUND_KEY = 'tcm_kanban_sound';
 const TOMORROW_KEY = 'tcm_kanban_tomorrow'; // {date, on} その日限りの「明日の計画モード」
 const CATEGORIZE_KEY = 'tcm_kanban_categorize'; // {date, on} その日限りの「カテゴリ付けモード」
 const SKIP_DELETE_CONFIRM_KEY = 'tcm_kanban_skip_delete_confirm'; // '1'/'0'。日付スコープなし（SOUND_KEY と同型）
+const DETAIL_WIDTH_KEY = 'tcm_kanban_detail_width'; // detail オーバーレイの手動リサイズ幅(px)。日付スコープなし
+const DETAIL_WIDTH_MIN = 360; // これ未満はレイアウトが崩れるため下限とする
 const HOLD_AHEAD_DAYS = 7; // 保留カードの既定 due（作業日 +7）
 const MAX_GROUP_CHIPS = 12; // カテゴリ候補チップの上限（timeline の MAX_CHIPS 相当。あふれは自由入力で拾う）
 const NS = 'http://www.w3.org/2000/svg';
@@ -664,6 +666,16 @@ function deleteConfirmSkipEnabled() {
 }
 function setDeleteConfirmSkip(on) {
   localStorage.setItem(SKIP_DELETE_CONFIRM_KEY, on ? '1' : '0');
+}
+
+// --- detail オーバーレイの手動リサイズ幅（issue #92 追加要望） ---------------
+// SKIP_DELETE_CONFIRM_KEY と同型: localStorage は日付スコープなし、px 数値をそのまま保持する。
+function getStoredDetailWidth() {
+  const raw = Number(localStorage.getItem(DETAIL_WIDTH_KEY));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+function setStoredDetailWidth(px) {
+  localStorage.setItem(DETAIL_WIDTH_KEY, String(Math.round(px)));
 }
 
 /** 削除の実行本体（Optimistic UI）。3つの起点が確認を終えた後に共通で呼ぶ。
@@ -1338,8 +1350,52 @@ function asideEl() {
 function detailOverlayEl(t) {
   const overlay = h('div', { class: 'kb-detail-overlay' });
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDetail(); });
-  overlay.appendChild(detailEl(t));
+  const panel = detailEl(t);
+  applyStoredDetailWidth(panel);
+  panel.insertBefore(detailResizeEl(panel), panel.firstChild);
+  overlay.appendChild(panel);
   return overlay;
+}
+
+/** 手動リサイズ幅の上下限（issue #92 追加要望）: 下限は最低限レイアウトが崩れない幅、
+ * 上限は左に最低40px残しスクリム（余白クリックでの close 導線）を潰さない幅。 */
+function clampDetailWidth(px) {
+  const max = Math.max(DETAIL_WIDTH_MIN, window.innerWidth - 40);
+  return Math.min(Math.max(px, DETAIL_WIDTH_MIN), max);
+}
+
+/** 保存済みの手動幅があれば適用する。狭幅ブレークポイント（`max-width:1100px`）では
+ * CSS 側の `width: 100vw !important` が inline style より優先されるため無視してよい。 */
+function applyStoredDetailWidth(panel) {
+  const stored = getStoredDetailWidth();
+  if (stored != null) panel.style.width = `${clampDetailWidth(stored)}px`;
+}
+
+/** 左端のドラッグでパネル幅を変更するハンドル（issue #92 追加要望）。 */
+function detailResizeEl(panel) {
+  const handle = h('div', { class: 'kb-detail-resize', title: 'ドラッグして幅を変更' });
+  handle.addEventListener('mousedown', (e) => {
+    if (window.innerWidth <= 1100) return; // 狭幅では全幅固定（既存ブレークポイント、リサイズ不可）
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = panel.getBoundingClientRect().width;
+    handle.classList.add('active');
+    document.body.classList.add('kb-resizing');
+    const onMove = (ev) => {
+      panel.style.width = `${clampDetailWidth(startWidth + (startX - ev.clientX))}px`;
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      handle.classList.remove('active');
+      document.body.classList.remove('kb-resizing');
+      setStoredDetailWidth(panel.getBoundingClientRect().width);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  return handle;
 }
 
 function progressEl() {
@@ -1509,9 +1565,6 @@ function detailEl(t) {
   notesEditor.el.addEventListener('blur', () => { notesFocused = false; updatePh(notesEditor.getValue()); });
   body.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, notesEditor.el));
   panel.appendChild(body);
-
-  panel.appendChild(h('div', { class: 'kb-detail-foot' },
-    h('p', { class: 'kb-detail-hint', text: 'ノートは自動保存されます。カードはボードでドラッグして列の移動・並べ替えができます。' })));
   return panel;
 }
 

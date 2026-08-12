@@ -69,3 +69,14 @@ issue #92 に2026-08-11T23:43:46Zの追加コメントがあり、(1) ノート�
 - [x] 8.4 `e2e/kanban-detail-overlay.spec.ts` に新規シナリオ2件（入力→全消去→再入力してもプレースホルダーが被らない／ノートが空でもデフォルトでスクロールが必要な縦長状態）を追加。`git stash push -- server/` → `CI=1 npx playwright test e2e/kanban-detail-overlay.spec.ts`（新規2specが赤・既存3件green）→ `git stash pop` → 同コマンド（5件全green）で red/green 証明完了。
 - [x] 8.5 **埋め込み盤面への意図しない影響を発見・修正**: `kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全52件を再実行したところ `tomorrow-plan-board-detail-sidebar.spec.ts` が1回 flaky（1敗→retry pass）になった。`cardEl(t)` は独立カンバンタブと埋め込み盤面（`O.asideHost` あり）の両方で共有されており、D8 の300ms遅延を無条件に適用していたため、オーバーレイを使わずこの問題が存在しない埋め込み側にも不要な遅延が漏れていたと判明。`card` の click ハンドラで `O.asideHost` が真のとき（埋め込み時）は従来通り即時に `openDetail(t)` を呼ぶよう分岐し、D8 の遅延を独立カンバンタブ限定にスコープを絞った（design.md D8 追記）。`tomorrow-plan-board-detail-sidebar.spec.ts --repeat-each=5`（10回）で安定してpassすることを確認した。
 - [x] 8.6 影響確認: `kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全52+件・`npm run test`（vitest 555件）を再実行し、すべて green であることを確認した。
+
+## 9. ユーザーからの追加フィードバック（左端リサイズ・ヒント文撤去）
+
+8章対応後、ユーザーから2点の要望があった: (1) detail の左の縁をドラッグして画面占有率を変えられるようにしたい、(2) 「ノートは自動保存されます。カードは…」のヒント文があるとノートが狭く見えるので消してほしい。
+
+- [x] 9.1 `server/static/js/kanban.js`: `detailEl(t)` から `kb-detail-foot`（ヒント文）を削除。`server/static/css/app.css` から不要になった `.kb-detail-foot`/`.kb-detail-hint` を削除（e2e/vitest に依存が無いことを grep で確認済み）。
+- [x] 9.2 `server/static/js/kanban.js`（design D9）: `DETAIL_WIDTH_KEY`/`DETAIL_WIDTH_MIN` 定数、`getStoredDetailWidth`/`setStoredDetailWidth`/`clampDetailWidth`/`applyStoredDetailWidth`/`detailResizeEl` を追加。`detailOverlayEl(t)` でパネル左端にドラッグハンドルを重ね、`mousedown`→`mousemove`→`mouseup` でリアルタイムに幅を変更し、確定時に `localStorage` へ永続化する。
+- [x] 9.3 `server/static/css/app.css`（design D9）: `.kb-detail-overlay .kb-detail` に `position: relative` を追加。`.kb-detail-resize` のスタイルを追加。狭幅ブレークポイントの `width: 100vw` に `!important` を追加し、保存済みの手動幅があっても狭幅では全幅を維持するようにする。
+- [x] 9.4 `proposal.md`/`design.md`（D9）/`specs/kanban-detail-overlay/spec.md` を改訂: ヒント文撤去を既存Requirementへ統合、手動リサイズを新規Requirement/Scenarioとして追加。
+- [x] 9.5 `e2e/kanban-detail-overlay.spec.ts` に新規シナリオ1件（左端ドラッグで幅変更・次回開いたときも保持）を追加。`git stash push -- server/` → `CI=1 npx playwright test e2e/kanban-detail-overlay.spec.ts`（新規specが赤・既存5件green）→ `git stash pop` → 同コマンド（6件全green）で red/green 証明完了。
+- [x] 9.6 影響確認: `kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全55件・`npm run test`（vitest 555件）を再実行し、すべて green であることを確認した。

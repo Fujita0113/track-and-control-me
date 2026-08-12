@@ -13,6 +13,8 @@
 - 既存の閉じる手段（✕ボタン）はそのまま維持する。
 - **BREAKING**: 詳細パネル下部の「タスクを削除」「このタスクを分解する」ボタンを撤去する。`detailEl(t)` は独立カンバンタブと明日の計画（埋め込み）で共有する関数のため、この撤去は両方の文脈に及ぶ（表示位置・オーバーレイ化は独立カンバンタブのみが対象だが、フッターボタンの撤去は detailEl 自体の変更なので埋め込み側にも波及する）。理由: これらのボタンが原因でテキスト（ノート）欄が狭く見え、かつ実運用でほぼ使われていないため。削除操作は引き続きカード上のゴミ箱アイコン・右クリックから可能（詳細パネル経由の削除導線のみ撤去）。タスク分解機能はいったんカンバンから完全に撤去する（バックエンドAPI・vitestは維持、UI導線とその e2e のみ削除）。
 - 明日の計画（reflection画面の右サイドバー・タブ切替に埋め込まれる detail）は、オーバーレイ化（表示位置・スクリム・6割/右端拡張）の対象外。現状どおりインライン表示のまま。ただしフッターボタン撤去は上記の通り共有関数の変更として及ぶ。
+- detail オーバーレイの左端をドラッグして幅（画面占有率）を手動調整できるようにし、選んだ幅は `localStorage` で永続化して次回開いたときも保持する（ユーザーとのセッション内フィードバック）。
+- `kb-detail-foot` のヒント文（「ノートは自動保存されます。カードは…」）を撤去する（ノート編集欄を狭く見せるため）。`detailEl(t)` 自体の変更のため、独立カンバンタブ・明日の計画（埋め込み）の両方に及ぶ。
 
 ## Capabilities
 
@@ -31,3 +33,5 @@
 - `server/static/css/app.css`（2巡目）: `.kb-detail-overlay .kb-detail` の幅を `min(70vw, 840px)` に変更し、`overflow-y: auto` をパネル自体に付与。`.kb-detail-overlay .kb-detail-body` の `flex`/`overflow`/`max-height` をリセットし、独立した内部スクロール領域にしない。
 - `server/static/js/kanban.js`（2巡目）: `detailEl(t)` のノートエディタに `focus`/`blur` リスナーを追加し、フォーカス時にプレースホルダーを隠す（`md-editor.js` 本体・他画面の `.rf-ph` 利用箇所には触れない。kanban detail のみのローカルな変更）。
 - `server/static/js/kanban.js`（2巡目・design D8）: `cardEl(t)` の単発クリックによる detail オープンを、独立カンバンタブ（`O.asideHost` 無し）に限り `CARD_OPEN_DELAY_MS`（300ms）遅延させ、dblclick が overlay 生成前に確定するようにする。埋め込み盤面（`O.asideHost` あり、明日の計画）はオーバーレイを使わずこの問題が無いため従来通り即時に開く。オーバーレイ導入で「ダブルクリックでカードタイトルをリネーム」（`kanban-card-quick-actions.spec.ts`/`kanban-rename-reorder-reentrancy.spec.ts`）が構造的に壊れる問題への対処（詳細は design.md D5〜D8）。
+- `server/static/css/app.css`（3巡目・design D9）: `.kb-detail-overlay .kb-detail-body` の `min-height` を `0` → `80vh` に変更（デフォルトでも縦に長くスクロールが前提の状態にする）。`.kb-detail-resize` ハンドルのスタイルを追加し、`.kb-detail-overlay .kb-detail` に `position: relative` を付与。狭幅ブレークポイントの `width: 100vw` に `!important` を追加（インラインの手動幅より優先させる）。`.kb-detail-foot`/`.kb-detail-hint` のスタイルを削除。
+- `server/static/js/kanban.js`（3巡目・design D9）: プレースホルダー表示を `notesFocused` フラグで一元化した `updatePh(raw)` に統合し、フォーカス中は内容の有無に関わらず常に非表示にする（全消去して再入力しても被らないように）。`detailOverlayEl(t)` に `.kb-detail-resize` ドラッグハンドルを追加し、`localStorage`（`tcm_kanban_detail_width`）で幅を永続化する。`detailEl(t)` から `kb-detail-foot`（ヒント文）を削除する。
