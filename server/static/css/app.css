@@ -546,10 +546,11 @@ body.kb-page .content { max-width: 1580px; }
 @media (max-width: 1100px) { .kb-main { flex-direction: column; } .kb-aside { width: 100%; } }
 
 /* detail オーバーレイ（独立カンバンタブのみ。埋め込み盤面の asideHost 経由では使わない）。
-   右端まで隙間なく広げる（issue #92 追加コメント）: サイドバーはパネルの下に完全に隠れる。 */
+   右端まで隙間なく広げる（issue #92 追加コメント）: サイドバーはパネルの下に完全に隠れる。
+   幅は約7割・スクロールはパネル全体を一体で動かす（issue #92 2巡目コメント、design D6/D7）。 */
 .kb-detail-overlay { position: fixed; inset: 0; background: rgba(20, 33, 51, 0.45); display: flex; justify-content: flex-end; z-index: 45; }
-.kb-detail-overlay .kb-detail { width: min(60vw, 720px); height: 100%; border-radius: 0; box-shadow: -8px 0 24px rgba(40, 38, 32, 0.12); }
-.kb-detail-overlay .kb-detail-body { max-height: none; }
+.kb-detail-overlay .kb-detail { width: min(70vw, 840px); height: 100%; border-radius: 0; box-shadow: -8px 0 24px rgba(40, 38, 32, 0.12); overflow-y: auto; overflow-x: hidden; }
+.kb-detail-overlay .kb-detail-body { flex: none; overflow: visible; max-height: none; min-height: 0; }
 @media (max-width: 1100px) { .kb-detail-overlay .kb-detail { width: 100vw; } }
 
 /* 列 */

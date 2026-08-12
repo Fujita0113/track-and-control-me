@@ -33,6 +33,11 @@ const SKIP_DELETE_CONFIRM_KEY = 'tcm_kanban_skip_delete_confirm'; // '1'/'0'。�
 const HOLD_AHEAD_DAYS = 7; // 保留カードの既定 due（作業日 +7）
 const MAX_GROUP_CHIPS = 12; // カテゴリ候補チップの上限（timeline の MAX_CHIPS 相当。あふれは自由入力で拾う）
 const NS = 'http://www.w3.org/2000/svg';
+// カード単発クリックで detail オーバーレイを開くまでの遅延（issue #92, design D8）。
+// dblclick が確定するまで待つことで、2回目の click/dblclick がオーバーレイ側の要素に
+// 奪われてリネームへ切り替わらない問題を避ける。ブラウザの dblclick 判定・Playwright の
+// dblclick() は共に十分速い（数十ms）ため、体感上はほぼ即時のまま。
+const CARD_OPEN_DELAY_MS = 300;
 
 // --- 明日トグル（明日の計画モード） ------------------------------------------
 // クライアント状態。localStorage に日付キーで保持し、翌日は OFF にリセット。
@@ -104,12 +109,6 @@ let O = null;
 const saveTimers = new Map(); // `${id}:${field}` → { timer, run }
 let isRendering = false; // renderAll() の再入ガード（issue #85: フォーカス除去に伴う同期blurからの再入クラッシュ防止）
 let renderQueued = false;
-// ダブルクリックでのカードリネーム用（issue #92: detail オーバーレイのスクリムが全画面を覆うため、
-// dblclick の1回目の click が開いた overlay に2回目の click/dblclick が奪われ、カード自身では
-// 拾えなくなった。overlay 側の背景クリックで「直前にこのカードがクリックされた」と分かった
-// 場合はリネームへ切り替える）。
-let lastCardClickId = null;
-let lastCardClickAt = 0;
 
 const DEFAULT_OPTS = {
   bodyClass: 'kb-page', // body へ付けるクラス。埋め込み時は null（rf-page を壊さない）
@@ -729,18 +728,21 @@ function openDeleteConfirmModal(t) {
 function cardEl(t) {
   const pri = PRI[t.priority] ? t.priority : 'low';
   const card = h('div', { class: 'kb-card', draggable: 'true', dataset: { id: String(t.id) } });
-  // シングルクリックは即座に詳細を開く（体感速度を優先）。ブラウザは dblclick の前に
-  // click を2回発火するため、ダブルクリック時は一瞬だけ詳細が開くが、続く dblclick で
-  // それを閉じてリネームへ切り替える（下の dblclick ハンドラ）。
+  // シングルクリックは detail を開くが、dblclick と区別するため CARD_OPEN_DELAY_MS だけ
+  // 待ってから開く（issue #92, design D8）。独立カンバンタブでは detail が全画面規模の
+  // オーバーレイになり、即座に開くと2回目の click/dblclick がオーバーレイ側の要素に
+  // 奪われてカードへ届かなくなる（下の dblclick ハンドラが発火しない）ため。
+  let openTimer = null;
   card.addEventListener('click', (e) => {
     e.stopPropagation();
-    lastCardClickId = t.id;
-    lastCardClickAt = Date.now();
-    openDetail(t);
+    clearTimeout(openTimer);
+    openTimer = setTimeout(() => { openTimer = null; openDetail(t); }, CARD_OPEN_DELAY_MS);
   });
   // カードのどこをダブルクリックしてもタイトルのインライン編集に入る。
-  // 直前の2回の click で開いてしまった詳細パネルがあれば閉じる。
+  // 保留中の detail オープンがあれば取り消す（開かせない）。
   card.addEventListener('dblclick', () => {
+    clearTimeout(openTimer);
+    openTimer = null;
     if (S.detailId === t.id) { S.detailId = null; S.dueCalOpen = false; }
     S.renamingId = t.id;
     renderAll();
@@ -1327,23 +1329,12 @@ function asideEl() {
 }
 
 /** 独立カンバンタブでの detail オーバーレイ（design D1）: 背景クリック(スクリム)で閉じる。
- * パネル内クリックは e.target !== overlay なので閉じない（.modal-backdrop と同じ判定方式）。 */
+ * パネル内クリックは e.target !== overlay なので閉じない（.modal-backdrop と同じ判定方式）。
+ * カード側の click は CARD_OPEN_DELAY_MS 遅延後に開くため（design D8）、dblclick は
+ * オーバーレイが存在する前に確定してカード側で処理される。ここでは単純な close のみでよい。 */
 function detailOverlayEl(t) {
   const overlay = h('div', { class: 'kb-detail-overlay' });
-  overlay.addEventListener('click', (e) => {
-    if (e.target !== overlay) return;
-    // dblclick の2回目の click は、1回目の click が開いたこの overlay に奪われて
-    // カードへは届かない。直前にこのカードがクリックされていれば dblclick とみなし、
-    // 既存の「ダブルクリックでリネーム」へ切り替える（閉じない）。
-    if (lastCardClickId === t.id && Date.now() - lastCardClickAt < 500) {
-      S.detailId = null;
-      S.dueCalOpen = false;
-      S.renamingId = t.id;
-      renderAll();
-      return;
-    }
-    closeDetail();
-  });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDetail(); });
   overlay.appendChild(detailEl(t));
   return overlay;
 }
@@ -1507,6 +1498,12 @@ function detailEl(t) {
   });
   initializingNotes = false;
   S.notesEditor = notesEditor;
+  // カーソルを合わせた時点でプレースホルダーを隠す（issue #92 2巡目コメント: 入力し始めた文字と
+  // 「クリックして入力…」が重なるのを防ぐ）。未入力のままフォーカスを外したら再表示する。
+  notesEditor.el.addEventListener('focus', () => { ph.style.display = 'none'; });
+  notesEditor.el.addEventListener('blur', () => {
+    ph.style.display = notesEditor.getValue().trim() === '' ? 'block' : 'none';
+  });
   body.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, notesEditor.el));
   panel.appendChild(body);
 

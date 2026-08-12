@@ -45,3 +45,16 @@ issue #92 に「ボタンを消してテキスト欄を広く使いたい」「�
 - [x] 6.4 回帰原因を特定: `.kb-detail-overlay`（`inset:0`, `z-index:45`）が全画面を覆うため、カードの dblclick（click→click→dblclick）の2回目が overlay に奪われカードへ届かなくなっていた。`server/static/js/kanban.js` に `lastCardClickId`/`lastCardClickAt` の直近クリック記録と、overlay 背景クリック時に「500ms 以内・同一カードなら dblclick とみなしリネームへ切り替える」判定を追加して修正（design.md D5 に詳細を記録）。
 - [x] 6.5 `git stash pop` → `CI=1 npx playwright test`（同5spec, 23件）で green 証明完了（新規spec・quick-actions とも全 pass）。
 - [x] 6.6 影響範囲を広げ、`kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全27件（未実行だった残り）と `npm run test`（vitest 555件）を追加実行し、他への影響がないことを確認した（計 kanban 関連 e2e 50件 + vitest 555件、すべて green）。
+
+## 7. issue #92 2巡目コメント対応（スクロール一体化・7割拡大・プレースホルダー）
+
+issue #92 に2026-08-11T23:43:46Zの追加コメントがあり、(1) ノート本文だけでなくタイトル・優先度・期限も一緒にスクロールしたい、(2) 画面占有を約6割→7割へ拡大、(3) ノート入力欄のプレースホルダーはフォーカス時点（入力前でも）で隠したい、の3点の要望があった。ユーザーと相談し、propose の作り直しはせず本changeの延長として対応する方針を確認した（AskUserQuestion 実施済み）。
+
+- [x] 7.1 `proposal.md`/`design.md`（D6/D7）/`specs/kanban-detail-overlay/spec.md` を改訂: 「約6割」→「約7割」、スクロール一体化・プレースホルダーのフォーカス連動を新規 Requirement/Scenario として追加。
+- [x] 7.2 `server/static/css/app.css`: `.kb-detail-overlay .kb-detail` の幅を `min(70vw, 840px)` に変更し `overflow-y: auto` を付与。`.kb-detail-overlay .kb-detail-body` の `flex`/`overflow`/`max-height` をリセットし独立スクロールをやめる（D6）。
+- [x] 7.3 `server/static/js/kanban.js`: `detailEl(t)` のノートエディタに `focus`/`blur` リスナーを追加しプレースホルダー表示をフォーカスに連動させる（D7、kanban detail ローカル）。
+- [x] 7.4 `e2e/kanban-detail-overlay.spec.ts` に新規シナリオ2件（スクロール一体化・プレースホルダーのフォーカス連動）を追加。
+- [x] 7.5 **回帰の再発と原因調査**: 7.2/7.3実装後にバッチ実行したところ、既存の「余白クリックで閉じる」テストおよび `kanban-rename-reorder-reentrancy.spec.ts` が再び赤くなった。診断用の一時spec（`_diag-evtest.spec.ts`、確認後削除）で `click`/`dblclick` の実イベントを実測し、「dblclickの2回目のclickは、カードの画面上の位置次第でoverlay背景ではなくパネル本体（`.kb-detail-body`等）に落ちることがある」「`e.detail` もクリック対象要素をまたぐと信頼できない」と判明。D5（直近クリックの500ms判定）・`e.detail`判定はいずれも位置/target依存で頑健でないため撤回し、D8（クリックそのものをdblclick確定まで遅延させるアーキテクチャ変更）へ切り替えた。詳細は design.md D5〜D8。
+- [x] 7.6 D8実装（`CARD_OPEN_DELAY_MS=300`でdetailオープンを遅延、dblclickはタイマーを取り消してリネームへ）。`git stash push -- server/` → `CI=1 npx playwright test e2e/kanban-detail-overlay.spec.ts e2e/kanban-card-quick-actions.spec.ts e2e/kanban-rename-reorder-reentrancy.spec.ts`（新規3specが赤・既存13件green）→ `git stash pop` → 同コマンド（16件全green）で red/green 証明完了。
+- [x] 7.7 影響確認: `kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全52件・`npm run test`（vitest 555件）を再実行し、すべて green であることを確認した。
+- [x] 7.8 `git diff --stat` で app.css / kanban.js の差分が想定範囲か確認する。
