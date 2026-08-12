@@ -218,7 +218,6 @@ export function recordPlannedExpense(db: DB, id: number, input: RecordPlannedExp
     amountYen: input.amountYen,
     category: p.category,
     importance: input.importance,
-    plannedDays: 1,
   });
 
   db.prepare('UPDATE kakeibo_planned_expense SET next_day_key = ? WHERE id = ?').run(

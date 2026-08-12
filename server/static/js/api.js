@@ -181,31 +181,26 @@ export const api = {
     // 家計簿（読み取り専用・固定シナリオなのでパラメータはサーバー側で無視される）。
     kakeiboHome: () => req('GET', '/api/demo/kakeibo/home'),
     kakeiboHistory: () => req('GET', '/api/demo/kakeibo/history'),
-    kakeiboDayEdit: () => req('GET', '/api/demo/kakeibo/day-edit'),
     kakeiboAnalysis: () => req('GET', '/api/demo/kakeibo/analysis'),
     kakeiboBudget: () => req('GET', '/api/demo/kakeibo/budget'),
+    kakeiboForecastAdjust: () => req('GET', '/api/demo/kakeibo/forecast-adjust'),
   },
 
   // 家計簿（spec: kakeibo-* ・design D14）
   kakeibo: {
     home: (month) => req('GET', `/api/kakeibo/home?${q({ month })}`),
     history: (month) => req('GET', `/api/kakeibo/history?${q({ month })}`),
-    dayEdit: (month) => req('GET', `/api/kakeibo/day-edit?${q({ month })}`),
     analysis: (month) => req('GET', `/api/kakeibo/analysis?${q({ month })}`),
     budget: (month) => req('GET', `/api/kakeibo/budget?${q({ month })}`),
 
     createEntry: (b) => req('POST', '/api/kakeibo/entries', b),
-    pendingConfirmation: (name, day) => req('GET', `/api/kakeibo/entries/pending?${q({ name, day })}`),
-    confirmActualDays: (id, b) => req('POST', `/api/kakeibo/entries/${id}/confirm`, b),
     updateEntry: (id, b) => req('PATCH', `/api/kakeibo/entries/${id}`, b),
     createBulkEntry: (b) => req('POST', '/api/kakeibo/entries/bulk', b),
     declareZeroDay: (dayKey) => req('POST', '/api/kakeibo/zero-day', { dayKey }),
     suggestNames: (prefix) => req('GET', `/api/kakeibo/names?${q({ prefix })}`),
 
-    getBasis: (name) => req('GET', `/api/kakeibo/basis/${encodeURIComponent(name)}`),
-    setBasis: (name, b) => req('PUT', `/api/kakeibo/basis/${encodeURIComponent(name)}`, b),
-    previewBasis: (name, params) =>
-      req('GET', `/api/kakeibo/basis/${encodeURIComponent(name)}/preview?${q(params)}`),
+    forecastAdjust: (month) => req('GET', `/api/kakeibo/forecast-adjust?${q({ month })}`),
+    previewForecastAdjust: (month, overrides) => req('POST', '/api/kakeibo/forecast-adjust/preview', { month, overrides }),
 
     // レシートのバイナリ表示は URL 直指定: /api/kakeibo/receipts/:id
     uploadReceipt: (dataUrl, width, height) => req('POST', '/api/kakeibo/receipts', { dataUrl, width, height }),

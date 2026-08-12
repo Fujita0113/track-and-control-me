@@ -1,10 +1,10 @@
 import type { DB } from '../db/index.js';
-import { addDaysKey, dayDiff } from './day-key.js';
-import { todayKey } from './summary.js';
 
 /**
- * 家計簿の台帳と「日数の在庫」（spec: kakeibo-ledger / kakeibo-day-rate / kakeibo-gate・design.md D1-D4・D10-D11）。
+ * 家計簿の台帳（spec: kakeibo-ledger / kakeibo-gate・design.md D1-D4・D9-D12）。
  *
+ * 支出レコードは日数を持たない。予想は「日々の出費 ÷ 経過日数 × 月の日数」の一本で出すため、
+ * 名称ごとの周期・実績日数・カバー期間はここでは扱わない（design D2）。
  * 期待値は ref/kakeibo/kakeibo-mock.html の筋書き（2026-08-11 時点）を凍結したもの
  * （design.md「数字の筋書き」・kakeibo.test.ts）。
  */
@@ -38,20 +38,13 @@ export interface KakeiboEntryRow {
   amount_yen: number;
   category: string;
   importance: string | null;
-  planned_days: number;
-  actual_days: number | null;
-  covers_from: string;
+  is_special: number;
+  detail: string | null;
   bulk_from: string | null;
   bulk_to: string | null;
   receipt_id: number | null;
   created_at: number;
   updated_at: number;
-}
-
-export type KakeiboConfirmChoiceKind = 'REMAINING' | 'TODAY' | 'EARLIER';
-export interface KakeiboConfirmChoice {
-  choice: KakeiboConfirmChoiceKind;
-  n?: number;
 }
 
 export interface CreateEntryInput {
@@ -60,18 +53,18 @@ export interface CreateEntryInput {
   amountYen: number;
   category: string;
   importance: string;
-  plannedDays?: number;
+  isSpecial?: boolean;
+  detail?: string | null;
   receiptId?: number | null;
-  /** 同名の前回の未確定レコードをこの回答で確定してから記録する（design D3）。 */
-  confirm?: KakeiboConfirmChoice;
 }
 
 export interface UpdateEntryInput {
-  plannedDays?: number;
-  actualDays?: number | null;
   amountYen?: number;
+  name?: string;
   category?: string;
   importance?: string | null;
+  isSpecial?: boolean;
+  detail?: string | null;
   receiptId?: number | null;
 }
 
@@ -85,37 +78,22 @@ function getEntryById(db: DB, id: number): KakeiboEntryRow | undefined {
   return db.prepare('SELECT * FROM kakeibo_entry WHERE id = ?').get(id) as KakeiboEntryRow | undefined;
 }
 
-/** 支出レコードの3状態（design D4）。実績あり=確定／進行中=暫定／予定超過かつ未入力=未確定。 */
-export function entryState(entry: KakeiboEntryRow, todayDayKey: string): 'CONFIRMED' | 'PROVISIONAL' | 'PENDING' {
-  if (entry.actual_days != null) return 'CONFIRMED';
-  const overDate = addDaysKey(entry.covers_from, entry.planned_days);
-  return todayDayKey >= overDate ? 'PENDING' : 'PROVISIONAL';
+/** 実効の特別費判定（design D3）。自動判定は保存しない＝カテゴリを直すと追随する。 */
+export function isSpecialEntry(entry: KakeiboEntryRow): boolean {
+  return entry.category === 'SUDDEN' || entry.is_special === 1;
 }
 
 export function createEntry(db: DB, input: CreateEntryInput): KakeiboEntryRow {
   validateAmount(input.amountYen);
   validateCategory(input.category);
   validateImportance(input.importance);
-  const plannedDays = input.plannedDays ?? 1;
-
-  let coversFrom = input.dayKey;
-  if (input.confirm) {
-    const pending = pendingConfirmation(db, input.name, input.dayKey);
-    if (pending) {
-      const confirmedPrev = confirmActualDays(db, pending.entryId, input.confirm, input.dayKey);
-      coversFrom =
-        input.confirm.choice === 'REMAINING'
-          ? addDaysKey(confirmedPrev.covers_from, confirmedPrev.actual_days! - 1)
-          : input.dayKey;
-    }
-  }
 
   const now = Date.now();
   const info = db
     .prepare(
       `INSERT INTO kakeibo_entry
-        (day_key, name, amount_yen, category, importance, planned_days, actual_days, covers_from, bulk_from, bulk_to, receipt_id, created_at, updated_at)
-       VALUES (@dayKey, @name, @amountYen, @category, @importance, @plannedDays, NULL, @coversFrom, NULL, NULL, @receiptId, @now, @now)`,
+        (day_key, name, amount_yen, category, importance, is_special, detail, bulk_from, bulk_to, receipt_id, created_at, updated_at)
+       VALUES (@dayKey, @name, @amountYen, @category, @importance, @isSpecial, @detail, NULL, NULL, @receiptId, @now, @now)`,
     )
     .run({
       dayKey: input.dayKey,
@@ -123,8 +101,8 @@ export function createEntry(db: DB, input: CreateEntryInput): KakeiboEntryRow {
       amountYen: input.amountYen,
       category: input.category,
       importance: input.importance,
-      plannedDays,
-      coversFrom,
+      isSpecial: input.isSpecial ? 1 : 0,
+      detail: input.detail ?? null,
       receiptId: input.receiptId ?? null,
       now,
     });
@@ -140,17 +118,13 @@ export function updateEntry(db: DB, id: number, patch: UpdateEntryInput): Kakeib
 
   const sets: string[] = [];
   const params: Record<string, unknown> = { id, now: Date.now() };
-  if (patch.plannedDays !== undefined) {
-    sets.push('planned_days = @plannedDays');
-    params.plannedDays = patch.plannedDays;
-  }
-  if (patch.actualDays !== undefined) {
-    sets.push('actual_days = @actualDays');
-    params.actualDays = patch.actualDays;
-  }
   if (patch.amountYen !== undefined) {
     sets.push('amount_yen = @amountYen');
     params.amountYen = patch.amountYen;
+  }
+  if (patch.name !== undefined) {
+    sets.push('name = @name');
+    params.name = patch.name;
   }
   if (patch.category !== undefined) {
     sets.push('category = @category');
@@ -159,6 +133,14 @@ export function updateEntry(db: DB, id: number, patch: UpdateEntryInput): Kakeib
   if (patch.importance !== undefined) {
     sets.push('importance = @importance');
     params.importance = patch.importance;
+  }
+  if (patch.isSpecial !== undefined) {
+    sets.push('is_special = @isSpecial');
+    params.isSpecial = patch.isSpecial ? 1 : 0;
+  }
+  if (patch.detail !== undefined) {
+    sets.push('detail = @detail');
+    params.detail = patch.detail;
   }
   if (patch.receiptId !== undefined) {
     sets.push('receipt_id = @receiptId');
@@ -189,191 +171,18 @@ export function suggestNames(db: DB, prefix: string): string[] {
   return rows.map((r) => r.name);
 }
 
-export interface PendingConfirmationChoice {
-  choice: KakeiboConfirmChoiceKind;
-  actualDays: number;
-  ratePerDay: number | null;
-}
-export interface PendingConfirmation {
-  entryId: number;
-  name: string;
-  amountYen: number;
-  coversFrom: string;
-  elapsedDays: number;
-  defaultChoice: KakeiboConfirmChoiceKind;
-  choices: PendingConfirmationChoice[];
-}
-
-/** 在庫ものの記録時に前回の未確定レコードと3択を返す（PENDING のときだけ・design D3）。 */
-export function pendingConfirmation(db: DB, name: string, dayKey: string): PendingConfirmation | null {
-  if (!name) return null;
-  const prev = db
-    .prepare(
-      `SELECT * FROM kakeibo_entry
-       WHERE name = @name AND actual_days IS NULL AND planned_days >= 2
-       ORDER BY day_key DESC, id DESC LIMIT 1`,
-    )
-    .get({ name }) as KakeiboEntryRow | undefined;
-  if (!prev) return null;
-  if (entryState(prev, dayKey) !== 'PENDING') return null;
-
-  const elapsed = dayDiff(prev.covers_from, dayKey) + 1;
-  const rateFor = (actualDays: number): number | null =>
-    actualDays > 0 ? Math.floor(prev.amount_yen / actualDays) : null;
-
-  const choices: PendingConfirmationChoice[] = [
-    { choice: 'REMAINING', actualDays: elapsed + 1, ratePerDay: rateFor(elapsed + 1) },
-    { choice: 'TODAY', actualDays: elapsed, ratePerDay: rateFor(elapsed) },
-    { choice: 'EARLIER', actualDays: elapsed - 1, ratePerDay: rateFor(elapsed - 1) },
-  ];
-  return {
-    entryId: prev.id,
-    name: prev.name,
-    amountYen: prev.amount_yen,
-    coversFrom: prev.covers_from,
-    elapsedDays: elapsed,
-    defaultChoice: 'TODAY',
-    choices,
-  };
-}
-
-/** 実績日数を確定する（design D3）。`REMAINING` は `covers_from` を前回が切れた翌日へずらす側の計算は呼び出し側が担う。 */
-export function confirmActualDays(
-  db: DB,
-  id: number,
-  choice: KakeiboConfirmChoice,
-  asOfDayKey?: string,
-): KakeiboEntryRow {
-  const entry = getEntryById(db, id);
-  if (!entry) throw new KakeiboError('支出レコードが見つかりません');
-  const today = asOfDayKey ?? todayKey(db);
-  const elapsed = dayDiff(entry.covers_from, today) + 1;
-  const n = choice.n ?? 1;
-
-  let actualDays: number;
-  switch (choice.choice) {
-    case 'REMAINING':
-      actualDays = elapsed + n;
-      break;
-    case 'TODAY':
-      actualDays = elapsed;
-      break;
-    case 'EARLIER':
-      actualDays = elapsed - n;
-      break;
-  }
-  if (actualDays <= 0) throw new KakeiboError('実績日数は1日以上にしてください');
-
-  db.prepare('UPDATE kakeibo_entry SET actual_days = ?, updated_at = ? WHERE id = ?').run(actualDays, Date.now(), id);
-  return getEntryById(db, id)!;
-}
-
 export function createBulkEntry(db: DB, input: CreateBulkEntryInput): KakeiboEntryRow {
   if (input.toDayKey < input.fromDayKey) throw new KakeiboError('期間が逆転しています');
   validateAmount(input.amountYen);
-  const days = dayDiff(input.fromDayKey, input.toDayKey) + 1;
   const now = Date.now();
   const info = db
     .prepare(
       `INSERT INTO kakeibo_entry
-        (day_key, name, amount_yen, category, importance, planned_days, actual_days, covers_from, bulk_from, bulk_to, receipt_id, created_at, updated_at)
-       VALUES (@dayKey, '', @amountYen, 'NONE', NULL, @days, @days, @dayKey, @dayKey, @toDayKey, NULL, @now, @now)`,
+        (day_key, name, amount_yen, category, importance, is_special, detail, bulk_from, bulk_to, receipt_id, created_at, updated_at)
+       VALUES (@dayKey, '', @amountYen, 'NONE', NULL, 0, NULL, @fromDayKey, @toDayKey, NULL, @now, @now)`,
     )
-    .run({ dayKey: input.fromDayKey, amountYen: input.amountYen, days, toDayKey: input.toDayKey, now });
+    .run({ dayKey: input.fromDayKey, amountYen: input.amountYen, fromDayKey: input.fromDayKey, toDayKey: input.toDayKey, now });
   return getEntryById(db, Number(info.lastInsertRowid))!;
-}
-
-export interface CoverageSpan {
-  entryId: number;
-  fromDayKey: string;
-  toDayKey: string;
-  ghostToDayKey: string | null;
-  ghostKind: 'SHORT' | 'OVER' | null;
-  lane: 'STOCK' | 'BULK';
-  category: string;
-  name: string;
-  amountYen: number;
-}
-export interface CoverageDot {
-  entryId: number;
-  dayKey: string;
-  category: string;
-}
-export interface MonthCoverage {
-  spans: CoverageSpan[];
-  dots: CoverageDot[];
-}
-
-/** 支出のカバー期間の帯（design D3・spec: kakeibo-day-rate）。 */
-export function monthCoverage(db: DB, monthKey: string, todayDayKey: string): MonthCoverage {
-  const rows = listEntries(db, monthKey);
-  const spans: CoverageSpan[] = [];
-  const dots: CoverageDot[] = [];
-
-  for (const r of rows) {
-    if (r.bulk_from) {
-      spans.push({
-        entryId: r.id,
-        fromDayKey: r.bulk_from,
-        toDayKey: r.bulk_to!,
-        ghostToDayKey: null,
-        ghostKind: null,
-        lane: 'BULK',
-        category: r.category,
-        name: r.name,
-        amountYen: r.amount_yen,
-      });
-      continue;
-    }
-    if (r.planned_days <= 1) {
-      dots.push({ entryId: r.id, dayKey: r.day_key, category: r.category });
-      continue;
-    }
-
-    const plannedEnd = addDaysKey(r.covers_from, r.planned_days - 1);
-    if (r.actual_days != null) {
-      const filledEnd = addDaysKey(r.covers_from, r.actual_days - 1);
-      const short = r.actual_days < r.planned_days;
-      spans.push({
-        entryId: r.id,
-        fromDayKey: r.covers_from,
-        toDayKey: filledEnd,
-        ghostToDayKey: short ? plannedEnd : null,
-        ghostKind: short ? 'SHORT' : null,
-        lane: 'STOCK',
-        category: r.category,
-        name: r.name,
-        amountYen: r.amount_yen,
-      });
-    } else if (todayDayKey >= addDaysKey(plannedEnd, 1)) {
-      spans.push({
-        entryId: r.id,
-        fromDayKey: r.covers_from,
-        toDayKey: plannedEnd,
-        ghostToDayKey: todayDayKey,
-        ghostKind: 'OVER',
-        lane: 'STOCK',
-        category: r.category,
-        name: r.name,
-        amountYen: r.amount_yen,
-      });
-    } else {
-      const filledEnd = todayDayKey < plannedEnd ? todayDayKey : plannedEnd;
-      spans.push({
-        entryId: r.id,
-        fromDayKey: r.covers_from,
-        toDayKey: filledEnd,
-        ghostToDayKey: null,
-        ghostKind: null,
-        lane: 'STOCK',
-        category: r.category,
-        name: r.name,
-        amountYen: r.amount_yen,
-      });
-    }
-  }
-
-  return { spans, dots };
 }
 
 /** 解錠ゲートのシグナル（design D11・spec: kakeibo-gate）。 */

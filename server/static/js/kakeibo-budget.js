@@ -42,7 +42,7 @@ function renderBudgetCard(data, kctx) {
     await api.kakeibo.setBudget(kctx.month, { wasteCapYen: parseYen(wasteInput.value) });
     await kctx.refresh();
   });
-  card.appendChild(h('div', { class: 'kb-brow', style: { marginTop: '8px' } }, h('span', { class: 'lbl' }, 'いらないの上限', h('small', { text: '超えるとホームで知らせる' })), h('span', {}, wasteInput)));
+  card.appendChild(h('div', { class: 'kb-brow', style: { marginTop: '8px' } }, h('span', { class: 'lbl' }, '無駄遣いの上限', h('small', { text: '超えるとホームで知らせる' })), h('span', {}, wasteInput)));
   return card;
 }
 

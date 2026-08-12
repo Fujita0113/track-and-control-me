@@ -1351,9 +1351,12 @@ CREATE INDEX idx_task_goal ON task(goal_id);
   {
     version: 30,
     name: 'kakeibo',
-    // 家計簿（spec: kakeibo-ledger / kakeibo-day-rate / kakeibo-forecast / kakeibo-budget /
-    // kakeibo-analysis / kakeibo-gate・design.md D1）。新規テーブル7本のみ。既存テーブルへの
-    // ALTER はゼロ＝家計簿タブを開かない限り既存の挙動は完全に同じ（Migration Plan）。
+    // 家計簿（spec: kakeibo-ledger / kakeibo-forecast / kakeibo-budget / kakeibo-analysis /
+    // kakeibo-gate・design.md D1）。新規テーブル6本のみ。既存テーブルへの ALTER はゼロ＝
+    // 家計簿タブを開かない限り既存の挙動は完全に同じ（Migration Plan）。
+    // 予想は「日々の出費 ÷ 経過日数 × 月の日数」の一本（design D2）。名称ごとの周期・
+    // 実績日数・カバー期間を持たないため、kakeibo_entry は日数の列を持たず、
+    // kakeibo_forecast_basis テーブルも作らない。
     sql: /* sql */ `
 CREATE TABLE kakeibo_entry (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1362,9 +1365,8 @@ CREATE TABLE kakeibo_entry (
   amount_yen INTEGER NOT NULL,
   category TEXT NOT NULL,
   importance TEXT,
-  planned_days INTEGER NOT NULL DEFAULT 1,
-  actual_days INTEGER,
-  covers_from TEXT NOT NULL,
+  is_special INTEGER NOT NULL DEFAULT 0,
+  detail TEXT,
   bulk_from TEXT,
   bulk_to TEXT,
   receipt_id INTEGER REFERENCES kakeibo_receipt(id) ON DELETE SET NULL,
@@ -1414,15 +1416,48 @@ CREATE TABLE kakeibo_planned_expense (
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
-
-CREATE TABLE kakeibo_forecast_basis (
-  name TEXT PRIMARY KEY,
-  basis TEXT NOT NULL,
-  recent_n INTEGER NOT NULL DEFAULT 3,
-  manual_cycle_days INTEGER,
-  manual_amount_yen INTEGER,
+`,
+  },
+  {
+    version: 31,
+    name: 'kakeibo-drop-day-rate-columns',
+    // migration 30 の SQL 文面は「日数ベース(planned_days/actual_days/covers_from)」から
+    // 「単純な日割り(is_special/detail)」へ、バージョン番号を上げずに書き換えられた
+    // （予測ロジック単純化・issue #94）。既に version 30 を適用済みの実DBは
+    // user_version 判定で再適用されず、is_special/detail の無い旧スキーマのまま
+    // 取り残されていた（PATCH /api/kakeibo/entries/:id が
+    // "no such column: is_special" で 500 になる不具合の原因）。
+    // SQLite は列の DROP/型変更に非対応な版があるため、標準の rebuild 手順
+    // （新テーブル作成→コピー→差し替え）で移す。is_special/detail が既に存在する
+    // （version 30 が新スキーマで一括適用された）DBでも、同じ形の空/既存データを
+    // コピーし直すだけなので害はない。
+    sql: /* sql */ `
+CREATE TABLE kakeibo_entry_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  amount_yen INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  importance TEXT,
+  is_special INTEGER NOT NULL DEFAULT 0,
+  detail TEXT,
+  bulk_from TEXT,
+  bulk_to TEXT,
+  receipt_id INTEGER REFERENCES kakeibo_receipt(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+INSERT INTO kakeibo_entry_new
+  (id, day_key, name, amount_yen, category, importance, is_special, detail, bulk_from, bulk_to, receipt_id, created_at, updated_at)
+  SELECT id, day_key, name, amount_yen, category, importance, 0, NULL,
+    bulk_from, bulk_to, receipt_id, created_at, updated_at
+  FROM kakeibo_entry;
+DROP TABLE kakeibo_entry;
+ALTER TABLE kakeibo_entry_new RENAME TO kakeibo_entry;
+CREATE INDEX idx_kakeibo_entry_day ON kakeibo_entry(day_key);
+CREATE INDEX idx_kakeibo_entry_name ON kakeibo_entry(name, day_key);
+
+DROP TABLE IF EXISTS kakeibo_forecast_basis;
 `,
   },
 ];

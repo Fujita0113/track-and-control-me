@@ -41,9 +41,9 @@ import {
   DEMO_KAKEIBO_MONTH,
   DEMO_KAKEIBO_TODAY,
 } from '../services/demo-seed.js';
-import { listEntries, monthCoverage, entryState } from '../services/kakeibo.js';
+import { listEntries } from '../services/kakeibo.js';
 import { getBudget, listFixedCosts, listPlannedExpenses, budgetDerived } from '../services/kakeibo-budget.js';
-import { listForecastSources, forecastMonth, weeklyRemaining, wasteSummary } from '../services/kakeibo-forecast.js';
+import { forecastMonth, listAdjustRows, weeklyRemaining, wasteSummary, wasteReductionEffect } from '../services/kakeibo-forecast.js';
 import { importanceBreakdown, categoryTree } from '../services/kakeibo-analysis.js';
 
 import { filterForDisplay } from '../rules/evaluate.js';
@@ -332,29 +332,42 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
   // 提供しない（本番 /api/kakeibo/* へ書き込みが漏れないよう、フロントも isDemo() で書き込み UI を隠す）。
   app.get('/api/demo/kakeibo/home', async () => {
     const db = getDemoDb();
+    const f = forecastMonth(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY);
     return {
       month: DEMO_KAKEIBO_MONTH,
       today: DEMO_KAKEIBO_TODAY,
-      forecast: forecastMonth(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
-      sources: listForecastSources(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
+      series: f.series,
+      landing: {
+        landingYen: f.landingYen,
+        actualYen: f.actualYen,
+        capYen: f.capYen,
+        overYen: f.overYen,
+        crossDayKey: f.crossDayKey,
+        fixedYen: f.fixedYen,
+      },
+      summary: {
+        dailyAverageYen: f.dailyAverageYen,
+        specialYen: f.specialYen,
+        plannedYen: f.plannedYen,
+        fixedYen: f.fixedYen,
+      },
       week: weeklyRemaining(db, DEMO_KAKEIBO_TODAY),
-      waste: wasteSummary(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
+      waste: { ...wasteSummary(db, DEMO_KAKEIBO_MONTH), effect: wasteReductionEffect(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY) },
       plannedChips: listPlannedExpenses(db, { monthKey: DEMO_KAKEIBO_MONTH, fromDayKey: DEMO_KAKEIBO_TODAY }),
     };
   });
 
   app.get('/api/demo/kakeibo/history', async () => {
     const db = getDemoDb();
-    const entries = listEntries(db, DEMO_KAKEIBO_MONTH).map((e) => ({ ...e, state: entryState(e, DEMO_KAKEIBO_TODAY) }));
-    return { entries, coverage: monthCoverage(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY) };
+    return { entries: listEntries(db, DEMO_KAKEIBO_MONTH) };
   });
 
-  app.get('/api/demo/kakeibo/day-edit', async () => {
+  app.get('/api/demo/kakeibo/forecast-adjust', async () => {
     const db = getDemoDb();
-    const rows = listEntries(db, DEMO_KAKEIBO_MONTH)
-      .filter((r) => r.planned_days >= 2 && !r.bulk_from)
-      .map((r) => ({ ...r, state: entryState(r, DEMO_KAKEIBO_TODAY) }));
-    return { rows, summaries: [] };
+    return {
+      rows: listAdjustRows(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
+      effect: forecastMonth(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
+    };
   });
 
   app.get('/api/demo/kakeibo/analysis', async () => {

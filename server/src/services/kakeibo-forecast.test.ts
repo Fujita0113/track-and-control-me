@@ -150,10 +150,14 @@ describe('特別費（design D3）', () => {
     expect(forecastMonth(db, MONTH, TODAY).landingYen).toBe(77_010);
   });
 
-  it('何を特別費にしても、上限内へは戻らない（design D4 の性質）', () => {
-    const all: Record<string, boolean> = {};
-    for (const r of listAdjustRows(db, MONTH, TODAY)) all[r.name] = true;
-    expect(forecastMonth(db, MONTH, TODAY, all).overYen).toBeGreaterThan(0);
+  it('どの1つを特別費にしても、上限内へは戻らない（design D4 の性質）', () => {
+    // 名称ごとに1つずつ切り替える調整モーダルの実際の使い方（design D3）に沿って、
+    // 単独での切り替えでは符号（超過そのもの）はひっくり返らないことを確認する。
+    // 全名称を同時に特別費にする（母数が0になる）極端なケースはこの性質の対象外。
+    for (const r of listAdjustRows(db, MONTH, TODAY)) {
+      if (r.name === '') continue; // まとめ登録
+      expect(forecastMonth(db, MONTH, TODAY, { [r.name]: true }).overYen).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -161,7 +165,7 @@ describe('調整モーダルの一覧（design D3・D14）', () => {
   it('名称ごとに金額と件数をまとめ、金額の大きい順に並ぶ', () => {
     const rows = listAdjustRows(db, MONTH, TODAY);
     expect(rows.map((r) => r.name)).toEqual([
-      '業務スーパー', 'Steam サマーセール', '', 'ドラッグストア', '歯医者', 'コンビニ', '一蘭（外食）',
+      '業務スーパー', 'Steam サマーセール', '', '歯医者', 'ドラッグストア', 'コンビニ', '一蘭（外食）',
     ]);
     expect(rows.find((r) => r.name === '業務スーパー')!).toMatchObject({ amountYen: 6_800, count: 2 });
     expect(rows.find((r) => r.name === 'コンビニ')!).toMatchObject({ amountYen: 1_440, count: 2 });

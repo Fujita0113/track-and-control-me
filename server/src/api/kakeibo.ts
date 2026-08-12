@@ -7,14 +7,10 @@ import {
   updateEntry,
   listEntries,
   suggestNames,
-  pendingConfirmation,
-  confirmActualDays,
   createBulkEntry,
-  monthCoverage,
   declareZeroDay,
   createReceipt,
   getReceiptBytes,
-  entryState,
   KakeiboError,
   type CreateEntryInput,
 } from '../services/kakeibo.js';
@@ -34,18 +30,13 @@ import {
   KakeiboBudgetError,
 } from '../services/kakeibo-budget.js';
 import {
-  dayRateFor,
-  getForecastBasis,
-  setForecastBasis,
-  listForecastSources,
   forecastMonth,
+  listAdjustRows,
   weeklyRemaining,
   wasteSummary,
-  type DayRateOpts,
-  type KakeiboForecastBasisKind,
+  wasteReductionEffect,
 } from '../services/kakeibo-forecast.js';
 import { importanceBreakdown, categoryTree } from '../services/kakeibo-analysis.js';
-import { prevMonthKey } from '../services/kakeibo-shared.js';
 
 /** 家計簿 API（design D14「画面1つにつきエンドポイント1つ」・spec: kakeibo-*）。 */
 export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void {
@@ -71,40 +62,34 @@ export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void
   app.get('/api/kakeibo/home', async (req) => {
     const month = monthParam(req);
     const today = todayKey(db);
+    const f = forecastMonth(db, month, today);
     return {
       month,
       today,
-      forecast: forecastMonth(db, month, today),
-      sources: listForecastSources(db, month, today),
+      series: f.series,
+      landing: {
+        landingYen: f.landingYen,
+        actualYen: f.actualYen,
+        capYen: f.capYen,
+        overYen: f.overYen,
+        crossDayKey: f.crossDayKey,
+        fixedYen: f.fixedYen,
+      },
+      summary: {
+        dailyAverageYen: f.dailyAverageYen,
+        specialYen: f.specialYen,
+        plannedYen: f.plannedYen,
+        fixedYen: f.fixedYen,
+      },
       week: weeklyRemaining(db, today),
-      waste: wasteSummary(db, month, today),
+      waste: { ...wasteSummary(db, month), effect: wasteReductionEffect(db, month, today) },
       plannedChips: listPlannedExpenses(db, { monthKey: month, fromDayKey: today }),
     };
   });
 
   app.get('/api/kakeibo/history', async (req) => {
     const month = monthParam(req);
-    const today = todayKey(db);
-    const entries = listEntries(db, month).map((e) => ({ ...e, state: entryState(e, today) }));
-    return { entries, coverage: monthCoverage(db, month, today) };
-  });
-
-  app.get('/api/kakeibo/day-edit', async (req) => {
-    const month = monthParam(req);
-    const today = todayKey(db);
-    const prev = prevMonthKey(month);
-    const rows = [...listEntries(db, prev), ...listEntries(db, month)]
-      .filter((r) => r.planned_days >= 2 && !r.bulk_from)
-      .sort((a, b) => (a.day_key < b.day_key ? 1 : a.day_key > b.day_key ? -1 : b.id - a.id))
-      .map((r) => ({ ...r, state: entryState(r, today) }));
-    const names = [...new Set(rows.map((r) => r.name))];
-    const summaries = names.map((name) => ({
-      name,
-      lastRate: dayRateFor(db, name, { basis: 'LAST' }, today),
-      allAvgRate: dayRateFor(db, name, { basis: 'ALL_AVG' }, today),
-      currentBasis: getForecastBasis(db, name).basis,
-    }));
-    return { rows, summaries };
+    return { entries: listEntries(db, month) };
   });
 
   app.get('/api/kakeibo/analysis', async (req) => {
@@ -122,6 +107,21 @@ export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void
     };
   });
 
+  // --- 予想の調整モーダル（design D3・D14）-----------------------------------
+
+  app.get('/api/kakeibo/forecast-adjust', async (req) => {
+    const month = monthParam(req);
+    const today = todayKey(db);
+    return { rows: listAdjustRows(db, month, today), effect: forecastMonth(db, month, today) };
+  });
+
+  app.post('/api/kakeibo/forecast-adjust/preview', async (req) => {
+    const b = (req.body ?? {}) as { month?: string; overrides?: Record<string, boolean> };
+    const month = b.month ?? currentMonth();
+    const today = todayKey(db);
+    return forecastMonth(db, month, today, b.overrides ?? {});
+  });
+
   // --- 台帳 -----------------------------------------------------------------
 
   app.post('/api/kakeibo/entries', async (req, reply) => {
@@ -133,18 +133,13 @@ export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void
         amountYen: Number(b.amountYen),
         category: b.category ?? '',
         importance: b.importance ?? '',
-        plannedDays: b.plannedDays,
+        isSpecial: b.isSpecial,
+        detail: b.detail ?? null,
         receiptId: b.receiptId ?? null,
-        confirm: b.confirm,
       });
     } catch (err) {
       return replyKakeiboError(err, reply);
     }
-  });
-
-  app.get('/api/kakeibo/entries/pending', async (req) => {
-    const q = req.query as { name?: string; day?: string };
-    return pendingConfirmation(db, q.name ?? '', q.day ?? todayKey(db));
   });
 
   app.patch('/api/kakeibo/entries/:id', async (req, reply) => {
@@ -152,23 +147,14 @@ export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void
     const b = (req.body ?? {}) as Record<string, unknown>;
     try {
       return updateEntry(db, id, {
-        plannedDays: b.plannedDays as number | undefined,
-        actualDays: b.actualDays as number | null | undefined,
         amountYen: b.amountYen as number | undefined,
+        name: b.name as string | undefined,
         category: b.category as string | undefined,
         importance: b.importance as string | null | undefined,
+        isSpecial: b.isSpecial as boolean | undefined,
+        detail: b.detail as string | null | undefined,
         receiptId: b.receiptId as number | null | undefined,
       });
-    } catch (err) {
-      return replyKakeiboError(err, reply);
-    }
-  });
-
-  app.post('/api/kakeibo/entries/:id/confirm', async (req, reply) => {
-    const id = Number((req.params as { id: string }).id);
-    const b = (req.body ?? {}) as { choice?: 'REMAINING' | 'TODAY' | 'EARLIER'; n?: number; asOfDayKey?: string };
-    try {
-      return confirmActualDays(db, id, { choice: b.choice ?? 'TODAY', n: b.n }, b.asOfDayKey);
     } catch (err) {
       return replyKakeiboError(err, reply);
     }
@@ -196,52 +182,6 @@ export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void
   app.get('/api/kakeibo/names', async (req) => {
     const q = req.query as { prefix?: string };
     return suggestNames(db, q.prefix ?? '');
-  });
-
-  // --- 予想の計算基準 ---------------------------------------------------------
-
-  app.get('/api/kakeibo/basis/:name', async (req) => {
-    const name = decodeURIComponent((req.params as { name: string }).name);
-    return getForecastBasis(db, name);
-  });
-
-  app.put('/api/kakeibo/basis/:name', async (req) => {
-    const name = decodeURIComponent((req.params as { name: string }).name);
-    const b = (req.body ?? {}) as {
-      basis?: KakeiboForecastBasisKind;
-      recentN?: number;
-      manualCycleDays?: number;
-      manualAmountYen?: number;
-    };
-    return setForecastBasis(db, name, {
-      basis: b.basis ?? 'ALL_AVG',
-      recentN: b.recentN,
-      manualCycleDays: b.manualCycleDays,
-      manualAmountYen: b.manualAmountYen,
-    });
-  });
-
-  app.get('/api/kakeibo/basis/:name/preview', async (req) => {
-    const name = decodeURIComponent((req.params as { name: string }).name);
-    const q = req.query as {
-      basis?: KakeiboForecastBasisKind;
-      recentN?: string;
-      manualCycleDays?: string;
-      manualAmountYen?: string;
-      month?: string;
-    };
-    const today = todayKey(db);
-    const month = q.month ?? currentMonth();
-    const opts: DayRateOpts = {
-      basis: q.basis ?? 'ALL_AVG',
-      recentN: q.recentN ? Number(q.recentN) : undefined,
-      manualCycleDays: q.manualCycleDays ? Number(q.manualCycleDays) : undefined,
-      manualAmountYen: q.manualAmountYen ? Number(q.manualAmountYen) : undefined,
-    };
-    return {
-      rate: dayRateFor(db, name, opts, today),
-      forecast: forecastMonth(db, month, today, { [name]: opts }),
-    };
   });
 
   // --- レシート ---------------------------------------------------------------

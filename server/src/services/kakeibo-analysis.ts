@@ -73,8 +73,8 @@ export interface AnalysisEntryRow {
   day_key: string;
   amount_yen: number;
   importance: string | null;
-  planned_days: number;
-  actual_days: number | null;
+  detail: string | null;
+  has_detail: boolean;
   has_receipt: boolean;
   receipt_id: number | null;
   name: string;
@@ -128,8 +128,8 @@ export function categoryTree(db: DB, monthKey: string): CategoryTreeRow[] {
             day_key: e.day_key,
             amount_yen: e.amount_yen,
             importance: e.importance,
-            planned_days: e.planned_days,
-            actual_days: e.actual_days,
+            detail: e.detail,
+            has_detail: e.detail != null && e.detail !== '',
             has_receipt: e.receipt_id != null,
             receipt_id: e.receipt_id,
             name: e.name,

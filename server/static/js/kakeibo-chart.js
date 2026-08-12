@@ -64,7 +64,7 @@ export function renderChart(forecast) {
   if (lastActualIdx >= 0 && lastActualIdx < n - 1) {
     let d = `M ${x(lastActualIdx)},${y(series[lastActualIdx].cumulativeYen)}`;
     for (let i = lastActualIdx + 1; i < n; i++) {
-      if (series[i].reservationYen > 0) {
+      if (series[i].plannedYen > 0) {
         const prevV = series[i - 1].cumulativeYen;
         d += ` L ${x(i)},${y(prevV)} V ${y(series[i].cumulativeYen)}`;
       } else {

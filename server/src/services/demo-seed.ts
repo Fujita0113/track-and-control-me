@@ -421,45 +421,29 @@ export const DEMO_KAKEIBO_TODAY = '2026-08-11';
 function seedKakeiboDemo(db: DB): void {
   const insEntry = db.prepare(
     `INSERT INTO kakeibo_entry
-      (day_key, name, amount_yen, category, importance, planned_days, actual_days, covers_from, bulk_from, bulk_to, receipt_id, created_at, updated_at)
-     VALUES (@dayKey, @name, @amountYen, @category, @importance, @plannedDays, @actualDays, @coversFrom, @bulkFrom, @bulkTo, NULL, @now, @now)`,
+      (day_key, name, amount_yen, category, importance, is_special, detail, bulk_from, bulk_to, receipt_id, created_at, updated_at)
+     VALUES (@dayKey, @name, @amountYen, @category, @importance, @isSpecial, @detail, @bulkFrom, @bulkTo, NULL, @now, @now)`,
   );
   const entry = (
     dayKey: string, name: string, amountYen: number, category: string, importance: string | null,
-    plannedDays: number, actualDays: number | null, coversFrom = dayKey, bulkFrom: string | null = null, bulkTo: string | null = null,
+    detail: string | null = null, bulkFrom: string | null = null, bulkTo: string | null = null,
   ): void => {
-    insEntry.run({ dayKey, name, amountYen, category, importance, plannedDays, actualDays, coversFrom, bulkFrom, bulkTo, now: SEED_TS });
+    insEntry.run({ dayKey, name, amountYen, category, importance, isSpecial: 0, detail, bulkFrom, bulkTo, now: SEED_TS });
   };
 
-  // 業務スーパーの確定履歴（7/18 6日 / 7/26 3日 / 8/01 予定7日・実績5日）。
-  entry('2026-07-18', '業務スーパー', 3_600, 'FOOD', 'MUST', 6, 6);
-  entry('2026-07-26', '業務スーパー', 1_050, 'FOOD', 'MUST', 3, 3);
-  entry('2026-08-01', '業務スーパー', 4_200, 'FOOD', 'MUST', 7, 5);
-  // ドラッグストアの確定履歴（合計 3,130円・44日）。
-  entry('2026-07-01', 'ドラッグストア', 1_850, 'DAILY', 'MUST', 30, 30);
-  entry('2026-07-12', 'ドラッグストア', 1_280, 'DAILY', 'SEMI', 14, 14);
-  // 8月の在庫もの（未確定・暫定。母数には入らない＝「未確定1」バッジの実例）。
-  entry('2026-08-06', '業務スーパー', 2_600, 'FOOD', 'MUST', 5, null);
-  entry('2026-08-02', 'ドラッグストア', 1_850, 'DAILY', 'MUST', 30, null);
-  entry('2026-08-10', 'ドラッグストア', 1_280, 'DAILY', 'SEMI', 14, null);
-  // 8月の散発（食品）。
-  entry('2026-08-08', 'コンビニ', 820, 'FOOD', 'WASTE', 1, 1);
-  entry('2026-08-09', '一蘭（外食）', 1_100, 'FOOD', 'SEMI', 1, 1);
-  entry('2026-08-11', 'コンビニ', 620, 'FOOD', 'WASTE', 1, 1);
-  // 8月の娯楽・急な出費（日数を持たない）。
-  entry('2026-08-07', 'Steam サマーセール', 3_480, 'FUN', 'WASTE', 0, 0);
-  entry('2026-08-09', '歯医者', 3_300, 'SUDDEN', 'MUST', 0, 0);
-  // 未記録期間の一括入力（内訳なし・重要度の帯に「内訳なし」区画を作る）。
-  entry('2026-08-02', '', 3_400, 'NONE', null, 4, 4, '2026-08-02', '2026-08-02', '2026-08-05');
-  // 娯楽・急な出費の過去3か月（月枠の残りの算出材料）。
-  for (const [day, fun, sudden] of [
-    ['2026-05-15', 4_000, 3_000],
-    ['2026-06-15', 5_000, 3_000],
-    ['2026-07-15', 4_500, 3_000],
-  ] as const) {
-    entry(day, '娯楽（過去）', fun, 'FUN', 'WASTE', 0, 0);
-    entry(day, '急な出費（過去）', sudden, 'SUDDEN', 'MUST', 0, 0);
-  }
+  // design.md「数字の筋書き」（2026-08-11 時点）と同一のデータセット
+  // （kakeibo.test.ts の seedAugust() と揃える）。今日までの実績 40,030・1日平均 1,759・
+  // 月末予想 77,010・上限超過日 8/23 がそのままデモで再現される。
+  entry('2026-08-01', '業務スーパー', 4_200, 'FOOD', 'MUST'); // 内訳もレシートも無い
+  entry('2026-08-02', 'ドラッグストア', 1_850, 'DAILY', 'MUST'); // 内訳もレシートも無い
+  entry('2026-08-02', '', 3_400, 'NONE', null, null, '2026-08-02', '2026-08-05'); // 未記録期間の一括入力＝内訳未入力
+  entry('2026-08-06', '業務スーパー', 2_600, 'FOOD', 'MUST');
+  entry('2026-08-07', 'Steam サマーセール', 3_480, 'FUN', 'WASTE', 'Hollow Knight 1,480\nFactorio 1,500\nCeleste 500'); // 内訳だけ
+  entry('2026-08-08', 'コンビニ', 820, 'FOOD', 'WASTE'); // 内訳もレシートも無い
+  entry('2026-08-09', '一蘭（外食）', 1_100, 'FOOD', 'SEMI', 'ラーメン・替え玉'); // 内訳だけ
+  entry('2026-08-09', '歯医者', 3_300, 'SUDDEN', 'MUST'); // 急な出費＝自動で特別費
+  entry('2026-08-10', 'ドラッグストア', 1_280, 'DAILY', 'SEMI');
+  entry('2026-08-11', 'コンビニ', 620, 'FOOD', 'WASTE', 'おにぎり2個・お茶'); // 内訳だけ
 
   db.prepare(
     'INSERT INTO kakeibo_budget (month_key, cap_yen, waste_cap_yen, updated_at) VALUES (?, ?, ?, ?)',
@@ -482,12 +466,6 @@ function seedKakeiboDemo(db: DB): void {
     `INSERT INTO kakeibo_planned_expense (name, category, cycle_days, next_day_key, amount_yen, sort_order, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run('床屋', 'SUDDEN', 30, '2026-08-20', 1_800, 0, SEED_TS);
-
-  // 業務スーパーは「前回の値」を表示中の基準にする（design D5・上限超過が見えている筋書きの実例）。
-  db.prepare(
-    `INSERT INTO kakeibo_forecast_basis (name, basis, recent_n, manual_cycle_days, manual_amount_yen, updated_at)
-     VALUES (?, 'LAST', 3, NULL, NULL, ?)`,
-  ).run('業務スーパー', SEED_TS);
 }
 
 /** デモ用サンプルを空の（マイグレーション済み）DB へ seed する。 */

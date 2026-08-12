@@ -66,134 +66,134 @@
 
 ## 1. 4巡目の実装を落とす
 
-- [ ] 1.1 `kakeibo.ts` から `pendingConfirmation` / `confirmActualDays` / `entryState` /
+- [x] 1.1 `kakeibo.ts` から `pendingConfirmation` / `confirmActualDays` / `entryState` /
       `monthCoverage` と、`createEntry` の `confirm` 同梱経路を削除する
-- [ ] 1.2 `kakeibo-forecast.ts` から `dayRateFor` / `getForecastBasis` / `setForecastBasis` /
+- [x] 1.2 `kakeibo-forecast.ts` から `dayRateFor` / `getForecastBasis` / `setForecastBasis` /
       `listForecastSources` と4種の source 分岐を削除する
-- [ ] 1.3 `api/kakeibo.ts` から `GET /entries/pending` / `PUT /basis/:name` /
+- [x] 1.3 `api/kakeibo.ts` から `GET /entries/pending` / `PUT /basis/:name` /
       `GET /basis/:name/preview` / `GET /day-edit` を削除する
-- [ ] 1.4 フロントから確定1問モーダル・基準モーダル・もつ日数の入力（`kakeibo.js`）、
+- [x] 1.4 フロントから確定1問モーダル・基準モーダル・もつ日数の入力（`kakeibo.js`）、
       カバー期間の帯・日数の一括編集ビュー・3状態バッジ（`kakeibo-history.js`）を削除する
-- [ ] 1.5 `app.css` から使われなくなった `kb-` 部品を落とす。**1ルール1行の書式を守り、
+- [x] 1.5 `app.css` から使われなくなった `kb-` 部品を落とす。**1ルール1行の書式を守り、
       フォーマッタをファイル全体にかけない**（プロジェクトルール）。`git diff --stat` の桁を確認する
 
 ## 2. スキーマ（v30 を最終形に書き換える）
 
-- [ ] 2.1 マイグレーション v30 を**6本**に直す。`kakeibo_entry` から `planned_days` /
+- [x] 2.1 マイグレーション v30 を**6本**に直す。`kakeibo_entry` から `planned_days` /
       `actual_days` / `covers_from` を外し、`is_special INTEGER NOT NULL DEFAULT 0` と
       `detail TEXT` を足す。`kakeibo_forecast_basis` テーブルを削除する（design D1）
-- [ ] 2.2 既存テーブルへの `ALTER` を**1つも書かない**ことを確認する
-- [ ] 2.3 **旧 v30 を適用済みのローカル開発 DB を作り直す**（`user_version` は昇順でしか
+- [x] 2.2 既存テーブルへの `ALTER` を**1つも書かない**ことを確認する
+- [x] 2.3 **旧 v30 を適用済みのローカル開発 DB を作り直す**（`user_version` は昇順でしか
       流れないので同じ v30 の書き換えは再実行されない・design Migration Plan）
-- [ ] 2.4 `packages/contract` の家計簿スキーマを直す。基準4値の enum を落とし、
+- [x] 2.4 `packages/contract` の家計簿スキーマを直す。基準4値の enum を落とし、
       `detail` と `isSpecial` を足す。`npm run build -w @track/contract` 相当が通ること
 
 ## 3. 台帳（`kakeibo.ts`）
 
-- [ ] 3.1 `createEntry` / `updateEntry` を `detail`・`isSpecial` 対応にする
-- [ ] 3.2 `isSpecialEntry(entry)` を純関数で書く。**自動判定は保存しない**（design D3）
-- [ ] 3.3 `createBulkEntry` の `day_key` を `bulk_from` に合わせる（テストが固定）
-- [ ] 3.4 `npx vitest run server/src/services/kakeibo.test.ts` が緑になるまで実装する。
+- [x] 3.1 `createEntry` / `updateEntry` を `detail`・`isSpecial` 対応にする
+- [x] 3.2 `isSpecialEntry(entry)` を純関数で書く。**自動判定は保存しない**（design D3）
+- [x] 3.3 `createBulkEntry` の `day_key` を `bulk_from` に合わせる（テストが固定）
+- [x] 3.4 `npx vitest run server/src/services/kakeibo.test.ts` が緑になるまで実装する。
       **テストは1行も変えない**
 
 ## 4. 予想（`kakeibo-forecast.ts`）
 
-- [ ] 4.1 `forecastMonth` を単純按分へ書き換える。`dailyPoolYen` は `isSpecialEntry` が偽の
+- [x] 4.1 `forecastMonth` を単純按分へ書き換える。`dailyPoolYen` は `isSpecialEntry` が偽の
       レコードの合計、`dailyAverageYen = floor(pool ÷ 経過日数)`（design D2）
-- [ ] 4.2 **先に切り捨ててから残り日数を掛ける**（design D6）。`series` は残り日を1日ずつ
+- [x] 4.2 **先に切り捨ててから残り日数を掛ける**（design D6）。`series` は残り日を1日ずつ
       歩いて積む（閉じた式にしない・design D5）。`crossDayKey` は初めて上限を超える日
-- [ ] 4.3 `overrides`（名称→特別費）で**保存せずに**出し直せるようにする（design D3・D14）
-- [ ] 4.4 `listAdjustRows` を書く（名称ごと・金額降順・`auto` は `category==='SUDDEN'`）
-- [ ] 4.5 `wasteReductionEffect` を書く（上限ぶんを抑えたときの月末超過の変化）
-- [ ] 4.6 `weeklyRemaining` / `wasteSummary` は既存を活かす（`ratioPct` は四捨五入）
-- [ ] 4.7 `npx vitest run server/src/services/kakeibo-forecast.test.ts` が緑になるまで実装する。
+- [x] 4.3 `overrides`（名称→特別費）で**保存せずに**出し直せるようにする（design D3・D14）
+- [x] 4.4 `listAdjustRows` を書く（名称ごと・金額降順・`auto` は `category==='SUDDEN'`）
+- [x] 4.5 `wasteReductionEffect` を書く（上限ぶんを抑えたときの月末超過の変化）
+- [x] 4.6 `weeklyRemaining` / `wasteSummary` は既存を活かす（`ratioPct` は四捨五入）
+- [x] 4.7 `npx vitest run server/src/services/kakeibo-forecast.test.ts` が緑になるまで実装する。
       **モックの数字（40,030 / 19,350 / 1,759 / 77,010 / 8/23 / 70,670 / 8/25）が1円も狂わないこと**
 
 ## 5. 分析（`kakeibo-analysis.ts`）
 
-- [ ] 5.1 明細に `has_detail` を足す（`has_receipt` と並べて押下可否の判定に使う）
-- [ ] 5.2 `npx vitest run server/src/services/kakeibo-analysis.test.ts` が緑になるまで実装する
+- [x] 5.1 明細に `has_detail` を足す（`has_receipt` と並べて押下可否の判定に使う）
+- [x] 5.2 `npx vitest run server/src/services/kakeibo-analysis.test.ts` が緑になるまで実装する
 
 ## 6. API（`server/src/api/kakeibo.ts`）
 
-- [ ] 6.1 `GET /home` の返りを `{ series, landing, summary, week, waste, plannedChips }` に直す
+- [x] 6.1 `GET /home` の返りを `{ series, landing, summary, week, waste, plannedChips }` に直す
       （`summary` は 1日平均・特別費・予定出費・固定費の4成分）
-- [ ] 6.2 `GET /forecast-adjust` と `POST /forecast-adjust/preview`（**保存しない**再計算）を足す
-- [ ] 6.3 `PATCH /entries/:id` を `isSpecial`・`detail` 対応にする（履歴の二択はこれを直接叩く）
-- [ ] 6.4 `GET /history` から `coverage` を落とす
-- [ ] 6.5 `api.js` のクライアント関数を追随させる
+- [x] 6.2 `GET /forecast-adjust` と `POST /forecast-adjust/preview`（**保存しない**再計算）を足す
+- [x] 6.3 `PATCH /entries/:id` を `isSpecial`・`detail` 対応にする（履歴の二択はこれを直接叩く）
+- [x] 6.4 `GET /history` から `coverage` を落とす
+- [x] 6.5 `api.js` のクライアント関数を追随させる
 
 ## 7. ホーム
 
-- [ ] 7.1 折れ線を全幅にする。`viewBox` は `700×300`、SVG 内の文字は 7.5–8.5
+- [x] 7.1 折れ線を全幅にする。`viewBox` は `700×300`、SVG 内の文字は 7.5–8.5
       （2カラム時代の縦長のままだと間延びする・design-notes）
-- [ ] 7.2 折れ線の直下に4成分の1行サマリと `予想の計算内訳・調整 ›` ボタンを置く。
+- [x] 7.2 折れ線の直下に4成分の1行サマリと `予想の計算内訳・調整 ›` ボタンを置く。
       **ここに途中式を出さない**（spec）
-- [ ] 7.3 調整モーダル: 名称ごとの二択・切り替えるたびに4つの数字を出し直す
+- [x] 7.3 調整モーダル: 名称ごとの二択・切り替えるたびに4つの数字を出し直す
       （`preview` を叩き、`これで予想する` まで保存しない）
-- [ ] 7.4 「今週の残り予算」と「今月の『無駄遣い』」のカード（抑えたときの効果を併記）
-- [ ] 7.5 記録カード: 金額・名称（サジェスト）・カテゴリ・重要度・**計算対象**・**内訳**・レシート・
+- [x] 7.4 「今週の残り予算」と「今月の『無駄遣い』」のカード（抑えたときの効果を併記）
+- [x] 7.5 記録カード: 金額・名称（サジェスト）・カテゴリ・重要度・**計算対象**・**内訳**・レシート・
       予定出費チップ。もつ日数の欄は消す
-- [ ] 7.6 カテゴリで「急な出費」を選んだら計算対象のトグルを自動 on ＋ 操作不可にする（design D3）
-- [ ] 7.7 ショートカット `1`–`4`・`Q W E`・**`X`（特別費にする）**・`Ctrl+Enter` に
+- [x] 7.6 カテゴリで「急な出費」を選んだら計算対象のトグルを自動 on ＋ 操作不可にする（design D3）
+- [x] 7.7 ショートカット `1`–`4`・`Q W E`・**`X`（特別費にする）**・`Ctrl+Enter` に
       **`attachTooltip` でホバーヒントを併記する**（プロジェクトルール）
 
 ## 8. 履歴
 
-- [ ] 8.1 グラフを置かない（帯も日別の棒も無し・spec）
-- [ ] 8.2 行を「左＝明細を開くボタン / 右＝二択」の2領域にする。**二択をボタンの内側に入れない**
+- [x] 8.1 グラフを置かない（帯も日別の棒も無し・spec）
+- [x] 8.2 行を「左＝明細を開くボタン / 右＝二択」の2領域にする。**二択をボタンの内側に入れない**
       （button の入れ子は不正で押し分けが壊れる・design D16）
-- [ ] 8.3 内訳もレシートも無い行は押せないようにする。**`[disabled]` の既定の減光を打ち消す**
+- [x] 8.3 内訳もレシートも無い行は押せないようにする。**`[disabled]` の既定の減光を打ち消す**
       （記録が無効に見えるため・design D10）
-- [ ] 8.4 急な出費の行は二択を `特別費（自動）` で選択済み＋操作不可にする
-- [ ] 8.5 「未記録期間を一括入力」（`Ctrl+M`）。**重要度の欄を置かない**（spec）＋ `attachTooltip`
+- [x] 8.4 急な出費の行は二択を `特別費（自動）` で選択済み＋操作不可にする
+- [x] 8.5 「未記録期間を一括入力」（`Ctrl+M`）。**重要度の欄を置かない**（spec）＋ `attachTooltip`
 
 ## 9. 明細（内訳＋レシート）
 
-- [ ] 9.1 明細モーダルを内訳とレシートの**2面**にする。片方しか無いときは無いほうを明示する
-- [ ] 9.2 履歴の行と分析の明細から**同じモーダル**が開くようにする（開くレコードのデータを差し込む）
-- [ ] 9.3 内訳の修正とレシートの差し替えをここから行えるようにする
+- [x] 9.1 明細モーダルを内訳とレシートの**2面**にする。片方しか無いときは無いほうを明示する
+- [x] 9.2 履歴の行と分析の明細から**同じモーダル**が開くようにする（開くレコードのデータを差し込む）
+- [x] 9.3 内訳の修正とレシートの差し替えをここから行えるようにする
 
 ## 10. 分析と予算
 
-- [ ] 10.1 明細の押下可否を `has_receipt` から **`has_receipt || has_detail`** へ変える
-- [ ] 10.2 明細行に `内訳` / `レシート` の印を出し、内訳の先頭を薄字で1行添える
-- [ ] 10.3 語彙を直す（`いらない`→`無駄遣い` / `内訳なし`→`内訳未入力` / `着地予想`→`月末予想` /
+- [x] 10.1 明細の押下可否を `has_receipt` から **`has_receipt || has_detail`** へ変える
+- [x] 10.2 明細行に `内訳` / `レシート` の印を出し、内訳の先頭を薄字で1行添える
+- [x] 10.3 語彙を直す（`いらない`→`無駄遣い` / `内訳なし`→`内訳未入力` / `着地予想`→`月末予想` /
       `今週使える残り`→`今週の残り予算`）。予算タブの「無駄遣いの上限」も同じ
 
 ## 11. デモモードで成果を出す（プロジェクトルール）
 
-- [ ] 11.1 `demo-seed.ts` の家計簿サンプルを新モデルへ直す（日数の列を焼かない・
+- [x] 11.1 `demo-seed.ts` の家計簿サンプルを新モデルへ直す（日数の列を焼かない・
       `detail` と `is_special` を入れる）。**固定 day_key・固定タイムスタンプ**を守る
-- [ ] 11.2 サンプルは spec: demo-mode の条件を満たすこと ―
+- [x] 11.2 サンプルは spec: demo-mode の条件を満たすこと ―
       上限超過が見えている / 急な出費が1件以上 / 内訳だけの行が1件以上 /
       内訳もレシートも無い行が1件以上 / 重要度の帯に内訳未入力の区画が出る
-- [ ] 11.3 `demo.test.ts` の期待値を更新する。**既存の筋書き（達成 24/30・中盤の谷）を壊さない**
-- [ ] 11.4 `PORT=<空きポート> DB_PATH=:memory: npm run server` で起動 → `POST /api/demo/reset` →
+- [x] 11.3 `demo.test.ts` の期待値を更新する。**既存の筋書き（達成 24/30・中盤の谷）を壊さない**
+- [x] 11.4 `PORT=<空きポート> DB_PATH=:memory: npm run server` で起動 → `POST /api/demo/reset` →
       家計簿タブを開き、**折れ線・上限超過日・特別費の切替で動く4つの数字を目視で確認**して
       ユーザーに明示する（プロジェクトルール）
 
 ## 12. 既存 e2e の回帰確認（実装直後・ここで止める）
 
-- [ ] 12.1 `$env:CI="1"; npx playwright test` が全部緑になることを確認する。
+- [x] 12.1 `$env:CI="1"; npx playwright test` が全部緑になることを確認する。
       とくに `shortcut-hints.spec.ts`（propose で赤にしてある）が緑へ変わること
-- [ ] 12.2 `git diff -- e2e/` が **propose の2ファイル以外に差分を持たない**ことを確認する。
+- [x] 12.2 `git diff -- e2e/` が **propose の2ファイル以外に差分を持たない**ことを確認する。
       落ちた既存 e2e を書き換えてはならない。**落ちた場合は停止**し、凍結ラインの
       投げ返し（1タスクにつき1回だけ）としてユーザーへ確認する
 
 ## 13. 新規 e2e（DOM ができた後に書く）
 
-- [ ] 13.1 §0 に挙げた7フローの e2e を書く。セレクタは実装した DOM から採る
-- [ ] 13.2 `git stash push -- server/ packages/` → `$env:CI="1"; npx playwright test e2e/<new-spec>.spec.ts`
+- [x] 13.1 §0 に挙げた7フローの e2e を書く。セレクタは実装した DOM から採る
+- [x] 13.2 `git stash push -- server/ packages/` → `$env:CI="1"; npx playwright test e2e/<new-spec>.spec.ts`
       で**落ちること**を確認 → `git stash pop` → 通ることを確認する。**`CI=1` は必須**
       （無いと `reuseExistingServer` が起動済みサーバを使い回して偽の緑になる）
-- [ ] 13.3 `git diff -- e2e/` に新規ファイルの追加と propose の2ファイル以外の差分が無いことを確認する
+- [x] 13.3 `git diff -- e2e/` に新規ファイルの追加と propose の2ファイル以外の差分が無いことを確認する
 
 ## 14. 仕上げ
 
-- [ ] 14.1 `npm test` 全体が緑であることを確認する
-- [ ] 14.2 `tsc -p server/tsconfig.json` が通ることを確認する
-- [ ] 14.3 `git diff --stat` を見て、`app.css` の差分が想定より桁違いに大きくないことを確認する
+- [x] 14.1 `npm test` 全体が緑であることを確認する
+- [x] 14.2 `tsc -p server/tsconfig.json` が通ることを確認する
+- [x] 14.3 `git diff --stat` を見て、`app.css` の差分が想定より桁違いに大きくないことを確認する
       （大きければ整形が混入している・プロジェクトルール）
-- [ ] 14.4 モックとの突き合わせ: `ref/kakeibo/*.png`（10枚）と実装画面を並べて、
+- [x] 14.4 モックとの突き合わせ: `ref/kakeibo/*.png`（10枚）と実装画面を並べて、
       数字・語彙・状態表示が食い違っていないことを確認する（[[reference-impl-in-ref-dir]]）
