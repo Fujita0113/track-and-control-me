@@ -95,3 +95,45 @@ test('未入力のノート欄はフォーカスした時点でプレースホ�
   await page.locator('.kb-detail-title').click();
   await expect(ph).toBeVisible();
 });
+
+test('入力してから全消去して書き直しても、フォーカス中はプレースホルダーが被らない（issue #92 2巡目コメント）', async ({ page }) => {
+  const title = `プレースホルダー再入力e2eタスク${Date.now()}`;
+  await seedTask(page.request, title);
+  await page.reload();
+  await page.getByRole('button', { name: 'あとで' }).click({ timeout: 2000 }).catch(() => {});
+  await page.locator('#tabs button[data-target="kanban"]').click();
+
+  await page.locator('.kb-card', { hasText: title }).click();
+  const ph = page.locator('.kb-detail-overlay .kb-detail-body .rf-ph');
+  const editor = page.locator('.kb-detail-overlay .kb-detail-body .rf-ed');
+
+  await editor.click();
+  await page.keyboard.type('一度書く');
+  await expect(ph).toBeHidden();
+
+  // フォーカスを外さずに全消去する。
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Backspace');
+  await expect(editor).toHaveText('');
+  // まだフォーカスが editor にあるはずなので、プレースホルダーは隠れたままであるべき。
+  await expect(ph).toBeHidden();
+
+  await page.keyboard.type('もう一度書く');
+  await expect(ph).toBeHidden();
+  await expect(editor).toContainText('もう一度書く');
+});
+
+test('ノートが空でも、detail パネルはデフォルトで縦に長くスクロールが必要な状態で表示される（issue #92 2巡目コメント）', async ({ page }) => {
+  const title = `デフォルト縦長e2eタスク${Date.now()}`;
+  await seedTask(page.request, title);
+  await page.reload();
+  await page.getByRole('button', { name: 'あとで' }).click({ timeout: 2000 }).catch(() => {});
+  await page.locator('#tabs button[data-target="kanban"]').click();
+
+  await page.locator('.kb-card', { hasText: title }).click();
+  const panel = page.locator('.kb-detail-overlay .kb-detail');
+  await expect(panel).toBeVisible();
+
+  const [scrollHeight, clientHeight] = await panel.evaluate((el) => [el.scrollHeight, el.clientHeight]);
+  expect(scrollHeight).toBeGreaterThan(clientHeight);
+});

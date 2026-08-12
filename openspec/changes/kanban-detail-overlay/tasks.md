@@ -58,3 +58,14 @@ issue #92 に2026-08-11T23:43:46Zの追加コメントがあり、(1) ノート�
 - [x] 7.6 D8実装（`CARD_OPEN_DELAY_MS=300`でdetailオープンを遅延、dblclickはタイマーを取り消してリネームへ）。`git stash push -- server/` → `CI=1 npx playwright test e2e/kanban-detail-overlay.spec.ts e2e/kanban-card-quick-actions.spec.ts e2e/kanban-rename-reorder-reentrancy.spec.ts`（新規3specが赤・既存13件green）→ `git stash pop` → 同コマンド（16件全green）で red/green 証明完了。
 - [x] 7.7 影響確認: `kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全52件・`npm run test`（vitest 555件）を再実行し、すべて green であることを確認した。
 - [x] 7.8 `git diff --stat` で app.css / kanban.js の差分が想定範囲か確認する。
+
+## 8. issue #92 3巡目フィードバック対応（占有率・デフォルト縦幅・プレースホルダー再発）
+
+7章実装後にユーザーから3点のフィードバックがあった: (1) detail の画面占有率が（体感として）減っている、(2) ノートのデフォルト縦幅が狭く書き出すとき不安になる。スクロールするとタスクが見切れるくらい縦に長い状態がデフォルトであってほしい、(3) 「クリックして入力」の被り問題は選択した直後は直ったが、入力してから全消去してもう一度書き始めると再び被る。
+
+- [x] 8.1 原因特定: (1)(2) は同根。7章 D6 で `.kb-detail-overlay .kb-detail-body` を `flex:none; min-height:0` にリセットした結果、デフォルトの本文エリアの高さが `.rf-ed` 自身の `min-height:280px` まで縮み、以前（`flex:1` でパネル残り全体を占有していた）より書く面積が体感で減っていた。(3) は `onChange` が「フォーカス中かどうか」を見ずに内容（空かどうか）だけでプレースホルダーの表示を切り替えていたため、フォーカスしたまま全消去すると `raw===''` を検知して再表示されていた。
+- [x] 8.2 `server/static/css/app.css`: `.kb-detail-overlay .kb-detail-body` の `min-height` を `0` → `80vh` に変更。デフォルト（空/短いノート）でもパネル全体が縦に長く、スクロールが前提の状態になる。
+- [x] 8.3 `server/static/js/kanban.js`: プレースホルダー表示ロジックを `notesFocused`（フォーカス中フラグ）で一元化した `updatePh(raw)` に統合し、`onChange`/`focus`/`blur` すべてから呼ぶ。フォーカス中は内容の有無に関わらず常に非表示にする。
+- [x] 8.4 `e2e/kanban-detail-overlay.spec.ts` に新規シナリオ2件（入力→全消去→再入力してもプレースホルダーが被らない／ノートが空でもデフォルトでスクロールが必要な縦長状態）を追加。`git stash push -- server/` → `CI=1 npx playwright test e2e/kanban-detail-overlay.spec.ts`（新規2specが赤・既存3件green）→ `git stash pop` → 同コマンド（5件全green）で red/green 証明完了。
+- [x] 8.5 **埋め込み盤面への意図しない影響を発見・修正**: `kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全52件を再実行したところ `tomorrow-plan-board-detail-sidebar.spec.ts` が1回 flaky（1敗→retry pass）になった。`cardEl(t)` は独立カンバンタブと埋め込み盤面（`O.asideHost` あり）の両方で共有されており、D8 の300ms遅延を無条件に適用していたため、オーバーレイを使わずこの問題が存在しない埋め込み側にも不要な遅延が漏れていたと判明。`card` の click ハンドラで `O.asideHost` が真のとき（埋め込み時）は従来通り即時に `openDetail(t)` を呼ぶよう分岐し、D8 の遅延を独立カンバンタブ限定にスコープを絞った（design.md D8 追記）。`tomorrow-plan-board-detail-sidebar.spec.ts --repeat-each=5`（10回）で安定してpassすることを確認した。
+- [x] 8.6 影響確認: `kanban`/`goal-blueprint`/`tomorrow-plan` 系 e2e 全52+件・`npm run test`（vitest 555件）を再実行し、すべて green であることを確認した。

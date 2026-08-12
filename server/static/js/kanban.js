@@ -728,13 +728,16 @@ function openDeleteConfirmModal(t) {
 function cardEl(t) {
   const pri = PRI[t.priority] ? t.priority : 'low';
   const card = h('div', { class: 'kb-card', draggable: 'true', dataset: { id: String(t.id) } });
-  // シングルクリックは detail を開くが、dblclick と区別するため CARD_OPEN_DELAY_MS だけ
-  // 待ってから開く（issue #92, design D8）。独立カンバンタブでは detail が全画面規模の
-  // オーバーレイになり、即座に開くと2回目の click/dblclick がオーバーレイ側の要素に
-  // 奪われてカードへ届かなくなる（下の dblclick ハンドラが発火しない）ため。
+  // 独立カンバンタブ（`O.asideHost` が無い）ではシングルクリックで detail を開く前に
+  // CARD_OPEN_DELAY_MS だけ待ち、dblclick と区別する（issue #92, design D8）。detail が
+  // 全画面規模のオーバーレイになるため、即座に開くと2回目の click/dblclick がオーバーレイ側
+  // の要素に奪われてカードへ届かなくなる（下の dblclick ハンドラが発火しない）ため。
+  // 埋め込み盤面（`O.asideHost` あり、明日の計画）はオーバーレイを使わずこの問題が無いため、
+  // 従来通り即座に開く。
   let openTimer = null;
   card.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (O.asideHost) { openDetail(t); return; }
     clearTimeout(openTimer);
     openTimer = setTimeout(() => { openTimer = null; openDetail(t); }, CARD_OPEN_DELAY_MS);
   });
@@ -1484,12 +1487,16 @@ function detailEl(t) {
 
   const body = h('div', { class: 'kb-detail-body' });
   const ph = h('div', { class: 'rf-ph', text: NOTES_PLACEHOLDER });
+  // プレースホルダーは「未入力」かつ「未フォーカス」のときだけ表示する（issue #92 2巡目コメント）。
+  // フォーカス中は常に隠す（入力しては全消去してまた書き始めても被らないように）。
+  let notesFocused = false;
+  const updatePh = (raw) => { ph.style.display = raw.trim() === '' && !notesFocused ? 'block' : 'none'; };
   let initializingNotes = true;
   notesEditor = createMarkdownEditor({
     initial: t.notes || '',
     placeholder: NOTES_PLACEHOLDER,
     onChange: (raw) => {
-      ph.style.display = raw.trim() === '' ? 'block' : 'none';
+      updatePh(raw);
       if (initializingNotes) return;
       writeNotes(t, raw);
     },
@@ -1498,12 +1505,8 @@ function detailEl(t) {
   });
   initializingNotes = false;
   S.notesEditor = notesEditor;
-  // カーソルを合わせた時点でプレースホルダーを隠す（issue #92 2巡目コメント: 入力し始めた文字と
-  // 「クリックして入力…」が重なるのを防ぐ）。未入力のままフォーカスを外したら再表示する。
-  notesEditor.el.addEventListener('focus', () => { ph.style.display = 'none'; });
-  notesEditor.el.addEventListener('blur', () => {
-    ph.style.display = notesEditor.getValue().trim() === '' ? 'block' : 'none';
-  });
+  notesEditor.el.addEventListener('focus', () => { notesFocused = true; updatePh(notesEditor.getValue()); });
+  notesEditor.el.addEventListener('blur', () => { notesFocused = false; updatePh(notesEditor.getValue()); });
   body.appendChild(h('div', { class: 'rf-ed-wrap' }, ph, notesEditor.el));
   panel.appendChild(body);
 

@@ -550,7 +550,7 @@ body.kb-page .content { max-width: 1580px; }
    幅は約7割・スクロールはパネル全体を一体で動かす（issue #92 2巡目コメント、design D6/D7）。 */
 .kb-detail-overlay { position: fixed; inset: 0; background: rgba(20, 33, 51, 0.45); display: flex; justify-content: flex-end; z-index: 45; }
 .kb-detail-overlay .kb-detail { width: min(70vw, 840px); height: 100%; border-radius: 0; box-shadow: -8px 0 24px rgba(40, 38, 32, 0.12); overflow-y: auto; overflow-x: hidden; }
-.kb-detail-overlay .kb-detail-body { flex: none; overflow: visible; max-height: none; min-height: 0; }
+.kb-detail-overlay .kb-detail-body { flex: none; overflow: visible; max-height: none; min-height: 80vh; }
 @media (max-width: 1100px) { .kb-detail-overlay .kb-detail { width: 100vw; } }
 
 /* 列 */
