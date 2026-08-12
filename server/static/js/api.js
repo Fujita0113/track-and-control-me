@@ -177,5 +177,43 @@ export const api = {
     continueGoal: (goalId, now) => req('POST', `/api/demo/goals/${goalId}/continue`, { now }),
     endGoal: (goalId, b, now) => req('POST', `/api/demo/goals/${goalId}/end`, { ...b, now }),
     history: (now) => req('GET', `/api/demo/goals/history?${q({ now })}`),
+
+    // 家計簿（読み取り専用・固定シナリオなのでパラメータはサーバー側で無視される）。
+    kakeiboHome: () => req('GET', '/api/demo/kakeibo/home'),
+    kakeiboHistory: () => req('GET', '/api/demo/kakeibo/history'),
+    kakeiboAnalysis: () => req('GET', '/api/demo/kakeibo/analysis'),
+    kakeiboBudget: () => req('GET', '/api/demo/kakeibo/budget'),
+    kakeiboForecastAdjust: () => req('GET', '/api/demo/kakeibo/forecast-adjust'),
+  },
+
+  // 家計簿（spec: kakeibo-* ・design D14）
+  kakeibo: {
+    home: (month) => req('GET', `/api/kakeibo/home?${q({ month })}`),
+    history: (month) => req('GET', `/api/kakeibo/history?${q({ month })}`),
+    analysis: (month) => req('GET', `/api/kakeibo/analysis?${q({ month })}`),
+    budget: (month) => req('GET', `/api/kakeibo/budget?${q({ month })}`),
+
+    createEntry: (b) => req('POST', '/api/kakeibo/entries', b),
+    updateEntry: (id, b) => req('PATCH', `/api/kakeibo/entries/${id}`, b),
+    createBulkEntry: (b) => req('POST', '/api/kakeibo/entries/bulk', b),
+    declareZeroDay: (dayKey) => req('POST', '/api/kakeibo/zero-day', { dayKey }),
+    suggestNames: (prefix) => req('GET', `/api/kakeibo/names?${q({ prefix })}`),
+
+    forecastAdjust: (month) => req('GET', `/api/kakeibo/forecast-adjust?${q({ month })}`),
+    previewForecastAdjust: (month, overrides) => req('POST', '/api/kakeibo/forecast-adjust/preview', { month, overrides }),
+
+    // レシートのバイナリ表示は URL 直指定: /api/kakeibo/receipts/:id
+    uploadReceipt: (dataUrl, width, height) => req('POST', '/api/kakeibo/receipts', { dataUrl, width, height }),
+
+    setBudget: (month, b) => req('PUT', `/api/kakeibo/budget?${q({ month })}`, b),
+    upsertFixedCost: (month, b) => req('POST', `/api/kakeibo/fixed-costs?${q({ month })}`, b),
+    updateFixedCost: (id, b) => req('PATCH', `/api/kakeibo/fixed-costs/${id}`, b),
+    deleteFixedCost: (id) => req('DELETE', `/api/kakeibo/fixed-costs/${id}`),
+    importFixedCosts: (month) => req('POST', `/api/kakeibo/fixed-costs/import?${q({ month })}`),
+
+    createPlannedExpense: (b) => req('POST', '/api/kakeibo/planned-expenses', b),
+    updatePlannedExpense: (id, b) => req('PATCH', `/api/kakeibo/planned-expenses/${id}`, b),
+    deletePlannedExpense: (id) => req('DELETE', `/api/kakeibo/planned-expenses/${id}`),
+    recordPlannedExpense: (id, b) => req('POST', `/api/kakeibo/planned-expenses/${id}/record`, b),
   },
 };

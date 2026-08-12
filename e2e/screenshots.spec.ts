@@ -18,6 +18,7 @@ const TABS: Array<{ target: string; label: string }> = [
   { target: 'reflection', label: '振り返り' },
   { target: 'kanban', label: 'カンバン' },
   { target: 'goals', label: '目標' },
+  { target: 'kakeibo', label: '家計簿' },
   { target: 'settings', label: '設定' },
 ];
 

@@ -6,11 +6,12 @@ import * as kanban from './kanban.js';
 import * as reflection from './reflection.js';
 import * as goals from './goals.js';
 import * as settings from './settings.js';
+import * as kakeibo from './kakeibo.js';
 import { maybeShowOnboarding } from './onboarding.js';
 import { renderDemoBar, isDemo } from './demo.js';
 import { maybeShowDueRuleToast } from './rule-form.js';
 
-const SCREENS = { today, kanban, reflection, goals, settings };
+const SCREENS = { today, kanban, reflection, goals, kakeibo, settings };
 let current = null;
 
 async function activate(name) {

@@ -24,6 +24,7 @@ export const PLANNING_SIGNALS = [
   { v: 'tomorrow_planned', label: '翌日計画（振り返り＋明日タスク）' },
   { v: 'reflection_done', label: '今日の振り返り' },
   { v: 'tomorrow_tasks_registered', label: '明日のタスク登録' },
+  { v: 'kakeibo_recorded', label: '家計簿に今日の記録がある' },
 ];
 
 /** signal_key → 日本語ラベル。null/未設定は既定（tomorrow_planned）扱い。未知は生キーを表示。 */
@@ -61,6 +62,7 @@ export const CONDITION_KINDS = [
   { v: 'PLANNING:reflection_done', target: 'PLANNING', signalKey: 'reflection_done', group: '計画・振り返り' },
   { v: 'PLANNING:tomorrow_tasks_registered', target: 'PLANNING', signalKey: 'tomorrow_tasks_registered', group: '計画・振り返り' },
   { v: 'PLANNING:tomorrow_planned', target: 'PLANNING', signalKey: 'tomorrow_planned', group: '計画・振り返り' },
+  { v: 'PLANNING:kakeibo_recorded', target: 'PLANNING', signalKey: 'kakeibo_recorded', group: '計画・振り返り' },
   { v: 'MANUAL_CHECK', target: 'MANUAL_CHECK', signalKey: null, group: 'チェック・手動記録' },
 ].map((k) => ({ ...k, label: k.label || conditionLabel(k.target, k.signalKey) }));
 

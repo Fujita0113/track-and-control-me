@@ -21,6 +21,28 @@
 - ユーザー個人のグローバル設定（`~/.claude/CLAUDE.md` 等）はリポジトリ外なので同期対象ではない。
   片方のエージェントしか知らない前提は、ここへ書き写して初めて両者の共有物になる。
 
+## どこに何があるか（探索を省くための地図）
+
+npm workspaces（`packages/contract` / `extension` / `server`）。フロント側にバンドル工程は無い。
+
+- `server/src/services/` — ドメインロジックの本体（最大の置き場）。`*.test.ts` は実装と同居（vitest）
+- `server/src/api/` — HTTP ハンドラ。`index.ts` が `register*Routes` を集約する入口
+- `server/src/db/` — スキーマと `migrations.ts`
+- `server/src/{aggregation,rules,password,ingest}/` — 集計・判定・パスワードゲート・WS 取り込み
+- `server/static/js/` — 画面。素の ES モジュール（`index.html` から `type="module"` で直読み）
+- `packages/contract/src/index.ts` — 拡張⇔サーバが共有する zod スキーマと既定値。型の drift はここで防ぐ
+- `extension/src/` — Chrome 拡張（MV3 Service Worker）
+- `e2e/` — Playwright / `ref/` — UI 参照実装（HTML＋スクショ）
+
+機能を1つ足すと `services/x.ts` + `services/x.test.ts` + `api/x.ts` + `static/js/x.js` が対になることが多い。
+
+### 読みに行かない場所
+
+- `openspec/changes/archive/` — 過去の提案65件で、追跡ファイル全体の約6割を占める。**現行仕様ではない**。
+  仕様を知りたいときは `openspec/specs/` を見る。archive は「なぜそう決めたか」を掘るときだけ、
+  変更名で狙って開く。無指向な Grep / Glob でここを巻き込まないこと。
+- `ref/*.png` — スクリーンショット。画像はトークンが重いので、指示されたときだけ開く。
+
 ## 日数が関わる機能はデモモードで成果を明示する（必須）
 
 日付・日数が絡む機能（30日チャレンジ／完走レポート／タイムライン／振り返り等）を作る・変えるときは、
