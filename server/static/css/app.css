@@ -1478,7 +1478,6 @@ body.rf-page .content { max-width: none; }
 .bp-node-title.container { font-weight: 700; }
 .bp-node-title.done { color: var(--muted-2); text-decoration: line-through; }
 .bp-node-childcount { font-size: 11.5px; color: var(--muted-2); flex-shrink: 0; }
-.bp-node-notes { margin: 2px 0 4px 44px; font-size: 12.5px; color: var(--muted-2); white-space: pre-wrap; }
 .bp-node-children { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .bp-node-menu { position: relative; flex-shrink: 0; }
 .bp-node-menu-btn { width: 20px; height: 20px; flex-shrink: 0; border: none; background: transparent; color: var(--muted-2); font-size: 13px; line-height: 1; cursor: pointer; border-radius: 5px; opacity: 0; }

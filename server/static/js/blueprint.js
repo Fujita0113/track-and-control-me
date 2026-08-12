@@ -65,7 +65,7 @@ export function unmount() {
   S = null;
 }
 
-async function reload() {
+async function reload(opts) {
   if (!S) return;
   try {
     const bp = await fetchBlueprint(S.goalId);
@@ -74,7 +74,7 @@ async function reload() {
   } catch (err) {
     toast(`更新に失敗: ${err.message}`, 'err');
   }
-  renderAll();
+  renderAll(opts);
 }
 
 // --- ツリーの索引（親・深さ・兄弟）と可視順（design D9） --------------------
@@ -105,12 +105,26 @@ function lastRootId() {
   return S.nodes.length ? S.nodes[S.nodes.length - 1].id : null;
 }
 
-function renderAll() {
+/**
+ * @param {{ skipFocusRestoreIfOutside?: boolean }} [opts] - タイトル編集の blur から来た再描画だけ true にする。
+ *   その場合、再描画の直前にフォーカスがツリーの外にあれば restoreFocus() を呼ばない（design D1）。
+ *   他の再描画（初期表示・キー操作・チェック・メニューなど）は常時 restoreFocus() する（既存挙動を維持）。
+ */
+function renderAll(opts = {}) {
   if (!S) return;
   const { root } = S;
   S.index = new Map();
   buildIndex(S.nodes, null, 0, S.index);
   S.visibleOrder = [];
+
+  const skipRestore = !!opts.skipFocusRestoreIfOutside
+    && !(root && document.activeElement && root.contains(document.activeElement));
+  // フォーカスを奪い返さないだけでなく、選択枠（.sel）も一緒に外す。ツリーの外へ離脱した以上、
+  // どの行も「選んでいる」状態ではない（design D1・goal-blueprint spec: 選択は常にちょうど1行）。
+  if (skipRestore) {
+    S.selId = null;
+    S.caret = null;
+  }
 
   clear(root);
   const page = h('div', { class: 'bp-page' });
@@ -148,7 +162,7 @@ function renderAll() {
   if (S.detailId != null) page.appendChild(detailModalEl());
 
   root.appendChild(page);
-  restoreFocus();
+  if (!skipRestore) restoreFocus();
 }
 
 /** 再描画のたびに、選択中のノード（またはエフェメラルな追加入力）へフォーカスとキャレットを戻す（design D9）。 */
@@ -266,9 +280,6 @@ function nodeEl(node, depth) {
   if (!S.demo) row.appendChild(nodeMenuEl(node));
 
   const wrapNode = h('div', { class: 'bp-node' }, row);
-  if (isLeaf && node.notes) {
-    wrapNode.appendChild(h('div', { class: 'bp-node-notes', text: node.notes }));
-  }
 
   if (!isLeaf && S.openSet.has(node.id)) {
     const kids = h('div', { class: 'bp-node-children' });
@@ -317,7 +328,8 @@ async function commitTitle(node, input) {
   input.disabled = true;
   try {
     await api.updateTask(node.id, { title: next });
-    await reload();
+    // blur から来た再描画。ユーザーがすでにツリーの外へクリックして離脱していたら、フォーカスを奪い返さない（design D1）。
+    await reload({ skipFocusRestoreIfOutside: true });
   } catch (err) {
     toast(`保存に失敗: ${err.message}`, 'err');
     input.disabled = false;
@@ -402,7 +414,26 @@ function addInlineRowEl(depth) {
       e.preventDefault();
       S.addAfter = null;
       renderAll();
+    } else if (e.key === 'Delete' && !input.value.trim()) {
+      // 空のときだけ Delete を「閉じる」として扱う（design D3）。文字が入っているときは通常の編集操作。
+      e.preventDefault();
+      S.addAfter = null;
+      renderAll();
     }
+  });
+  input.addEventListener('blur', () => {
+    // blur した瞬間はまだフォーカスの移り先が確定していない。クリックによる mousedown→mouseup→
+    // click の一連はブラウザ側で複数タスクに分かれて処理されるため、マイクロタスク1つでは早すぎて
+    // 移り先（例: 別ノードのタイトル）がまだフォーカスされる前に再描画してしまい、その別ノードの
+    // input を破壊して結局どこにもフォーカスが乗らなくなる（実測で確認済み）。
+    // setTimeout(0) でマクロタスクへ回し、クリック起因のフォーカス確定を待ってから判定する（design D3）。
+    setTimeout(() => {
+      if (!S || !S.addAfter) return;
+      const live = S.root.querySelector('.bp-add-input');
+      if (!live || live.value.trim() || document.activeElement === live) return;
+      S.addAfter = null;
+      renderAll({ skipFocusRestoreIfOutside: true });
+    }, 0);
   });
   row.appendChild(input);
   return row;
