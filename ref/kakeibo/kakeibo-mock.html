@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>家計簿タブ UIモック（issue #94）</title>
+<link rel="stylesheet" href="../../server/static/css/app.css">
+<style>
+/* ===========================================================================
+   家計簿モック専用スタイル（issue #94・5巡目=予想を「単純按分」へ作り替え）。
+
+   4巡目までの「日数の在庫を買う」モデル（予定日数・実績日数・名称ごとの基準4択・
+   カバー期間の帯）は #94 のコメント「複雑なロジック組みすぎた」を受けて全部落とした。
+   予想は 日々の出費 ÷ 経過日数 × 月の日数 の一本だけ。ホームは折れ線＋1行サマリに畳み、
+   計算の内訳と「特別費（ペース計算から除外）」の調整はモーダルへ寄せた。
+
+   既存 app.css のトークンと部品語彙を継承し、家計簿固有のものだけ kb- で足す。
+   カテゴリ4色は dataviz の validate_palette.js で検証済み（light・白面）:
+     明度帯 PASS / 彩度 PASS / CVD隣接 PASS(protan ΔE 11.7) / 通常視 17.6 / コントラスト PASS
+   重要度は色を増やさず「塗り・薄塗り・斜線」で表す。
+   =========================================================================== */
+:root {
+  --kb-food: #1a8a63;
+  --kb-daily: #4a68d8;
+  --kb-fun: #c94f92;
+  --kb-sudden: #d1762f;
+  --kb-nodetail: #8a94a2;
+  --kb-num: -apple-system, "Segoe UI", "Yu Gothic UI", system-ui, sans-serif;
+  --kb-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+body { margin: 0; }
+.kb-note { max-width: 1180px; margin: 10px auto -2px; padding: 0 20px; font-size: 11.5px; color: var(--muted-2); }
+
+.kb-amt { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 700; letter-spacing: -0.02em; }
+.kb-meta { font-family: var(--kb-mono); font-size: 11px; letter-spacing: 0.06em; color: var(--muted); }
+
+/* --- サブタブ --- */
+.kb-subtabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }
+.kb-subtab { border: none; background: none; font: inherit; font-size: 13.5px; color: var(--muted); padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.kb-subtab:hover { color: var(--text); }
+.kb-subtab.active { color: var(--text); font-weight: 650; border-bottom-color: var(--text); }
+.kb-view { display: none; }
+.kb-view.active { display: block; }
+
+/* --- カード --- */
+.kb-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; }
+.kb-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.kb-head .t { font-size: 13px; font-weight: 650; }
+.kb-big { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.kb-big .cur { font-size: 20px; font-weight: 650; color: var(--muted-2); }
+.kb-big .n { font-size: 40px; line-height: 1.05; }
+.kb-big.sm .n { font-size: 27px; }
+.kb-sub { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+.kb-sub b { color: var(--text); font-variant-numeric: tabular-nums; }
+.kb-over { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; color: var(--warn); background: var(--warn-weak); border: 1px solid #f3d9a0; border-radius: 999px; padding: 2px 9px; }
+.kb-row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 16px; margin-bottom: 16px; align-items: start; }
+
+/* --- 折れ線 ＋ 予想の計算内訳 --- */
+.kb-plot { display: block; margin-top: 12px; }
+.kb-summary-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-top: 12px; }
+.kb-sum-items { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.kb-sum-items b { color: var(--text); font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; }
+.kb-chart svg { display: block; width: 100%; height: auto; }
+.kb-chart-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.kb-chart-legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); }
+.kb-chart-legend .ln { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--text); vertical-align: middle; margin-right: 5px; }
+.kb-chart-legend .ln.pred { border-top-style: dashed; border-color: var(--muted-2); }
+.kb-chart-legend .ln.cap { border-color: var(--warn); border-top-style: dashed; }
+.kb-cross { font-size: 12.5px; color: var(--warn); }
+.kb-cross b { font-variant-numeric: tabular-nums; }
+
+/* --- 記録する --- */
+.kb-entry { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 10px; }
+.kb-amt-input { position: relative; }
+.kb-amt-input input { width: 100%; font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-size: 23px; font-weight: 700; letter-spacing: -0.02em; padding: 8px 10px 8px 24px; text-align: right; }
+.kb-amt-input .yen { position: absolute; left: 10px; top: 12px; color: var(--muted-2); font-size: 15px; font-weight: 650; }
+.kb-name-input { width: 100%; font-size: 15px; padding: 12px; }
+.kb-resv-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+.kb-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px dashed var(--muted-2); background: var(--panel-2); border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.kb-chip:hover { background: var(--accent-weak); border-color: var(--accent); }
+.kb-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.kb-pick { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 6px 12px 6px 9px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.kb-pick:hover { background: var(--panel-2); }
+.kb-pick .num { font-family: var(--kb-mono); font-size: 10px; color: var(--muted-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.kb-pick .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.kb-pick.on { border-color: var(--text); background: var(--text); color: #fff; }
+.kb-pick.on .num { color: #cdd5df; border-color: #4a5866; }
+.kb-pick[disabled] { opacity: 0.55; cursor: default; }
+.kb-field-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 14px; }
+.kb-field-row > .lbl { font-size: 12px; color: var(--muted); min-width: 48px; padding-top: 7px; }
+
+/* 内訳（任意）: レシートが無いが何を買ったか覚えているときに書く。 */
+.kb-detail-input { flex: 1; min-width: 240px; font: inherit; font-size: 13px; line-height: 1.7; padding: 9px 11px; resize: vertical; }
+.kb-detail-hint { font-size: 11.5px; color: var(--muted-2); padding-top: 9px; }
+
+/* レシート（任意） */
+.kb-receipt { display: inline-flex; align-items: center; gap: 10px; padding-top: 3px; flex-wrap: wrap; }
+.kb-receipt .btn { white-space: nowrap; }
+.kb-thumb { width: 34px; height: 44px; border-radius: 4px; border: 1px solid var(--line); overflow: hidden; background: #fff; flex: none; }
+.kb-thumb svg { display: block; width: 100%; height: 100%; }
+.kb-clip { display: inline-flex; align-items: center; gap: 4px; font-family: var(--kb-mono); font-size: 10.5px; color: var(--accent); }
+.kb-clip.note { color: var(--kb-food); }
+
+.kb-imp { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--muted-2); flex: none; }
+.kb-imp.must { background: var(--muted); border-color: var(--muted); }
+.kb-imp.semi { background: #cfd6de; border-color: #b6c0cb; }
+.kb-imp.none { background: #fff; background-image: repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 4px); }
+.kb-imp.nodetail { background: #fff; border-style: dotted; }
+
+/* --- 「いらない」 --- */
+.kb-waste { border: 1px solid #f0c7c2; background: linear-gradient(180deg, #fdf3f2, var(--panel) 70%); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); }
+.kb-waste .n { color: #b3261e; }
+.kb-waste .cur { color: #cc8b85; }
+.kb-gauge { position: relative; height: 14px; border-radius: 4px; background: #fff; border: 1px solid #f0c7c2; margin: 16px 0 6px; overflow: hidden; }
+.kb-gauge > i { position: absolute; top: 0; bottom: 0; left: 0; background: #b3261e; }
+.kb-gauge > i.over { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 3px, transparent 3px 6px); }
+.kb-gauge > .cap { position: absolute; top: 0; bottom: 0; width: 2px; background: #1b2733; }
+.kb-cap-lbl { font-family: var(--kb-mono); font-size: 10px; color: var(--muted); position: relative; height: 12px; }
+.kb-cap-lbl > span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.kb-waste-row { display: flex; align-items: center; gap: 9px; font-size: 13px; padding: 4px 0; }
+.kb-waste-row .grow { flex: 1; min-width: 0; }
+.kb-waste-row .v { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; }
+
+/* --- 履歴 --- */
+.kb-hist-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 0 12px 0 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.kb-hist-row + .kb-hist-row { margin-top: 6px; }
+.kb-hist-row.off { background: repeating-linear-gradient(45deg, var(--panel) 0 6px, var(--panel-2) 6px 12px); }
+/* 行の左側ぜんぶが明細（内訳＋レシート）を開くボタン。右の二択は外に出してあるので誤爆しない。 */
+.kb-hist-main { display: grid; grid-template-columns: 56px minmax(0, 1fr) 90px 88px 20px 74px; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: none; background: none; font: inherit; text-align: left; border-radius: 9px 0 0 9px; cursor: pointer; }
+.kb-hist-main:hover { background: var(--accent-weak); }
+/* 内訳もレシートも無い行は開くものが無いので押せない（分析の明細と同じ規則）。
+   記録自体が無効なわけではないので、既定の減光は打ち消して色は落とさない。 */
+.kb-hist-main[disabled] { cursor: default; color: var(--text); opacity: 1; }
+.kb-hist-main[disabled]:hover { background: none; }
+.kb-hist-main .d { font-family: var(--kb-mono); font-size: 11px; color: var(--muted); }
+.kb-hist-main .nm { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-hist-main .amt { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; text-align: right; }
+.kb-hist-main .marks { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.kb-cat { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.kb-cat .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: none; }
+
+/* --- 分析: 3段ドリル --- */
+.kb-stack { display: flex; height: 30px; border-radius: 6px; overflow: hidden; gap: 2px; }
+.kb-stack > span { display: flex; align-items: center; justify-content: center; font-family: var(--kb-mono); font-size: 10.5px; color: #fff; }
+.kb-stack > span.must { background: #33404d; }
+.kb-stack > span.semi { background: #7b8794; }
+.kb-stack > span.none { background: #b3261e; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.22) 0 4px, transparent 4px 8px); text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+.kb-stack > span.nodetail { background: var(--kb-nodetail); background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.22) 0 4px, transparent 4px 8px); text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+.kb-stack-foot { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 9px; font-size: 12.5px; color: var(--muted); }
+.kb-stack-foot b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.kb-tree { display: flex; flex-direction: column; }
+.kb-node { display: grid; grid-template-columns: 18px minmax(120px, 200px) minmax(0, 1fr) 88px 42px; align-items: center; gap: 10px; padding: 8px 6px; border: none; background: none; font: inherit; text-align: left; width: 100%; border-radius: 8px; border-bottom: 1px solid var(--line-2); }
+.kb-node.clickable { cursor: pointer; }
+.kb-node.clickable:hover { background: var(--panel-2); }
+.kb-node .chev { font-size: 9px; color: var(--muted-2); text-align: center; }
+.kb-node .nm { display: flex; align-items: center; gap: 8px; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-node .nm .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
+.kb-node .track { height: 12px; border-radius: 4px; background: var(--line-2); overflow: hidden; }
+.kb-node .track > i { display: block; height: 100%; border-radius: 4px; }
+.kb-node .v { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; text-align: right; font-size: 13px; }
+.kb-node .p { font-family: var(--kb-mono); font-size: 11px; color: var(--muted); text-align: right; }
+.kb-node.lv1 { font-weight: 650; }
+.kb-node.lv2 .nm { font-size: 13px; color: var(--muted); padding-left: 18px; }
+.kb-node.lv2 .track { height: 9px; }
+.kb-leaf { display: grid; grid-template-columns: 18px 66px minmax(0, 1fr) 22px 66px 84px; align-items: center; gap: 10px; padding: 7px 6px 7px 40px; font-size: 12.5px; border: none; border-bottom: 1px solid var(--line-2); background: var(--panel-2); width: 100%; text-align: left; font-family: inherit; cursor: pointer; }
+.kb-leaf:hover { background: var(--accent-weak); }
+/* レシートも内訳も無い明細は開くものが無いので押せない。 */
+.kb-leaf.plain { cursor: default; }
+.kb-leaf.plain:hover { background: var(--panel-2); }
+.kb-leaf .d { font-family: var(--kb-mono); font-size: 11px; color: var(--muted); }
+.kb-leaf .v { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; text-align: right; }
+.kb-leaf .nm2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-leaf .nm2 em { font-style: normal; color: var(--muted); }
+.kb-kids { display: none; }
+.kb-kids.open { display: block; }
+
+/* --- 予算 --- */
+.kb-budget { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.kb-brow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.kb-brow:last-child { border-bottom: none; }
+.kb-brow .lbl { font-size: 13px; }
+.kb-brow .lbl small { display: block; color: var(--muted-2); font-family: var(--kb-mono); font-size: 10.5px; margin-top: 2px; }
+.kb-brow input { width: 104px; text-align: right; font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; font-size: 14px; }
+.kb-brow .v { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; font-size: 14px; }
+.kb-out { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--accent-weak); border: 1px solid #cfe0fb; margin-top: 4px; }
+.kb-out .v { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 700; font-size: 20px; color: var(--accent); }
+
+/* --- モーダル部品 --- */
+.kb-rec-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin: 12px 0; padding-right: 2px; }
+.kb-rec { display: grid; grid-template-columns: 62px minmax(0, 1fr) 76px auto; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 8px 12px; font-size: 12.5px; white-space: nowrap; }
+.kb-rec.off { background: repeating-linear-gradient(45deg, var(--panel) 0 6px, var(--panel-2) 6px 12px); }
+.kb-rec .d { font-family: var(--kb-mono); font-size: 11px; color: var(--muted); }
+.kb-rec .amt { font-family: var(--kb-num); font-variant-numeric: tabular-nums; font-weight: 650; text-align: right; }
+/* 「予想に入れる／外す」の2値。押した結果が下の kb-effect に即出る。 */
+.kb-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; background: var(--panel-2); }
+.kb-toggle button { border: none; background: none; font: inherit; font-size: 11px; color: var(--muted); padding: 3px 9px; cursor: pointer; white-space: nowrap; }
+.kb-toggle button.on { background: var(--text); color: #fff; font-weight: 650; }
+.kb-toggle button[disabled] { cursor: default; }
+/* 自動で特別費になっている行（急な出費）。押せないことを薄さで示す。 */
+.kb-toggle.auto { opacity: 0.6; }
+.kb-effect { padding: 12px 14px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); font-size: 12.5px; }
+.kb-effect .kv { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.kb-effect .kv .k { color: var(--muted); }
+.kb-effect .kv b { font-variant-numeric: tabular-nums; }
+.kb-arrow { color: var(--muted-2); margin: 0 4px; }
+.kb-receipt-view { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); padding: 12px; display: flex; justify-content: center; }
+.kb-receipt-view svg { width: 240px; height: auto; filter: drop-shadow(0 2px 6px rgba(20,33,51,0.15)); }
+/* 内訳は「本人が思い出して書いた文字」なので、レシート画像とは別の面で出す。 */
+.kb-detail-view { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; font-size: 13px; line-height: 1.85; white-space: pre-wrap; }
+.kb-detail-view .none { color: var(--muted-2); font-size: 12.5px; }
+
+.kb-hint { position: relative; display: inline-flex; }
+.kb-hint > .tip { position: absolute; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 8px; background: #212b36; color: #f4f6fa; font-size: 11.5px; line-height: 1; white-space: nowrap; box-shadow: var(--shadow-lg); z-index: 30; }
+.kb-hint:hover > .tip, .kb-hint:focus-within > .tip { display: inline-flex; }
+.kb-k { font-family: var(--kb-mono); font-size: 10.5px; background: #3a4653; border: 1px solid #4c5967; border-radius: 4px; padding: 1px 5px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@media (max-width: 980px) {
+  .kb-row2, .kb-budget { grid-template-columns: 1fr; }
+  .kb-entry { grid-template-columns: 1fr; }
+  .kb-hist-row { grid-template-columns: 1fr; padding: 0 0 10px; }
+  .kb-hist-main { grid-template-columns: 56px minmax(0, 1fr) 90px; row-gap: 6px; border-radius: 9px 9px 0 0; }
+  .kb-hist-row > .kb-toggle { margin: 0 12px; }
+  .kb-node { grid-template-columns: 18px minmax(90px, 1fr) 80px 40px; }
+  .kb-node .track { display: none; }
+  .kb-leaf { grid-template-columns: 18px 60px minmax(0, 1fr) 80px; padding-left: 22px; }
+  .kb-rec { grid-template-columns: 62px minmax(0, 1fr) 84px; row-gap: 8px; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="brand-dot"></span><span class="brand-name">Track &amp; Control Me</span></div>
+  <div class="topbar-meta">2026-08-11（火）· 未解錠</div>
+</header>
+
+<nav class="tabs">
+  <button class="tab" type="button" data-top="today">今日</button>
+  <button class="tab" type="button">振り返り</button>
+  <button class="tab" type="button">カンバン</button>
+  <button class="tab" type="button">目標</button>
+  <button class="tab active" type="button" data-top="kakeibo">家計簿</button>
+  <button class="tab" type="button">設定</button>
+</nav>
+
+<p class="kb-note">issue #94 のUIモック（データは架空・2026-08-11 時点）· 5巡目＝予想は単純按分</p>
+
+<main class="content">
+
+<!-- ======================= 家計簿 ======================= -->
+<section id="top-kakeibo" class="kb-view active">
+
+  <div class="kb-subtabs">
+    <button class="kb-subtab active" type="button" data-view="home">ホーム</button>
+    <button class="kb-subtab" type="button" data-view="hist">履歴</button>
+    <button class="kb-subtab" type="button" data-view="ana">分析</button>
+    <button class="kb-subtab" type="button" data-view="budget">予算</button>
+  </div>
+
+  <!-- ---------------- ホーム ---------------- -->
+  <div id="view-home" class="kb-view active">
+
+    <!-- 折れ線グラフと予想の要約 -->
+    <div class="kb-card" style="margin-bottom:16px">
+      <div class="kb-head">
+        <span class="t">今月の支出推移と月末予想</span>
+        <span class="kb-meta">上限 ¥62,000</span>
+      </div>
+      <div class="kb-big sm">
+        <span class="cur">¥</span><span class="n kb-amt">77,010</span>
+        <span class="kb-over">▲ ¥15,010 超過の見込み</span>
+        <span class="muted" style="font-size:12.5px">今日まで <b class="kb-amt" style="color:var(--text)">¥40,030</b></span>
+      </div>
+
+      <div class="kb-plot">
+        <div class="kb-chart">
+          <svg viewBox="0 0 700 300" role="img" aria-label="8月の累計支出。固定費 17,380円、8月11日時点で 40,030円。1日あたり平均 1,759円で推移し、8月20日の予定出費が含まれ、8月23日に上限 62,000円を超え、月末は 77,010円の見込み。">
+            <rect x="46" y="200" width="642" height="50" fill="#eef2f7"></rect>
+            <text x="682" y="215" text-anchor="end" font-family="Consolas, monospace" font-size="7.5" fill="#91a0b0">固定費 ¥17,380</text>
+
+            <line x1="46" y1="71.8" x2="688" y2="71.8" stroke="#b06000" stroke-width="1" stroke-dasharray="4 4"></line>
+            <text x="50" y="68" font-family="Consolas, monospace" font-size="7.5" fill="#b06000">上限 ¥62,000</text>
+
+            <line x1="46" y1="250" x2="688" y2="250" stroke="#e3e8ef" stroke-width="1"></line>
+            <text x="46" y="263" font-family="Consolas, monospace" font-size="7.5" fill="#91a0b0">8/1</text>
+            <text x="238" y="263" font-family="Consolas, monospace" font-size="7.5" fill="#91a0b0">10</text>
+            <text x="452" y="263" font-family="Consolas, monospace" font-size="7.5" fill="#91a0b0">20</text>
+            <text x="688" y="263" text-anchor="end" font-family="Consolas, monospace" font-size="7.5" fill="#91a0b0">31</text>
+
+            <line x1="260" y1="22" x2="260" y2="250" stroke="#1a73e8" stroke-width="1" stroke-dasharray="3 3"></line>
+
+            <!-- 実績 -->
+            <path d="M46,200 V188 L67.4,188 V172.9 L153,172.9 V165.4 L174.4,165.4 V155.4 L195.8,155.4 V153 L217.2,153 V140.4 L238.6,140.4 V136.7 L260,136.7 V134.9"
+                  fill="none" stroke="#1b2733" stroke-width="1.5" stroke-linejoin="round"></path>
+            <circle cx="260" cy="134.9" r="3" fill="#1b2733"></circle>
+            <text x="267" y="129" font-family="Consolas, monospace" font-size="8.5" fill="#1b2733">今日 ¥40,030</text>
+
+            <!-- 予想 -->
+            <path d="M260,134.9 L452.6,89.4 V84.2 L688,28.6" fill="none" stroke="#91a0b0" stroke-width="1.5" stroke-dasharray="5 4" stroke-linejoin="round"></path>
+            <text x="458" y="99" font-family="Consolas, monospace" font-size="7.5" fill="#66727f">予定出費 ¥1,800</text>
+            <circle cx="505.4" cy="71.8" r="3" fill="#b06000"></circle>
+            <circle cx="688" cy="28.6" r="3" fill="#91a0b0"></circle>
+            <text x="684" y="23" text-anchor="end" font-family="Consolas, monospace" font-size="8.5" fill="#66727f">¥77,010</text>
+          </svg>
+          <div class="kb-chart-foot">
+            <div class="kb-chart-legend">
+              <span><i class="ln"></i>実績</span>
+              <span><i class="ln pred"></i>予想</span>
+              <span><i class="ln cap"></i>上限</span>
+            </div>
+            <span class="kb-cross">このペースだと <b>8/23</b> に上限超過</span>
+          </div>
+        </div>
+
+        <div class="kb-summary-bar">
+          <div class="kb-sum-items">
+            <span>日々の出費: 1日平均 <b>¥1,759</b></span>
+            <span>特別費: <b>¥3,300</b></span>
+            <span>予定出費: <b>¥1,800</b></span>
+            <span>固定費: <b>¥17,380</b></span>
+          </div>
+          <button class="btn small" type="button" data-open="modal-forecast">予想の計算内訳・調整 ›</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="kb-row2">
+      <div class="kb-card">
+        <div class="kb-head"><span class="t">今週の残り予算</span><span class="kb-meta">8/10 – 8/16</span></div>
+        <div class="kb-big"><span class="cur">¥</span><span class="n kb-amt">8,170</span></div>
+        <div class="kb-sub">残り<b>6日</b> · 1日 <b>¥1,360</b></div>
+      </div>
+
+      <div class="kb-waste">
+        <div class="kb-head" style="margin-bottom:2px"><span class="t">今月の「無駄遣い」</span></div>
+        <div class="kb-big sm"><span class="cur">¥</span><span class="n kb-amt">4,920</span><span class="muted" style="font-size:12.5px">変動費の 22%</span></div>
+        <div class="kb-gauge">
+          <i style="width:100%" class="over"></i>
+          <i style="width:81.3%"></i>
+          <span class="cap" style="left:81.3%"></span>
+        </div>
+        <div class="kb-cap-lbl"><span style="left:81.3%">上限 ¥4,000</span></div>
+        <div style="margin-top:8px">
+          <div class="kb-waste-row"><i class="kb-imp none"></i><span class="grow">Steam サマーセール</span><span class="v">¥3,480</span></div>
+          <div class="kb-waste-row"><i class="kb-imp none"></i><span class="grow">コンビニ<span class="kb-meta"> 2回</span></span><span class="v">¥1,440</span></div>
+        </div>
+        <p style="margin-top:12px;font-size:12.5px;color:#7a2f27">上限ぶんの <b>¥920</b> を抑えると、月末の超過を <b>¥15,010 → ¥12,410</b> に減らせます。</p>
+      </div>
+    </div>
+
+    <!-- 記録する -->
+    <div class="kb-card">
+      <div class="kb-head" style="margin-bottom:12px"><h2>記録する</h2></div>
+      <div class="kb-resv-row">
+        今月の予定出費
+        <button class="kb-chip" type="button">床屋 <span class="kb-meta">8/20 · 目安 ¥1,800</span></button>
+      </div>
+      <div class="kb-entry">
+        <div class="kb-amt-input"><span class="yen">¥</span><input type="text" value="3,000" aria-label="金額"></div>
+        <input class="kb-name-input" type="text" value="業務スーパー" aria-label="名称" autocomplete="off">
+      </div>
+      <div class="stack" style="margin-top:14px;gap:12px">
+        <div class="kb-field-row">
+          <span class="lbl">カテゴリ</span>
+          <div class="kb-picker">
+            <button class="kb-pick on" type="button" data-cat="food"><span class="num">1</span><i class="sw" style="background:var(--kb-food)"></i>食品</button>
+            <button class="kb-pick" type="button" data-cat="daily"><span class="num">2</span><i class="sw" style="background:var(--kb-daily)"></i>日用品</button>
+            <button class="kb-pick" type="button" data-cat="fun"><span class="num">3</span><i class="sw" style="background:var(--kb-fun)"></i>娯楽</button>
+            <button class="kb-pick" type="button" data-cat="sudden"><span class="num">4</span><i class="sw" style="background:var(--kb-sudden)"></i>急な出費</button>
+          </div>
+        </div>
+        <div class="kb-field-row">
+          <span class="lbl">重要度</span>
+          <div class="kb-picker">
+            <button class="kb-pick on" type="button"><span class="num">Q</span><i class="kb-imp must"></i>必須</button>
+            <button class="kb-pick" type="button"><span class="num">W</span><i class="kb-imp semi"></i>準必須</button>
+            <button class="kb-pick" type="button"><span class="num">E</span><i class="kb-imp none"></i>無駄遣い</button>
+          </div>
+        </div>
+        <div class="kb-field-row">
+          <span class="lbl">計算対象</span>
+          <div class="kb-picker">
+            <span class="kb-hint">
+              <button class="kb-pick" type="button" id="pick-excl"><span class="num">X</span><i class="kb-imp nodetail"></i>特別費にする（日々の計算から外す）</button>
+              <span class="tip">この記録をペース計算から外す <span class="kb-k">X</span></span>
+            </span>
+          </div>
+          <span class="kb-detail-hint" id="excl-note" style="padding-top:7px">日々の出費としてペース計算に含めます</span>
+        </div>
+        <div class="kb-field-row">
+          <span class="lbl" style="min-width:86px">内訳（任意）</span>
+          <textarea class="kb-detail-input" rows="2" aria-label="内訳" placeholder="豚こま 598 / 鶏むね 898 / たまねぎ 398"></textarea>
+        </div>
+        <div class="kb-field-row">
+          <span class="lbl" style="min-width:86px">レシート（任意）</span>
+          <span class="kb-receipt">
+            <span class="kb-thumb">
+              <svg viewBox="0 0 40 52" aria-hidden="true"><rect width="40" height="52" fill="#fff"/><g fill="#c3ccd6"><rect x="6" y="7" width="28" height="2.5"/><rect x="6" y="14" width="20" height="1.8"/><rect x="6" y="19" width="24" height="1.8"/><rect x="6" y="24" width="18" height="1.8"/><rect x="6" y="29" width="22" height="1.8"/><rect x="6" y="38" width="28" height="2.5"/></g></svg>
+            </span>
+            <span class="kb-clip">添付済み · receipt-0811.jpg</span>
+            <button class="btn small" type="button">変更</button>
+            <button class="btn small" type="button">削除</button>
+          </span>
+          <span class="spacer"></span>
+          <span class="kb-hint">
+            <button class="btn primary" type="button">記録する</button>
+            <span class="tip">記録する <span class="kb-k">Ctrl</span><span class="kb-k">Enter</span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------------- 履歴 ---------------- -->
+  <div id="view-hist" class="kb-view">
+    <div class="section-head">
+      <h2>2026年8月</h2>
+      <div class="row">
+        <button class="btn small" type="button">‹ 7月</button>
+        <button class="btn small" type="button" disabled>9月 ›</button>
+        <span class="kb-hint">
+          <button class="btn" type="button">未記録期間を一括入力</button>
+          <span class="tip">つけ忘れた期間を1件で埋める <span class="kb-k">Ctrl</span><span class="kb-k">M</span></span>
+        </span>
+      </div>
+    </div>
+
+    <p class="muted" style="margin:0 0 12px;font-size:12.5px">
+      行を押すと内訳とレシート。右の二択は日々のペース計算に入れるかどうか。
+    </p>
+
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" data-open="modal-detail">
+        <span class="d">8/11 火</span><span class="nm">コンビニ</span><span class="amt">¥620</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-food)"></i>食品</span>
+        <i class="kb-imp none" title="無駄遣い"></i>
+        <span class="marks"><span class="kb-clip note">内訳</span></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" data-open="modal-detail">
+        <span class="d">8/10 月</span><span class="nm">ドラッグストア</span><span class="amt">¥1,280</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-daily)"></i>日用品</span>
+        <i class="kb-imp semi" title="準必須"></i>
+        <span class="marks"><span class="kb-clip">レシート</span></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+    <!-- 急な出費は自動で特別費。手では通常へ戻せないので二択を無効にする。 -->
+    <div class="kb-hist-row off">
+      <button class="kb-hist-main" type="button" data-open="modal-detail">
+        <span class="d">8/09 日</span><span class="nm">歯医者</span><span class="amt">¥3,300</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-sudden)"></i>急な出費</span>
+        <i class="kb-imp must" title="必須"></i>
+        <span class="marks"><span class="kb-clip">レシート</span></span>
+      </button>
+      <span class="kb-toggle auto" title="急な出費は自動で特別費になります">
+        <button type="button" disabled>通常の出費</button>
+        <button type="button" class="on" disabled>特別費（自動）</button>
+      </span>
+    </div>
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" data-open="modal-detail">
+        <span class="d">8/09 日</span><span class="nm">一蘭（外食）</span><span class="amt">¥1,100</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-food)"></i>食品</span>
+        <i class="kb-imp semi" title="準必須"></i>
+        <span class="marks"><span class="kb-clip note">内訳</span></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" data-open="modal-detail">
+        <span class="d">8/07 金</span><span class="nm">Steam サマーセール</span><span class="amt">¥3,480</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-fun)"></i>娯楽</span>
+        <i class="kb-imp none" title="無駄遣い"></i>
+        <span class="marks"><span class="kb-clip note">内訳</span></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" data-open="modal-detail">
+        <span class="d">8/06 木</span><span class="nm">業務スーパー</span><span class="amt">¥2,600</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-food)"></i>食品</span>
+        <i class="kb-imp must" title="必須"></i>
+        <span class="marks"><span class="kb-clip">レシート</span></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+    <!-- 内訳もレシートも無い行は開くものが無いので押せない。二択だけは効く。 -->
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" disabled>
+        <span class="d">8/02 日</span><span class="nm">8/2–8/5 まとめ <span class="badge">内訳未入力</span></span><span class="amt">¥3,400</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-nodetail)"></i>複数</span>
+        <i class="kb-imp nodetail" title="重要度なし"></i>
+        <span class="marks"></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" disabled>
+        <span class="d">8/02 日</span><span class="nm">ドラッグストア</span><span class="amt">¥1,850</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-daily)"></i>日用品</span>
+        <i class="kb-imp must" title="必須"></i>
+        <span class="marks"></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+    <div class="kb-hist-row">
+      <button class="kb-hist-main" type="button" data-open="modal-detail">
+        <span class="d">8/01 土</span><span class="nm">業務スーパー まとめ買い</span><span class="amt">¥4,200</span>
+        <span class="kb-cat"><i class="sw" style="background:var(--kb-food)"></i>食品</span>
+        <i class="kb-imp must" title="必須"></i>
+        <span class="marks"><span class="kb-clip">レシート</span></span>
+      </button>
+      <span class="kb-toggle">
+        <button type="button" class="on">通常の出費</button>
+        <button type="button">特別費（除外）</button>
+      </span>
+    </div>
+  </div>
+
+  <!-- ---------------- 分析 ---------------- -->
+  <div id="view-ana" class="kb-view">
+    <div class="section-head">
+      <h2>2026年8月</h2>
+      <div class="row"><button class="btn small" type="button">‹ 7月</button><button class="btn small" type="button" disabled>9月 ›</button></div>
+    </div>
+
+    <div class="kb-card" style="margin-bottom:16px">
+      <div class="kb-head" style="margin-bottom:10px"><span class="t">重要度</span><span class="kb-meta">変動費の合計 ¥22,650</span></div>
+      <div class="kb-stack" role="img" aria-label="必須 11,950円 53%、準必須 2,380円 10%、無駄遣い 4,920円 22%、内訳未入力 3,400円 15%">
+        <span class="must" style="flex:52.8">必須 53%</span>
+        <span class="semi" style="flex:10.5">10%</span>
+        <span class="none" style="flex:21.7">無駄遣い 22%</span>
+        <span class="nodetail" style="flex:15.0">内訳未入力 15%</span>
+      </div>
+      <div class="kb-stack-foot">
+        <span><i class="kb-imp must" style="vertical-align:-1px"></i> 必須 <b>¥11,950</b></span>
+        <span><i class="kb-imp semi" style="vertical-align:-1px"></i> 準必須 <b>¥2,380</b></span>
+        <span><i class="kb-imp none" style="vertical-align:-1px"></i> 無駄遣い <b>¥4,920</b></span>
+        <span><i class="kb-imp nodetail" style="vertical-align:-1px"></i> 内訳未入力 <b>¥3,400</b></span>
+      </div>
+    </div>
+
+    <div class="kb-card">
+      <div class="kb-head" style="margin-bottom:6px">
+        <span class="t">カテゴリ → 名称 → 明細</span>
+        <span class="kb-meta">% は一段上に対する割合 · 明細を押すと内訳とレシート</span>
+      </div>
+      <div class="kb-tree">
+        <div class="kb-node lv1"><span class="chev"></span><span class="nm"><i class="sw" style="background:var(--kb-food)"></i>食品</span><span class="track"><i style="width:41.2%;background:var(--kb-food)"></i></span><span class="v">¥9,340</span><span class="p">41%</span></div>
+        <button class="kb-node lv2 clickable" type="button" data-kids="k-gyosu"><span class="chev">▶</span><span class="nm">業務スーパー</span><span class="track"><i style="width:30.0%;background:var(--kb-food)"></i></span><span class="v">¥6,800</span><span class="p">73%</span></button>
+        <div class="kb-kids" id="k-gyosu">
+          <button class="kb-leaf" type="button" data-open="modal-detail"><span></span><span class="d">8/06 木</span><span class="nm2">業務スーパー <em>豚こま・鶏むね・たまねぎ…</em></span><i class="kb-imp must" title="必須"></i><span class="kb-clip">レシート</span><span class="v">¥2,600</span></button>
+          <button class="kb-leaf" type="button" data-open="modal-detail"><span></span><span class="d">8/01 土</span><span class="nm2">業務スーパー まとめ買い</span><i class="kb-imp must" title="必須"></i><span class="kb-clip">レシート</span><span class="v">¥4,200</span></button>
+        </div>
+        <button class="kb-node lv2 clickable" type="button" data-kids="k-conv"><span class="chev">▶</span><span class="nm">コンビニ</span><span class="track"><i style="width:6.4%;background:var(--kb-food)"></i></span><span class="v">¥1,440</span><span class="p">15%</span></button>
+        <div class="kb-kids" id="k-conv">
+          <button class="kb-leaf" type="button" data-open="modal-detail"><span></span><span class="d">8/11 火</span><span class="nm2">コンビニ <em>おにぎり2個・お茶</em></span><i class="kb-imp none" title="無駄遣い"></i><span class="kb-clip note">内訳</span><span class="v">¥620</span></button>
+          <button class="kb-leaf plain" type="button" disabled><span></span><span class="d">8/08 土</span><span class="nm2">コンビニ</span><i class="kb-imp none" title="無駄遣い"></i><span></span><span class="v">¥820</span></button>
+        </div>
+        <button class="kb-node lv2 clickable" type="button" data-kids="k-ichiran"><span class="chev">▶</span><span class="nm">一蘭（外食）</span><span class="track"><i style="width:4.9%;background:var(--kb-food)"></i></span><span class="v">¥1,100</span><span class="p">12%</span></button>
+        <div class="kb-kids" id="k-ichiran">
+          <button class="kb-leaf" type="button" data-open="modal-detail"><span></span><span class="d">8/09 日</span><span class="nm2">一蘭（外食） <em>ラーメン・替え玉</em></span><i class="kb-imp semi" title="準必須"></i><span class="kb-clip note">内訳</span><span class="v">¥1,100</span></button>
+        </div>
+
+        <div class="kb-node lv1"><span class="chev"></span><span class="nm"><i class="sw" style="background:var(--kb-daily)"></i>日用品</span><span class="track"><i style="width:13.8%;background:var(--kb-daily)"></i></span><span class="v">¥3,130</span><span class="p">14%</span></div>
+        <button class="kb-node lv2 clickable" type="button" data-kids="k-drug"><span class="chev">▶</span><span class="nm">ドラッグストア</span><span class="track"><i style="width:13.8%;background:var(--kb-daily)"></i></span><span class="v">¥3,130</span><span class="p">100%</span></button>
+        <div class="kb-kids" id="k-drug">
+          <button class="kb-leaf" type="button" data-open="modal-detail"><span></span><span class="d">8/10 月</span><span class="nm2">ドラッグストア</span><i class="kb-imp semi" title="準必須"></i><span class="kb-clip">レシート</span><span class="v">¥1,280</span></button>
+          <button class="kb-leaf plain" type="button" disabled><span></span><span class="d">8/02 日</span><span class="nm2">ドラッグストア</span><i class="kb-imp must" title="必須"></i><span></span><span class="v">¥1,850</span></button>
+        </div>
+
+        <div class="kb-node lv1"><span class="chev"></span><span class="nm"><i class="sw" style="background:var(--kb-fun)"></i>娯楽</span><span class="track"><i style="width:15.4%;background:var(--kb-fun)"></i></span><span class="v">¥3,480</span><span class="p">15%</span></div>
+        <button class="kb-node lv2 clickable" type="button" data-kids="k-steam"><span class="chev">▶</span><span class="nm">Steam サマーセール</span><span class="track"><i style="width:15.4%;background:var(--kb-fun)"></i></span><span class="v">¥3,480</span><span class="p">100%</span></button>
+        <div class="kb-kids" id="k-steam">
+          <button class="kb-leaf" type="button" data-open="modal-detail"><span></span><span class="d">8/07 金</span><span class="nm2">Steam サマーセール <em>Hollow Knight・Factorio ほか</em></span><i class="kb-imp none" title="無駄遣い"></i><span class="kb-clip note">内訳</span><span class="v">¥3,480</span></button>
+        </div>
+
+        <div class="kb-node lv1"><span class="chev"></span><span class="nm"><i class="sw" style="background:var(--kb-sudden)"></i>急な出費</span><span class="track"><i style="width:14.6%;background:var(--kb-sudden)"></i></span><span class="v">¥3,300</span><span class="p">15%</span></div>
+        <button class="kb-node lv2 clickable" type="button" data-kids="k-dent"><span class="chev">▶</span><span class="nm">歯医者</span><span class="track"><i style="width:14.6%;background:var(--kb-sudden)"></i></span><span class="v">¥3,300</span><span class="p">100%</span></button>
+        <div class="kb-kids" id="k-dent">
+          <button class="kb-leaf" type="button" data-open="modal-detail"><span></span><span class="d">8/09 日</span><span class="nm2">歯医者</span><i class="kb-imp must" title="必須"></i><span class="kb-clip">レシート</span><span class="v">¥3,300</span></button>
+        </div>
+
+        <div class="kb-node lv1"><span class="chev"></span><span class="nm"><i class="sw" style="background:var(--kb-nodetail)"></i>まとめて記録</span><span class="track"><i style="width:15.0%;background:var(--kb-nodetail)"></i></span><span class="v">¥3,400</span><span class="p">15%</span></div>
+        <button class="kb-node lv2 clickable" type="button" data-kids="k-bulk"><span class="chev">▶</span><span class="nm">名称なし</span><span class="track"><i style="width:15.0%;background:var(--kb-nodetail)"></i></span><span class="v">¥3,400</span><span class="p">100%</span></button>
+        <div class="kb-kids" id="k-bulk">
+          <button class="kb-leaf plain" type="button" disabled><span></span><span class="d">8/02 日</span><span class="nm2">8/2–8/5 まとめ</span><i class="kb-imp nodetail" title="重要度なし"></i><span></span><span class="v">¥3,400</span></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------------- 予算 ---------------- -->
+  <div id="view-budget" class="kb-view">
+    <div class="section-head"><h2>2026年8月の予算</h2></div>
+    <div class="kb-budget">
+      <div class="stack" style="gap:16px">
+        <div class="kb-card">
+          <div class="kb-head" style="margin-bottom:6px"><span class="t">今月の予算設定</span></div>
+          <div class="kb-brow"><span class="lbl">月の上限</span><span><input type="text" value="62,000"></span></div>
+          <div class="kb-brow"><span class="lbl">固定費の予想<small>右の表の合計</small></span><span class="v muted">− 17,380</span></div>
+          <div class="kb-out"><span>変動費に使える</span><span class="v">¥44,620</span></div>
+          <div class="kb-out" style="background:var(--panel-2);border-color:var(--line)">
+            <span>週の目標<small class="kb-meta" style="display:block">¥44,620 ÷ 31日 × 7日</small></span>
+            <span class="v" style="color:var(--text)">¥10,070</span>
+          </div>
+          <div class="kb-brow" style="margin-top:8px"><span class="lbl">「無駄遣い」の上限<small>超えるとホームで知らせる</small></span><span><input type="text" value="4,000"></span></div>
+        </div>
+
+        <div class="kb-card">
+          <div class="kb-head" style="margin-bottom:6px"><span class="t">毎月の予定出費</span><span class="kb-meta">予想にだけ入る</span></div>
+          <div class="kb-brow"><span class="lbl">床屋<small>30日ごと · 次は 8/20 · 未記録</small></span><span><input type="text" value="1,800"></span></div>
+          <div class="kb-brow"><span class="lbl">コンタクト<small>90日ごと · 次は 9/14</small></span><span><input type="text" value="4,200"></span></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn small" type="button">＋ 予約を追加</button>
+            <span class="kb-meta">記録すると実際の金額に置き換わる</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="kb-card">
+        <div class="kb-head" style="margin-bottom:6px"><span class="t">固定費の予想</span><span class="kb-meta">7月の実績から</span></div>
+        <div class="kb-brow"><span class="lbl">電気代<small>7月 8,200 · 猛暑で上振れ</small></span><span><input type="text" value="8,500"></span></div>
+        <div class="kb-brow"><span class="lbl">ガス代<small>7月 3,100</small></span><span><input type="text" value="3,000"></span></div>
+        <div class="kb-brow"><span class="lbl">通信費<small>7月 4,400</small></span><span><input type="text" value="4,400"></span></div>
+        <div class="kb-brow"><span class="lbl">サブスク<small>7月 1,480</small></span><span><input type="text" value="1,480"></span></div>
+        <div class="kb-brow"><span class="lbl" style="font-weight:650">合計</span><span class="v">¥17,380</span></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn small" type="button">＋ 固定費を追加</button>
+          <button class="btn small" type="button">7月から取り込む</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 今日タブ（抜粋） ======================= -->
+<section id="top-today" class="kb-view">
+  <p class="muted" style="margin-bottom:12px;font-size:12.5px">※ 今日タブは既存画面。家計簿が解錠ゲートへ合流する行だけを抜粋。</p>
+  <div class="gate-hero locked" style="margin-bottom:16px">
+    <span class="lock-icon">🔒</span>
+    <div class="lock-text">
+      <div class="st">まだ解錠していない</div>
+      <div class="sub">あと1つ。家計簿の今日の記録が残っている。</div>
+    </div>
+  </div>
+  <div class="stack">
+    <div class="cond met"><div class="cond-main"><div class="cond-title">振り返りを書く</div><div class="cond-sub">21:40 に保存</div></div><span class="mark yes">✓</span></div>
+    <div class="cond met"><div class="cond-main"><div class="cond-title">明日のタスクを登録する</div><div class="cond-sub">3件</div></div><span class="mark yes">✓</span></div>
+    <div class="cond met"><div class="cond-main"><div class="cond-title">作業4時間</div><div class="cond-sub">4時間12分 / 4時間</div></div><span class="mark yes">✓</span></div>
+    <div class="cond">
+      <div class="cond-main">
+        <div class="cond-title"><i class="cond-color-chip" style="background:var(--kb-food)"></i>家計簿に今日の記録がある</div>
+        <div class="cond-sub">今日ぶんが1件もない</div>
+      </div>
+      <button class="btn small" type="button">家計簿へ</button>
+      <span class="kb-hint"><button class="btn small" type="button">0円だった</button><span class="tip">今日は使わなかった <span class="kb-k">0</span></span></span>
+      <span class="mark no">—</span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ======================= 予想の計算内訳と調整 ======================= -->
+<div id="modal-forecast" class="modal-root">
+  <div class="modal-backdrop">
+    <div class="modal-panel" style="max-width:580px">
+      <div class="modal-header">
+        <h3>予想の計算内訳と調整</h3>
+        <button class="icon-btn" type="button" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted" style="margin:0;font-size:12.5px">
+          一時的な出費（特別費）に指定すると、実績には記録を残したまま、日々のペース計算（平均単価）から除外されます。
+        </p>
+
+        <div class="kb-rec-list">
+          <div class="kb-rec">
+            <span class="d">8/06 木</span>
+            <span>業務スーパー<span class="kb-meta"> 食品 · 2件</span></span>
+            <span class="amt">¥6,800</span>
+            <span class="kb-toggle">
+              <button type="button" class="on">通常の出費</button>
+              <button type="button">特別費（除外）</button>
+            </span>
+          </div>
+
+          <div class="kb-rec" id="rec-steam">
+            <span class="d">8/07 金</span>
+            <span>Steam サマーセール<span class="kb-meta"> 娯楽 · 無駄遣い</span></span>
+            <span class="amt">¥3,480</span>
+            <span class="kb-toggle">
+              <button type="button" class="on" data-excl="0">通常の出費</button>
+              <button type="button" data-excl="1">特別費（除外）</button>
+            </span>
+          </div>
+
+          <div class="kb-rec">
+            <span class="d">8/02 日</span>
+            <span>まとめ登録<span class="kb-meta"> 複数 · 1件</span></span>
+            <span class="amt">¥3,400</span>
+            <span class="kb-toggle">
+              <button type="button" class="on">通常の出費</button>
+              <button type="button">特別費（除外）</button>
+            </span>
+          </div>
+
+          <div class="kb-rec">
+            <span class="d">8/10 月</span>
+            <span>ドラッグストア<span class="kb-meta"> 日用品 · 2件</span></span>
+            <span class="amt">¥3,130</span>
+            <span class="kb-toggle">
+              <button type="button" class="on">通常の出費</button>
+              <button type="button">特別費（除外）</button>
+            </span>
+          </div>
+
+          <div class="kb-rec">
+            <span class="d">8/11 火</span>
+            <span>コンビニ・一蘭<span class="kb-meta"> 食品 · 2件</span></span>
+            <span class="amt">¥2,540</span>
+            <span class="kb-toggle">
+              <button type="button" class="on">通常の出費</button>
+              <button type="button">特別費（除外）</button>
+            </span>
+          </div>
+
+          <div class="kb-rec off">
+            <span class="d">8/09 日</span>
+            <span>歯医者<span class="kb-meta"> 急な出費 · 1件</span></span>
+            <span class="amt">¥3,300</span>
+            <span class="kb-toggle">
+              <button type="button">通常の出費</button>
+              <button type="button" class="on">特別費（除外）</button>
+            </span>
+          </div>
+        </div>
+
+        <div class="kb-effect">
+          <div class="kv"><span class="k">日々の出費（計算対象）</span><span><b>¥19,350</b><span class="kb-arrow">→</span><b id="fx-pool">¥19,350</b></span></div>
+          <div class="kv"><span class="k">1日平均</span><span><b>¥1,759</b><span class="kb-arrow">→</span><b id="fx-rate">¥1,759</b> <span class="kb-meta">/日</span></span></div>
+          <div class="kv"><span class="k">今月末の予想額</span><span><b>¥77,010</b><span class="kb-arrow">→</span><b id="fx-land">¥77,010</b> <span id="fx-verdict" class="kb-over" style="font-size:11px">▲ ¥15,010 超過</span></span></div>
+          <div class="kv"><span class="k">上限を超える日</span><span><b>8/23</b><span class="kb-arrow">→</span><b id="fx-cross">8/23</b></span></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn" type="button" data-close>キャンセル</button>
+          <button class="btn primary" type="button" data-close>これで予想する</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 明細（内訳＋レシート） ======================= -->
+<div id="modal-detail" class="modal-root">
+  <div class="modal-backdrop">
+    <div class="modal-panel" style="max-width:440px">
+      <div class="modal-header">
+        <h3>Steam サマーセール ¥3,480</h3>
+        <button class="icon-btn" type="button" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="row" style="gap:8px">
+          <span class="kb-meta">8/07 金</span>
+          <span class="kb-cat"><i class="sw" style="background:var(--kb-fun)"></i>娯楽</span>
+          <span class="row" style="gap:5px"><i class="kb-imp none"></i><span style="font-size:12.5px">無駄遣い</span></span>
+        </div>
+
+        <div>
+          <div class="kb-head" style="margin-bottom:6px"><span class="t">内訳</span><span class="kb-meta">記録時に手で入れたもの</span></div>
+          <div class="kb-detail-view">Hollow Knight 1,480
+Factorio 1,500
+Celeste 500</div>
+        </div>
+
+        <div>
+          <div class="kb-head" style="margin-bottom:6px"><span class="t">レシート</span></div>
+          <div class="kb-detail-view"><span class="none">レシートは付いていない。</span></div>
+        </div>
+
+        <div class="actions">
+          <button class="btn" type="button" data-close>閉じる</button>
+          <button class="btn" type="button">内訳を直す</button>
+          <button class="btn" type="button">レシートを付ける</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const show = (sel, id) => document.querySelectorAll(sel).forEach(v => v.classList.toggle('active', v.id === id));
+  document.querySelectorAll('.tab[data-top]').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    show('main > .kb-view', 'top-' + btn.dataset.top);
+  }));
+  document.querySelectorAll('.kb-subtab').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.kb-subtab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    show('#top-kakeibo > .kb-view', 'view-' + btn.dataset.view);
+  }));
+
+  // モーダル開閉（data-open="<id>"）
+  document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => {
+    document.getElementById(b.dataset.open).classList.add('open');
+  }));
+  document.querySelectorAll('.modal-root [data-close]').forEach(b => b.addEventListener('click', () => {
+    b.closest('.modal-root').classList.remove('open');
+  }));
+
+  // 明細のドリル
+  document.querySelectorAll('[data-kids]').forEach(btn => btn.addEventListener('click', () => {
+    const kids = document.getElementById(btn.dataset.kids);
+    btn.querySelector('.chev').textContent = kids.classList.toggle('open') ? '▼' : '▶';
+  }));
+
+  // 記録カード: カテゴリ・重要度の選択
+  document.querySelectorAll('.kb-picker').forEach(g => g.querySelectorAll('.kb-pick:not(#pick-excl)').forEach(b => {
+    b.addEventListener('click', () => {
+      g.querySelectorAll('.kb-pick').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      if (b.dataset.cat) syncExcl(b.dataset.cat === 'sudden');
+    });
+  }));
+
+  // 「特別費にする」。急な出費を選ぶと自動で外れ、手では戻せない。
+  const pickExcl = document.getElementById('pick-excl');
+  const exclNote = document.getElementById('excl-note');
+  let exclManual = false;
+  function syncExcl(auto) {
+    const off = auto || exclManual;
+    pickExcl.classList.toggle('on', off);
+    pickExcl.disabled = auto;
+    exclNote.innerHTML = auto
+      ? '急な出費は自動で特別費（計算除外）になります'
+      : off ? '特別費として計算から除外します（実績には残ります）'
+            : '日々の出費としてペース計算に含めます';
+  }
+  pickExcl.addEventListener('click', () => { exclManual = !exclManual; syncExcl(false); });
+
+  // 予想の計算内訳・調整: すべてのアイテムの切り替えに対応
+  const fx = {
+    0: { pool: '¥19,350', rate: '¥1,759', land: '¥77,010', cross: '8/23', over: '▲ ¥15,010 超過' },
+    1: { pool: '¥15,870', rate: '¥1,442', land: '¥70,670', cross: '8/25', over: '▲ ¥8,670 超過' },
+  };
+  document.querySelectorAll('.kb-toggle button').forEach(b => b.addEventListener('click', () => {
+    b.parentElement.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    const rec = b.closest('.kb-rec, .kb-hist-row');
+    if (rec) {
+      const isExcl = b.textContent.includes('除外');
+      rec.classList.toggle('off', isExcl);
+    }
+    if (b.dataset.excl !== undefined) {
+      const v = fx[b.dataset.excl];
+      document.getElementById('fx-pool').textContent = v.pool;
+      document.getElementById('fx-rate').textContent = v.rate;
+      document.getElementById('fx-land').textContent = v.land;
+      document.getElementById('fx-cross').textContent = v.cross;
+      document.getElementById('fx-verdict').textContent = v.over;
+    }
+  }));
+</script>
+</body>
+</html>

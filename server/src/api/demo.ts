@@ -38,7 +38,13 @@ import {
   DEMO_END_DAY,
   DEMO_PRE_START_DAY,
   DEMO_AFTER_END_DAY,
+  DEMO_KAKEIBO_MONTH,
+  DEMO_KAKEIBO_TODAY,
 } from '../services/demo-seed.js';
+import { listEntries } from '../services/kakeibo.js';
+import { getBudget, listFixedCosts, listPlannedExpenses, budgetDerived } from '../services/kakeibo-budget.js';
+import { forecastMonth, listAdjustRows, weeklyRemaining, wasteSummary, wasteReductionEffect } from '../services/kakeibo-forecast.js';
+import { importanceBreakdown, categoryTree } from '../services/kakeibo-analysis.js';
 
 import { filterForDisplay } from '../rules/evaluate.js';
 
@@ -318,5 +324,64 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
     } catch (err) {
       return replyDemoError(err, reply);
     }
+  });
+
+  // --- 家計簿（読み取り専用・design.md「数字の筋書き」に固定・spec: demo-mode）--------------
+  // 家計簿は既存データに一切依存しないため、目標タブの仮想日付スライダー（?now=）は無視し、
+  // 常に固定シナリオ（DEMO_KAKEIBO_MONTH / DEMO_KAKEIBO_TODAY）を返す。書き込みエンドポイントは
+  // 提供しない（本番 /api/kakeibo/* へ書き込みが漏れないよう、フロントも isDemo() で書き込み UI を隠す）。
+  app.get('/api/demo/kakeibo/home', async () => {
+    const db = getDemoDb();
+    const f = forecastMonth(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY);
+    return {
+      month: DEMO_KAKEIBO_MONTH,
+      today: DEMO_KAKEIBO_TODAY,
+      series: f.series,
+      landing: {
+        landingYen: f.landingYen,
+        actualYen: f.actualYen,
+        capYen: f.capYen,
+        overYen: f.overYen,
+        crossDayKey: f.crossDayKey,
+        fixedYen: f.fixedYen,
+      },
+      summary: {
+        dailyAverageYen: f.dailyAverageYen,
+        specialYen: f.specialYen,
+        plannedYen: f.plannedYen,
+        fixedYen: f.fixedYen,
+      },
+      week: weeklyRemaining(db, DEMO_KAKEIBO_TODAY),
+      waste: { ...wasteSummary(db, DEMO_KAKEIBO_MONTH), effect: wasteReductionEffect(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY) },
+      plannedChips: listPlannedExpenses(db, { monthKey: DEMO_KAKEIBO_MONTH, fromDayKey: DEMO_KAKEIBO_TODAY }),
+    };
+  });
+
+  app.get('/api/demo/kakeibo/history', async () => {
+    const db = getDemoDb();
+    return { entries: listEntries(db, DEMO_KAKEIBO_MONTH) };
+  });
+
+  app.get('/api/demo/kakeibo/forecast-adjust', async () => {
+    const db = getDemoDb();
+    return {
+      rows: listAdjustRows(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
+      effect: forecastMonth(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
+    };
+  });
+
+  app.get('/api/demo/kakeibo/analysis', async () => {
+    const db = getDemoDb();
+    return { importance: importanceBreakdown(db, DEMO_KAKEIBO_MONTH), tree: categoryTree(db, DEMO_KAKEIBO_MONTH) };
+  });
+
+  app.get('/api/demo/kakeibo/budget', async () => {
+    const db = getDemoDb();
+    return {
+      budget: getBudget(db, DEMO_KAKEIBO_MONTH),
+      fixedCosts: listFixedCosts(db, DEMO_KAKEIBO_MONTH),
+      plannedExpenses: listPlannedExpenses(db, { monthKey: DEMO_KAKEIBO_MONTH }),
+      derived: budgetDerived(db, DEMO_KAKEIBO_MONTH),
+    };
   });
 }
