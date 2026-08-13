@@ -12,6 +12,9 @@ import { test, expect } from './fixtures.js';
  *   7. ⋯ を開くと削除だけがあり、子を持つノードの削除には確認が出て子は繰り上がる
  *   8. デモモードでは追加・改名・階層の変更・完了の切り替え・⋯ のいずれも出ない
  *
+ * change `kanban-goal-root-crumb`（issue #101）で、目標のタスク一覧から分解せず直接作った
+ * 根タスクの帯（目標名だけを表示し、区切り記号・親名は出さない）のフローを1本追加した。
+ *
  * タイトルは常時編集できる <input>（design D7）なので、Playwright の hasText（textContent 基準）
  * では値を捕まえられない。ノードのタイトルは `input.bp-node-title[value="..."]` で捕まえる。
  */
@@ -188,6 +191,20 @@ test('カンバンのカードの帯に目標名と直近の親が出る。同�
   const colorOf = (cls: string | null) => (cls || '').split(' ').find((c) => c.startsWith('c-'));
   expect(colorOf(classA1)).toBeTruthy();
   expect(colorOf(classA1)).toBe(colorOf(classA2)); // 同じ枝は同じ色
+});
+
+test('目標のタスク一覧から分解せず直接作った根タスクの帯には目標名だけが出る（issue #101 / change kanban-goal-root-crumb）', async ({ page, request }) => {
+  const goal = await createGoal(request, `根タスク帯e2e${Date.now()}`);
+  await request.post(`/api/goals/${goal.id}/blueprint/import`, {
+    data: { text: '- 分解しない根タスク' },
+  });
+  await page.locator('#tabs button[data-target="kanban"]').click();
+
+  const card = page.locator('.kb-card', { hasText: '分解しない根タスク' });
+  const crumb = card.locator('.kb-breadcrumb');
+  await expect(crumb).toHaveText(goal.name); // 目標名だけで、区切り記号・親名は出ない
+  await expect(crumb.locator('.kb-breadcrumb-sep')).toHaveCount(0);
+  await expect(crumb.locator('.kb-breadcrumb-parent')).toHaveCount(0);
 });
 
 test('⋯ を開くと削除だけがあり、子を持つノードの削除には確認が出て子は繰り上がる', async ({ page, request }) => {

@@ -869,25 +869,30 @@ function categoryBadgeEl(t) {
 const CRUMB_COLORS = ['c-green', 'c-blue', 'c-purple'];
 
 /**
- * 親のパンくず帯（task-list-card-tree-ui design D1〜D3、spec: カードは親のパンくずを表示する）。
+ * 親のパンくず帯（task-list-card-tree-ui design D1〜D3、issue #101、
+ * spec: カードは親のパンくずを表示する）。
  * カードの上端いっぱいに敷く帯として「目標名 / 直近の親」を表示する。目標に属さないタスクは
- * 親だけを表示し、区切りの記号も出さない（design D3）。根のタスクには帯を出さない。
+ * 親だけを表示し、区切りの記号も出さない（design D3）。根のタスク（親を持たない）は、
+ * 目標に属していれば目標名だけを表示し、目標に属さなければ帯を出さない。
  * 色は根の枝（root_task_id）の id % 3 から決まり、並べ替えや完了では変わらない（design D2）。
  */
 function parentBreadcrumbEl(t) {
-  if (t.parent_task_id == null) return null;
-  const parent = S.tasks.find((x) => x.id === t.parent_task_id);
-  if (!parent) return null;
+  const parent = t.parent_task_id == null ? null : S.tasks.find((x) => x.id === t.parent_task_id);
+  if (t.parent_task_id != null && !parent) return null;
+  if (!parent && !t.goal_name) return null;
   const colorCls = CRUMB_COLORS[((t.root_task_id ?? 0) % 3 + 3) % 3];
   const text = h('span', { class: 'kb-breadcrumb-text' });
   if (t.goal_name) {
     text.appendChild(h('span', { class: 'kb-breadcrumb-goal', text: t.goal_name }));
-    text.appendChild(h('span', { class: 'kb-breadcrumb-sep', text: '/' }));
+    if (parent) text.appendChild(h('span', { class: 'kb-breadcrumb-sep', text: '/' }));
   }
-  text.appendChild(h('span', { class: 'kb-breadcrumb-parent', text: parent.title }));
+  if (parent) text.appendChild(h('span', { class: 'kb-breadcrumb-parent', text: parent.title }));
+  const titleAttr = parent
+    ? (t.goal_name ? `${t.goal_name} / ${parent.title}` : `親: ${parent.title}`)
+    : t.goal_name;
   return h('div', {
     class: `kb-breadcrumb ${colorCls}`,
-    title: t.goal_name ? `${t.goal_name} / ${parent.title}` : `親: ${parent.title}`,
+    title: titleAttr,
   }, h('span', { class: 'kb-breadcrumb-icon' }), text);
 }
 
