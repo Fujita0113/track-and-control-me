@@ -172,3 +172,46 @@ test('空の追加入力は Escape でも Delete でも閉じ、直前に触っ�
   await expect(page.locator('.bp-add-input')).toHaveCount(0);
   await expect(inputB).toBeFocused();
 });
+
+test('追加入力で Tab を押すと消えずにインデントし、直前のタスクの子として作られる。Shift+Tab で戻せる', async ({ page, request }) => {
+  const { titleA, titleB } = await setupTwoTasks(page, request, '追加入力Tabインデントe2e');
+  const addInput = await openEmptyAddRowAfter(page, titleA);
+
+  await addInput.press('Tab');
+  await expect(addInput).toBeVisible();
+  await expect(addInput).toBeFocused();
+  // 子モードへ入ると titleA の下（インデントされた位置）へ入力欄が移る。
+  await expect(page.locator('.bp-node-children .bp-add-input')).toHaveCount(1);
+
+  await addInput.press('Shift+Tab');
+  await expect(addInput).toBeVisible();
+  await expect(addInput).toBeFocused();
+  await expect(page.locator('.bp-node-children .bp-add-input')).toHaveCount(0);
+
+  await addInput.press('Tab');
+  const childTitle = `子タスク${Date.now()}`;
+  await addInput.fill(childTitle);
+  await addInput.press('Enter');
+
+  const parentRow = page.locator('.bp-node-row', { has: page.locator(`.bp-node-title[value="${titleA}"]`) });
+  await expect(parentRow.locator('.bp-node-childcount')).toHaveText('0/1');
+  await expect(page.locator(`.bp-node-children .bp-node-title[value="${childTitle}"]`)).toBeVisible();
+  // titleB は根に残ったまま（子にはならない）。
+  await expect(page.locator(`.bp-tree > .bp-node > .bp-node-row .bp-node-title[value="${titleB}"]`)).toBeVisible();
+});
+
+test('追加入力にタイトルを打ちかけた状態で Tab を押しても、入力済みの文字は消えない', async ({ page, request }) => {
+  const { titleA } = await setupTwoTasks(page, request, '追加入力Tab文字保持e2e');
+  const addInput = await openEmptyAddRowAfter(page, titleA);
+
+  const draftTitle = `打ちかけ${Date.now()}`;
+  await addInput.fill(draftTitle);
+  await addInput.press('Tab');
+  await expect(page.locator('.bp-node-children .bp-add-input')).toHaveValue(draftTitle);
+
+  await page.locator('.bp-node-children .bp-add-input').press('Shift+Tab');
+  await expect(page.locator('.bp-add-input')).toHaveValue(draftTitle);
+
+  await page.locator('.bp-add-input').press('Enter');
+  await expect(page.locator(`.bp-tree > .bp-node > .bp-node-row .bp-node-title[value="${draftTitle}"]`)).toBeVisible();
+});

@@ -170,7 +170,15 @@ function restoreFocus() {
   if (!S) return;
   if (S.addAfter) {
     const el = S.root.querySelector('.bp-add-input');
-    if (el) el.focus();
+    if (!el) return;
+    el.focus();
+    if (typeof el.setSelectionRange === 'function') {
+      try {
+        el.setSelectionRange(el.value.length, el.value.length);
+      } catch {
+        /* noop */
+      }
+    }
     return;
   }
   if (S.selId == null) return;
@@ -213,7 +221,7 @@ function renderSiblingList(nodes, depth, container) {
   }
   for (const n of nodes) {
     container.appendChild(nodeEl(n, depth));
-    if (S.addAfter && S.addAfter.afterTaskId === n.id) {
+    if (S.addAfter && S.addAfter.afterTaskId === n.id && !S.addAfter.asChild) {
       container.appendChild(addInlineRowEl(depth));
     }
   }
@@ -281,9 +289,12 @@ function nodeEl(node, depth) {
 
   const wrapNode = h('div', { class: 'bp-node' }, row);
 
-  if (!isLeaf && S.openSet.has(node.id)) {
+  // Tab で「兄弟の直後」から「兄弟を親にした子」へ切り替えたエフェメラル入力（design: 消えるバグの修正）。
+  const addingChildHere = S.addAfter && S.addAfter.afterTaskId === node.id && S.addAfter.asChild;
+  if ((!isLeaf && S.openSet.has(node.id)) || addingChildHere) {
     const kids = h('div', { class: 'bp-node-children' });
     renderSiblingList(node.children, depth + 1, kids);
+    if (addingChildHere) kids.appendChild(addInlineRowEl(depth + 1));
     wrapNode.appendChild(kids);
   }
   return wrapNode;
@@ -396,7 +407,10 @@ function addInlineRowEl(depth) {
   const row = h('div', { class: `bp-node-row bp-add-row ${depthCls}` });
   row.appendChild(h('span', { class: 'bp-toggle-spacer' }));
   row.appendChild(h('span', { class: 'bp-checkbox-spacer' }));
-  const input = h('input', { class: 'bp-add-input', type: 'text', placeholder: 'タイトルを入力' });
+  const input = h('input', {
+    class: 'bp-add-input', type: 'text', placeholder: 'タイトルを入力',
+    value: (S.addAfter && S.addAfter.draft) || '',
+  });
   attachTooltip(input, { label: '追加', keys: ['Enter'] });
   input.addEventListener('keydown', async (e) => {
     if (e.isComposing || e.keyCode === 229) return;
@@ -418,6 +432,20 @@ function addInlineRowEl(depth) {
       // 空のときだけ Delete を「閉じる」として扱う（design D3）。文字が入っているときは通常の編集操作。
       e.preventDefault();
       S.addAfter = null;
+      renderAll();
+    } else if (e.key === 'Tab') {
+      // Tab は既存ノードと同じくインデント操作。preventDefault しないとフォーカスが外へ抜けて
+      // blur ハンドラが「空のまま閉じる」を発火し、消えたように見える（issue 報告のバグ）。
+      e.preventDefault();
+      const draft = input.value; // renderAll で入力欄ごと作り直されるため、打ちかけの文字を引き継ぐ。
+      if (e.shiftKey) {
+        if (!S.addAfter.asChild) return; // 既に兄弟モードなら何もしない
+        S.addAfter = { afterTaskId: S.addAfter.afterTaskId, asChild: false, draft };
+      } else {
+        if (S.addAfter.afterTaskId == null || S.addAfter.asChild) return; // 先頭 or 既に子モードでは何もしない
+        S.openSet.add(S.addAfter.afterTaskId);
+        S.addAfter = { afterTaskId: S.addAfter.afterTaskId, asChild: true, draft };
+      }
       renderAll();
     }
   });
@@ -443,7 +471,9 @@ async function submitAdd(title) {
   try {
     const created = S.addAfter.afterTaskId == null
       ? await api.createGoalBlueprintRoot(S.goalId, title)
-      : await api.createSiblingTask(S.addAfter.afterTaskId, title);
+      : S.addAfter.asChild
+        ? await api.createChildTask(S.addAfter.afterTaskId, { title })
+        : await api.createSiblingTask(S.addAfter.afterTaskId, title);
     // S.addAfter は今作ったものの直後を指す（続けて次の入力を開く・design D5）。
     S.addAfter = { afterTaskId: created.id };
     S.selId = created.id;
