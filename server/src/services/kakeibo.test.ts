@@ -78,6 +78,17 @@ describe('支出レコードの作成と検証（kakeibo-ledger）', () => {
     expect(() => createEntry(db, { ...base, category: 'TRAVEL', importance: 'MUST' })).toThrow(KakeiboError);
     expect(() => createEntry(db, { ...base, category: 'FOOD', importance: 'NICE' })).toThrow(KakeiboError);
   });
+
+  // issue #102: 記録し忘れた過去の出費を通常の記録として入れられるようにする。
+  it('任意の過去日で記録できる（登録し忘れの後追い）', () => {
+    const e = createEntry(db, { dayKey: '2020-01-01', name: '昔の出費', amountYen: 500, category: 'FOOD', importance: 'MUST' });
+    expect(e.day_key).toBe('2020-01-01');
+  });
+
+  it('未来日は拒否する', () => {
+    const bad = { dayKey: '2099-12-31', name: '未来の出費', amountYen: 500, category: 'FOOD', importance: 'MUST' } as const;
+    expect(() => createEntry(db, bad)).toThrow(KakeiboError);
+  });
 });
 
 describe('特別費の判定（kakeibo-forecast の母数・design D3）', () => {

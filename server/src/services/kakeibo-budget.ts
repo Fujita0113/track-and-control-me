@@ -212,13 +212,17 @@ export function recordPlannedExpense(db: DB, id: number, input: RecordPlannedExp
     | undefined;
   if (!p) throw new KakeiboBudgetError('予定出費が見つかりません');
 
-  const entry = createEntry(db, {
-    dayKey: input.dayKey,
-    name: p.name,
-    amountYen: input.amountYen,
-    category: p.category,
-    importance: input.importance,
-  });
+  const entry = createEntry(
+    db,
+    {
+      dayKey: input.dayKey,
+      name: p.name,
+      amountYen: input.amountYen,
+      category: p.category,
+      importance: input.importance,
+    },
+    { allowFutureDay: true },
+  );
 
   db.prepare('UPDATE kakeibo_planned_expense SET next_day_key = ? WHERE id = ?').run(
     addDaysKey(p.next_day_key, p.cycle_days),

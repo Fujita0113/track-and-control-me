@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import type { Page } from '@playwright/test';
-import { thirtyDayEnd } from './goal-input.js';
+import { thirtyDayEnd, addDaysKey } from './goal-input.js';
 
 /**
  * 家計簿タブ（issue #94 / kakeibo-tab）の通し e2e。
@@ -234,5 +234,35 @@ test.describe.serial('家計簿タブ', () => {
     await expect(page.locator('.kb-card', { hasText: '今月の支出推移と月末予想' })).toContainText(
       `上限 ¥${newCap.toLocaleString('ja-JP')}`,
     );
+  });
+
+  test('記録カードで買った日を過去日に変えて記録する → 履歴のその日の位置に現れ、当月の合計に反映される（issue #102）', async ({ page, request }) => {
+    const { dayKey } = await (await request.get('/api/summary')).json();
+    const pastDayKey = addDaysKey(dayKey, -2);
+    const pastMonthKey = pastDayKey.slice(0, 7);
+    const todayMonthKey = dayKey.slice(0, 7);
+    const before = await (await request.get(`/api/kakeibo/home?month=${pastMonthKey}`)).json();
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
+    await gotoKakeibo(page);
+
+    await page.fill('input[aria-label="金額"]', '999');
+    await page.fill('.kb-name-input', 'E2E過去日記録');
+    await page.fill('input[aria-label="買った日"]', pastDayKey);
+    await page.getByRole('button', { name: '記録する', exact: true }).click();
+    await expect(page.locator('#toast-host.show')).toContainText('記録しました');
+
+    await gotoKakeibo(page, '履歴');
+    if (pastMonthKey !== todayMonthKey) {
+      await page.locator('.section-head button', { hasText: '‹' }).click();
+      await page.waitForTimeout(150);
+    }
+    const row = page.locator('.kb-hist-row', { hasText: 'E2E過去日記録' });
+    await expect(row).toBeVisible();
+    await expect(row.locator('.d')).toContainText(`${Number(pastDayKey.split('-')[1])}/${Number(pastDayKey.split('-')[2])}`);
+
+    const after = await (await request.get(`/api/kakeibo/home?month=${pastMonthKey}`)).json();
+    expect(after.summary.dailyAverageYen).not.toBe(before.summary.dailyAverageYen);
   });
 });

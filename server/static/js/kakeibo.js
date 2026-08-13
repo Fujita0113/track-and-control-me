@@ -204,7 +204,8 @@ function renderWasteCard(w) {
 // --- 記録する ---------------------------------------------------------------
 
 function renderEntryCard(plannedChips) {
-  const form = { amountYen: 0, name: '', category: 'FOOD', importance: 'MUST', isSpecial: false, detail: '', receiptId: null, receiptPreview: null };
+  const todayDayKey = isDemo() ? DEMO_KAKEIBO_TODAY : appState.today;
+  const form = { dayKey: todayDayKey, amountYen: 0, name: '', category: 'FOOD', importance: 'MUST', isSpecial: false, detail: '', receiptId: null, receiptPreview: null };
   const card = h('div', { class: 'kb-card' });
   card.appendChild(h('div', { class: 'kb-head', style: { marginBottom: '12px' } }, h('h2', { text: '記録する' })));
 
@@ -290,6 +291,9 @@ function renderEntryCard(plannedChips) {
     specialToggle.appendChild(specialSeg);
     attachTooltip(specialSeg, { label: '特別費にする（日々の計算から外す）', keys: ['X'] });
   }
+  const dayInput = h('input', { type: 'date', value: form.dayKey, max: todayDayKey, 'aria-label': '買った日' });
+  dayInput.addEventListener('change', () => { form.dayKey = dayInput.value || todayDayKey; });
+  stack.appendChild(h('div', { class: 'kb-field-row' }, h('span', { class: 'lbl', text: '買った日' }), dayInput));
   stack.appendChild(h('div', { class: 'kb-field-row' }, h('span', { class: 'lbl', text: 'カテゴリ' }), catPicker));
   stack.appendChild(h('div', { class: 'kb-field-row' }, h('span', { class: 'lbl', text: '重要度' }), impPicker));
   stack.appendChild(h('div', { class: 'kb-field-row' }, h('span', { class: 'lbl', text: '計算対象' }), specialToggle));
@@ -343,6 +347,8 @@ function renderEntryCard(plannedChips) {
     saveBtn.disabled = true;
     try {
       await submitEntry(form);
+    } catch (e) {
+      toast(e.data && e.data.error ? e.data.error : `記録に失敗しました: ${e.message}`, 'err');
     } finally {
       saveBtn.disabled = false;
     }
@@ -374,7 +380,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function submitEntry(form) {
-  const dayKey = isDemo() ? DEMO_KAKEIBO_TODAY : appState.today;
+  const dayKey = form.dayKey || (isDemo() ? DEMO_KAKEIBO_TODAY : appState.today);
   const base = {
     dayKey, name: form.name.trim(), amountYen: form.amountYen, category: form.category,
     importance: form.importance, isSpecial: form.isSpecial, detail: form.detail ? form.detail.trim() || null : null,

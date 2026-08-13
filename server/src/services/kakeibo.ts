@@ -1,4 +1,5 @@
 import type { DB } from '../db/index.js';
+import { todayKey } from './summary.js';
 
 /**
  * 家計簿の台帳（spec: kakeibo-ledger / kakeibo-gate・design.md D1-D4・D9-D12）。
@@ -29,6 +30,10 @@ function validateCategory(category: string): void {
 }
 function validateImportance(importance: string): void {
   if (!IMPORTANCES.has(importance)) throw new KakeiboError(`未知の重要度です: ${importance}`);
+}
+/** 買った日は当日の作業日以前のみ（design: kakeibo-past-entry「未来日の拒否はサーバ側でも行う」）。 */
+function validateNotFuture(db: DB, dayKey: string): void {
+  if (dayKey > todayKey(db)) throw new KakeiboError('未来の日付には記録できません');
 }
 
 export interface KakeiboEntryRow {
@@ -83,10 +88,19 @@ export function isSpecialEntry(entry: KakeiboEntryRow): boolean {
   return entry.category === 'SUDDEN' || entry.is_special === 1;
 }
 
-export function createEntry(db: DB, input: CreateEntryInput): KakeiboEntryRow {
+export interface CreateEntryOptions {
+  /**
+   * 予定出費（kakeibo-budget）のチップ記録用。次回予定日は将来日でありうるため、
+   * 通常の記録カード（kakeibo-ledger）だけが対象の未来日チェックを外す。
+   */
+  allowFutureDay?: boolean;
+}
+
+export function createEntry(db: DB, input: CreateEntryInput, opts: CreateEntryOptions = {}): KakeiboEntryRow {
   validateAmount(input.amountYen);
   validateCategory(input.category);
   validateImportance(input.importance);
+  if (!opts.allowFutureDay) validateNotFuture(db, input.dayKey);
 
   const now = Date.now();
   const info = db
