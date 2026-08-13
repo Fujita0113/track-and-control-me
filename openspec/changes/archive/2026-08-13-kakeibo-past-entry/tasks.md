@@ -23,4 +23,4 @@
 
 ## 5. Spec 同期
 
-- [ ] 5.1 実装・テストが緑になったら `/opsx:archive` で `openspec/specs/kakeibo-ledger/spec.md` に delta を sync し、アーカイブする。
+- [x] 5.1 実装・テストが緑になったら `/opsx:archive` で `openspec/specs/kakeibo-ledger/spec.md` に delta を sync し、アーカイブする。
