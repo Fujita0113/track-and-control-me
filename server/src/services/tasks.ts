@@ -48,6 +48,12 @@ export interface TaskRow {
    */
   root_task_id?: number;
   goal_name?: string | null;
+  /**
+   * listTasks 限定で付与。goal_name と同じ JOIN 経路で取れる、継続チェイン先頭の目標 id。
+   * カンバンのパンくず帯の色決定キー（同じ目標なら同じ色にするため。goal_name は改名され得るが
+   * この id は継続しても変わらない）。目標に属さない根の子は null。
+   */
+  goal_root_id?: number | null;
 }
 
 export function listTasks(db: DB): TaskRow[] {
@@ -71,7 +77,8 @@ export function listTasks(db: DB): TaskRow[] {
        SELECT task.*,
               EXISTS(SELECT 1 FROM task c WHERE c.parent_task_id = task.id) AS has_children,
               tr.root_id AS root_task_id,
-              rg.name AS goal_name
+              rg.name AS goal_name,
+              gr.root_id AS goal_root_id
        FROM task
        JOIN task_root tr ON tr.id = task.id
        LEFT JOIN task root_task ON root_task.id = tr.root_id

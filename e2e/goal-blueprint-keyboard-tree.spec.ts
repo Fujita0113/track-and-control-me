@@ -193,6 +193,23 @@ test('カンバンのカードの帯に目標名と直近の親が出る。同�
   expect(colorOf(classA1)).toBe(colorOf(classA2)); // 同じ枝は同じ色
 });
 
+test('同じ目標に属する別々の根タスクは、枝が違っても帯の色が同じ', async ({ page, request }) => {
+  const goal = await createGoal(request, `目標色統一e2e${Date.now()}`);
+  await request.post(`/api/goals/${goal.id}/blueprint/import`, {
+    data: { text: '- rootX\n- rootY' },
+  });
+  await page.locator('#tabs button[data-target="kanban"]').click();
+
+  const cardX = page.locator('.kb-card', { hasText: 'rootX' });
+  const cardY = page.locator('.kb-card', { hasText: 'rootY' });
+  const colorOf = async (card: import('@playwright/test').Locator) => {
+    const cls = await card.locator('.kb-breadcrumb').getAttribute('class');
+    return (cls || '').split(' ').find((c) => c.startsWith('c-'));
+  };
+  expect(await colorOf(cardX)).toBeTruthy();
+  expect(await colorOf(cardX)).toBe(await colorOf(cardY)); // 別の根の枝でも同じ目標なら同じ色
+});
+
 test('目標のタスク一覧から分解せず直接作った根タスクの帯には目標名だけが出る（issue #101 / change kanban-goal-root-crumb）', async ({ page, request }) => {
   const goal = await createGoal(request, `根タスク帯e2e${Date.now()}`);
   await request.post(`/api/goals/${goal.id}/blueprint/import`, {

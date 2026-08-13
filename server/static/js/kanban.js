@@ -874,13 +874,16 @@ const CRUMB_COLORS = ['c-green', 'c-blue', 'c-purple'];
  * カードの上端いっぱいに敷く帯として「目標名 / 直近の親」を表示する。目標に属さないタスクは
  * 親だけを表示し、区切りの記号も出さない（design D3）。根のタスク（親を持たない）は、
  * 目標に属していれば目標名だけを表示し、目標に属さなければ帯を出さない。
- * 色は根の枝（root_task_id）の id % 3 から決まり、並べ替えや完了では変わらない（design D2）。
+ * 色は目標に属していれば目標（goal_root_id）の id % 3 から決まり、同じ目標のカードは根の枝が
+ * 違っても必ず同じ色になる。目標に属さない場合は根の枝（root_task_id）から決まる。
+ * いずれも並べ替えや完了では変わらない（design D2、issue #101後の色キー変更）。
  */
 function parentBreadcrumbEl(t) {
   const parent = t.parent_task_id == null ? null : S.tasks.find((x) => x.id === t.parent_task_id);
   if (t.parent_task_id != null && !parent) return null;
   if (!parent && !t.goal_name) return null;
-  const colorCls = CRUMB_COLORS[((t.root_task_id ?? 0) % 3 + 3) % 3];
+  const colorKey = t.goal_root_id ?? t.root_task_id ?? 0;
+  const colorCls = CRUMB_COLORS[(colorKey % 3 + 3) % 3];
   const text = h('span', { class: 'kb-breadcrumb-text' });
   if (t.goal_name) {
     text.appendChild(h('span', { class: 'kb-breadcrumb-goal', text: t.goal_name }));
