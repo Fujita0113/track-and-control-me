@@ -695,6 +695,62 @@ describe('setTreePosition: 1段深く / 1段浅く', () => {
   });
 });
 
+// --- Alt+↑ / Alt+↓: 兄弟内の並び順だけを入れ替える（issue #104） -------------
+
+describe('setTreePosition: 深さを変えず同じ親の中で並び替える', () => {
+  it('子どうしの隣接入れ替え: 前を後ろの直後へ移すと2つが入れ替わる', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 容れ物\n  - A\n  - B\n  - C');
+    const container = getBlueprint(db, goalId).nodes[0]!;
+    const [a, b] = container.children;
+
+    // A を B の直後へ挿入 = 隣り合う A・B が入れ替わる（afterTaskId の意味論は
+    // 「参照ノードの“現在の”直後」であり、対象自身の元位置は考慮しないため、
+    // 隣接入れ替えは常に「前を後ろの直後へ移す」形で表現する）。
+    setTreePosition(db, a!.id, { parentId: container.id, afterTaskId: b!.id });
+
+    expect(childTitles(db, goalId, [0])).toEqual(['B', 'A', 'C']);
+    const moved = listTasks(db).find((t) => t.id === a!.id)!;
+    expect(moved.parent_task_id).toBe(container.id);
+  });
+
+  it('根どうしの隣接入れ替えでも goal_id は変わらない', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝1\n- 枝2\n- 枝3');
+    const [root1, root2] = getBlueprint(db, goalId).nodes;
+
+    setTreePosition(db, root1!.id, { parentId: null, afterTaskId: root2!.id });
+
+    expect(childTitles(db, goalId)).toEqual(['枝2', '枝1', '枝3']);
+    const moved = listTasks(db).find((t) => t.id === root1!.id)!;
+    expect(moved.parent_task_id).toBe(null);
+    expect(moved.goal_id).toBe(goalId);
+  });
+
+  it('落とし穴: afterTaskId=null は「先頭へ」ではなく「末尾へ」になる（design が回避する理由）', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- 枝1\n- 枝2\n- 枝3');
+    const [, root2] = getBlueprint(db, goalId).nodes;
+
+    setTreePosition(db, root2!.id, { parentId: null, afterTaskId: null });
+
+    // 「先頭にする」つもりで afterTaskId: null を渡すと、実際は末尾に置かれる。
+    // Alt+↑ で「対象を先頭へ」を実現したい場合はこの形を使ってはならない。
+    expect(childTitles(db, goalId)).toEqual(['枝1', '枝3', '枝2']);
+  });
+
+  it('子を持つノードを入れ替えても子は一緒に付いてくる', () => {
+    const goalId = insertGoal('面接対策');
+    importBlueprint(db, goalId, '- A\n  - A1\n  - A2\n- B\n- C');
+    const [a, b] = getBlueprint(db, goalId).nodes;
+
+    setTreePosition(db, a!.id, { parentId: null, afterTaskId: b!.id });
+
+    expect(childTitles(db, goalId)).toEqual(['B', 'A', 'C']);
+    expect(childTitles(db, goalId, [1])).toEqual(['A1', 'A2']);
+  });
+});
+
 // --- 容れ物のチェック / Alt+C: 部分木の一括完了（design D6） ----------------
 
 describe('setSubtreeDone: 部分木の葉をまとめて切り替える', () => {

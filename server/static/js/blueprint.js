@@ -537,6 +537,19 @@ async function onTreeKeydown(e) {
     return;
   }
 
+  if (e.altKey && e.key === 'ArrowUp') {
+    if (!node) return;
+    e.preventDefault();
+    handleMoveSibling(node.id, 'up');
+    return;
+  }
+  if (e.altKey && e.key === 'ArrowDown') {
+    if (!node) return;
+    e.preventDefault();
+    handleMoveSibling(node.id, 'down');
+    return;
+  }
+
   if (e.key === 'ArrowDown') {
     e.preventDefault();
     handleArrow('down');
@@ -588,6 +601,27 @@ async function handleShiftTab(nodeId) {
     await reload();
   } catch (err) {
     toast(err.data?.error || `移動に失敗: ${err.message}`, 'err');
+  }
+}
+
+async function handleMoveSibling(nodeId, dir) {
+  const info = S.index.get(nodeId);
+  if (!info) return;
+  const idx = info.siblingIds.indexOf(nodeId);
+  if (idx === -1) return;
+  try {
+    if (dir === 'down') {
+      if (idx === info.siblingIds.length - 1) return; // 末尾では何もしない（エラーにしない・spec）
+      const nextId = info.siblingIds[idx + 1];
+      await api.setTaskTreePosition(nodeId, { parentId: info.parentId, afterTaskId: nextId });
+    } else {
+      if (idx <= 0) return; // 先頭では何もしない（エラーにしない・spec）
+      const prevId = info.siblingIds[idx - 1];
+      await api.setTaskTreePosition(prevId, { parentId: info.parentId, afterTaskId: nodeId });
+    }
+    await reload();
+  } catch (err) {
+    toast(err.data?.error || `並べ替えに失敗: ${err.message}`, 'err');
   }
 }
 
@@ -734,6 +768,7 @@ function legendEl() {
     h('span', {}, h('b', { text: 'Enter' }), ' 新規タスク'),
     h('span', {}, h('b', { text: 'Tab' }), ' 子タスク化'),
     h('span', {}, h('b', { text: 'Shift+Tab' }), ' 親に戻す'),
+    h('span', {}, h('b', { text: 'Alt+↑↓' }), ' 並べ替え'),
     h('span', {}, h('b', { text: 'Alt+C' }), ' 完了'),
     h('span', {}, h('b', { text: '↑↓' }), ' 選択移動'),
     h('span', {}, h('b', { text: 'Ctrl+Enter' }), ' 詳細を開く'));
