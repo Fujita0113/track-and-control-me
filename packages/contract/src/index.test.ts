@@ -219,6 +219,7 @@ describe('沿革の round-trip', () => {
     ],
     freezes: [],
     endedNote: null,
+    resumedNote: null,
   };
 
   it('沿革全体が round-trip する（削除済みも消えない）', () => {

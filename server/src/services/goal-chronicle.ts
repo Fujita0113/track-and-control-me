@@ -3,7 +3,7 @@ import { getConfig } from '../db/index.js';
 import type { Chronicle, ChronicleEntry, FreezeEntry, FreezeEntryKind, RuleAnswer, RuleChangeEntry } from '@track/contract';
 import { dayKeyFor } from '../aggregation/index.js';
 import { GoalNotFoundError } from './goal-errors.js';
-import { dayDiff } from './day-key.js';
+import { dayDiff, addDaysKey } from './day-key.js';
 import { resolveGroupDisplay } from './group-identity.js';
 import type { RuleRow, RuleTarget } from './rule-registry.js';
 
@@ -40,6 +40,8 @@ interface GoalRow {
   lifecycle_choice: string | null;
   lifecycle_reason: string | null;
   lifecycle_decided_at: number | null;
+  resumed_day_key: string | null;
+  resume_reason: string | null;
 }
 
 function dayNumberOf(startDay: string, dayKey: string): number {
@@ -50,17 +52,11 @@ interface FreezeChangeRow {
   id: number;
   goal_id: number;
   day_key: string;
-  op: 'reserve' | 'cancel' | 'extend' | 'release';
+  op: 'activate' | 'extend' | 'release';
   start_day: string;
   before_end_day: string | null;
   after_end_day: string | null;
   reason: string | null;
-  created_at: number;
-}
-interface GoalFreezeLiveRow {
-  id: number;
-  start_day: string;
-  end_day: string;
   created_at: number;
 }
 
@@ -70,9 +66,9 @@ function buildSortKey(dayKey: string, createdAt: number, id: number): string {
 }
 
 /**
- * 目標の凍結イベント（予約・取消・延長・解除は `goal_freeze_change` のログをそのまま読み、
- * `activate`（発効）だけはログに書かず生きている `goal_freeze` の `start_day` から合成する
- * （cron が無いので「発効した瞬間に書く」ことができない・design D6）。
+ * 目標の凍結イベント（発効・延長・解除は `goal_freeze_change` のログをそのまま読む・
+ * spec: goal-freeze MODIFIED）。種別・予約フェーズの廃止により常に当日発効になったため、
+ * `freezeGoal` はその場で `op='activate'` を直接ログする（合成は不要・design D1）。
  */
 function freezeEntriesFor(db: DB, goalId: number, startDay: string, untilDayKey?: string): FreezeEntry[] {
   const entries: FreezeEntry[] = [];
@@ -91,23 +87,6 @@ function freezeEntriesFor(db: DB, goalId: number, startDay: string, untilDayKey?
       afterEndDay: c.after_end_day,
       reason: c.reason,
       sortKey: buildSortKey(c.day_key, c.created_at, c.id),
-    });
-  }
-
-  const liveRows = db
-    .prepare('SELECT id, start_day, end_day, created_at FROM goal_freeze WHERE goal_id = ? ORDER BY id')
-    .all(goalId) as GoalFreezeLiveRow[];
-  for (const row of liveRows) {
-    if (untilDayKey && row.start_day > untilDayKey) continue;
-    entries.push({
-      kind: 'activate',
-      dayKey: row.start_day,
-      dayNumber: dayNumberOf(startDay, row.start_day),
-      startDay: row.start_day,
-      beforeEndDay: null,
-      afterEndDay: row.end_day,
-      reason: null,
-      sortKey: buildSortKey(row.start_day, row.created_at, row.id),
     });
   }
 
@@ -172,7 +151,10 @@ function toAnswer(r: RuleAnswerRow, startDay: string): RuleAnswer {
  */
 export function getChronicle(db: DB, goalId: number, untilDayKey?: string): Chronicle {
   const goal = db
-    .prepare('SELECT start_day, lifecycle_choice, lifecycle_reason, lifecycle_decided_at FROM goal WHERE id = ?')
+    .prepare(
+      `SELECT start_day, lifecycle_choice, lifecycle_reason, lifecycle_decided_at, resumed_day_key, resume_reason
+         FROM goal WHERE id = ?`,
+    )
     .get(goalId) as GoalRow | undefined;
   if (!goal) throw new GoalNotFoundError(goalId);
 
@@ -229,5 +211,15 @@ export function getChronicle(db: DB, goalId: number, untilDayKey?: string): Chro
         }
       : null;
 
-  return { goalId, entries, freezes, endedNote };
+  // 「終える」に続く「再開」も理由つきで残す（spec: goal-chronicle MODIFIED・design D4）。
+  // `resumed_day_key` は発効日（翌日固定）なので、要求した日は1日前として逆算する。
+  const resumedNote =
+    goal.resume_reason && goal.resume_reason.trim() && goal.resumed_day_key
+      ? {
+          reason: goal.resume_reason,
+          dayNumber: dayNumberOf(goal.start_day, addDaysKey(goal.resumed_day_key, -1)),
+        }
+      : null;
+
+  return { goalId, entries, freezes, endedNote, resumedNote };
 }

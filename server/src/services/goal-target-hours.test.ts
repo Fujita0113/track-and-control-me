@@ -4,7 +4,7 @@ import { zonedTimeToEpoch } from '../aggregation/index.js';
 import { createGoal, getGoal, goalPace, addDaysKey, GoalValidationError } from './goals.js';
 import { resolveIdentity } from './group-identity.js';
 import { evaluateDay } from '../rules/evaluate.js';
-import { reserveFreeze } from './goal-freeze.js';
+import { freezeGoal } from './goal-freeze.js';
 
 /**
  * 目標時間（spec: goal-target-hours・issue #76）。
@@ -203,12 +203,11 @@ describe('ペースの算定（分母＝経過日数・今日を含む）', () =
 
   it('凍結日は分母に入らない', () => {
     const g = goalWithTarget();
-    // 8/1 に予約 → 翌日 8/2 発効、8/3 まで凍結。8/4 時点で 2 日ぶん経過している。
-    reserveFreeze(db, g.id, { endDay: addDaysKey(START, 2), reason: '体調不良' }, NOW_D1);
-    seedSession('sid-a', 'アルゴリズム', 'yellow', 120 * MIN, START);
+    // 8/1 に凍結（当日発効・8/2まで）。8/4 時点の経過は 8/3・8/4 の2日（8/1・8/2 は凍結で除外）。
+    freezeGoal(db, g.id, { endDay: addDaysKey(START, 1), reason: '体調不良' }, NOW_D1);
+    seedSession('sid-a', 'アルゴリズム', 'yellow', 120 * MIN, '2026-08-04');
 
     const pace = goalPace(db, g.id, NOW_D4)!;
-    // 8/1・8/4 の 2 日だけが分母（8/2・8/3 は凍結で除外）。
     expect(pace.elapsedDays).toBe(2);
     expect(pace.averageSeconds).toBe(60 * 60);
   });

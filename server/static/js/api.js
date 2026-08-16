@@ -124,19 +124,20 @@ export const api = {
   // 終了は翌日発効なので、発効前（今日のうち）は取り消せる（spec: goal-lifecycle-fork ADDED）。
   cancelEndGoal: (goalId) => req('POST', `/api/goals/${goalId}/end/cancel`),
 
+  // 再開（発効済みの終了を取り消す・spec: goal-lifecycle-fork ADDED）。翌日発効・発効前は取消可。
+  resumeGoal: (goalId, b) => req('POST', `/api/goals/${goalId}/resume`, b),
+  cancelResumeGoal: (goalId) => req('POST', `/api/goals/${goalId}/resume/cancel`),
+
   // ⑤沿革（ルール操作の年表。日記は含まない）
   getGoalChronicle: (id) => req('GET', `/api/goals/${id}/chronicle`),
 
   // 大きい沿革（目標そのものの年表・spec: goal-history）
   getGoalHistory: () => req('GET', '/api/goals/history'),
 
-  // 一時凍結（spec: goal-freeze）
-  reserveGoalFreeze: (goalId, { endDay, reason }) => req('POST', `/api/goals/${goalId}/freeze`, { endDay, reason }),
-  reserveGoalFreezeMulti: (goalIds, { endDay, reason }) => req('POST', '/api/goals/freeze/multi', { goalIds, endDay, reason }),
-  // 当日凍結（今日1日だけ・期限は送らない・spec: goal-freeze ADDED）。
-  sameDayFreezeMulti: (goalIds, { reason }) => req('POST', '/api/goals/freeze/same-day/multi', { goalIds, reason }),
+  // 一時凍結（spec: goal-freeze MODIFIED・種別と予約フェーズを廃止・常に当日発効）。
+  freezeGoal: (goalId, { endDay, reason }) => req('POST', `/api/goals/${goalId}/freeze`, { endDay, reason }),
+  freezeGoalMulti: (goalIds, { endDay, reason }) => req('POST', '/api/goals/freeze/multi', { goalIds, endDay, reason }),
   updateGoalFreeze: (goalId, { endDay, reason }) => req('PATCH', `/api/goals/${goalId}/freeze`, { endDay, reason }),
-  cancelGoalFreeze: (goalId) => req('DELETE', `/api/goals/${goalId}/freeze`),
   releaseGoalFreeze: (goalId) => req('POST', `/api/goals/${goalId}/freeze/release`),
   getFreezeQuota: () => req('GET', '/api/goals/freeze/quota'),
 

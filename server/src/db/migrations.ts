@@ -1460,4 +1460,32 @@ CREATE INDEX idx_kakeibo_entry_name ON kakeibo_entry(name, day_key);
 DROP TABLE IF EXISTS kakeibo_forecast_basis;
 `,
   },
+  {
+    version: 32,
+    name: 'reorganize-goal-freeze-and-resume',
+    // 一時凍結の統合（種別・予約フェーズ廃止）と終了→再開（spec: goal-freeze MODIFIED /
+    // goal-lifecycle-fork ADDED・design D1・D2・issue #103）。
+    // `goal_freeze` から `kind` 列を削除する（DROP COLUMN・better-sqlite3 同梱 SQLite が対応）。
+    // `goal` に再開の発効日・理由を追加し、`goal_end_interval` へ確定済み終了→再開サイクルを
+    // アーカイブできるようにする（アクティブな1サイクルは `goal` 行自身が持つ・design D2）。
+    sql: /* sql */ `
+ALTER TABLE goal_freeze DROP COLUMN kind;
+
+ALTER TABLE goal ADD COLUMN resumed_day_key TEXT;
+ALTER TABLE goal ADD COLUMN resume_reason TEXT;
+
+CREATE TABLE goal_end_interval (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  ended_day_key TEXT NOT NULL,
+  resumed_day_key TEXT NOT NULL,
+  end_reason TEXT,
+  resume_reason TEXT,
+  outcome_met INTEGER,
+  final_pace_json TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_goal_end_interval_goal ON goal_end_interval(goal_id, id);
+`,
+  },
 ];

@@ -6,9 +6,9 @@ import { todayKey } from '../services/summary.js';
 import { addDaysKey } from '../services/goals.js';
 
 /**
- * 一時凍結の API（spec: goal-freeze・issue #60）。
- * API は実時刻（Date.now）で進行中・発効を判定するため、goal 行は「今日」基準で直接作る。
- * 予約は必ず「翌日発効」なので、同じ日に打った2件は必ず同じ月に落ちる（月枠の検証が日付に依らない）。
+ * 一時凍結の API（spec: goal-freeze MODIFIED・issue #103）。
+ * 種別（当日凍結／期間凍結）を統合し、常に**当日発効**になった。API は実時刻（Date.now）で
+ * 進行中・発効を判定するため、goal 行は「今日」基準で直接作る。
  */
 
 let app: FastifyInstance;
@@ -38,7 +38,7 @@ function activeGoal(name = '設計理解をしたい'): { id: number; today: str
 }
 
 describe('凍結 API', () => {
-  it('予約は 200 で、発効日は翌日になる', async () => {
+  it('予約は 200 で、発効日は当日になる', async () => {
     const { id, today } = activeGoal();
     const res = await app.inject({
       method: 'POST',
@@ -47,9 +47,22 @@ describe('凍結 API', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body) as { startDay: string; endDay: string; state: string };
-    expect(body.startDay).toBe(addDaysKey(today, 1));
+    expect(body.startDay).toBe(today);
     expect(body.endDay).toBe(addDaysKey(today, 5));
-    expect(body.state).toBe('reserved');
+    expect(body.state).toBe('frozen');
+  });
+
+  it('終了日に当日を指定すれば1日だけの凍結として予約できる', async () => {
+    const { id, today } = activeGoal();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${id}/freeze`,
+      payload: { endDay: today, reason: '明日の面接に持っていく課題を今夜潰す' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body) as { startDay: string; endDay: string };
+    expect(body.startDay).toBe(today);
+    expect(body.endDay).toBe(today);
   });
 
   it('理由が空の予約は 400', async () => {
@@ -58,6 +71,16 @@ describe('凍結 API', () => {
       method: 'POST',
       url: `/api/goals/${id}/freeze`,
       payload: { endDay: addDaysKey(today, 5), reason: '  ' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('終了日が当日より前なら 400', async () => {
+    const { id, today } = activeGoal();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${id}/freeze`,
+      payload: { endDay: addDaysKey(today, -1), reason: '大タスク' },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -80,7 +103,7 @@ describe('凍結 API', () => {
     expect(second.statusCode).toBe(409);
   });
 
-  it('発効前の解除は 409（取消を使う）', async () => {
+  it('予約した当日のうちに解除でき、200 が返る', async () => {
     const { id, today } = activeGoal();
     await app.inject({
       method: 'POST',
@@ -88,22 +111,25 @@ describe('凍結 API', () => {
       payload: { endDay: addDaysKey(today, 5), reason: '大タスク' },
     });
     const res = await app.inject({ method: 'POST', url: `/api/goals/${id}/freeze/release` });
-    expect(res.statusCode).toBe(409);
+    expect(res.statusCode).toBe(200);
   });
 
-  it('発効前の取消は 200 で、枠が戻る', async () => {
-    const { id, today } = activeGoal();
+  it('解除しても月枠は戻らない', async () => {
+    const { id, today } = activeGoal('設計理解をしたい');
+    const b = activeGoal('茶色取りたい');
     await app.inject({
       method: 'POST',
       url: `/api/goals/${id}/freeze`,
       payload: { endDay: addDaysKey(today, 5), reason: '大タスク' },
     });
-    const del = await app.inject({ method: 'DELETE', url: `/api/goals/${id}/freeze` });
-    expect(del.statusCode).toBe(200);
+    await app.inject({ method: 'POST', url: `/api/goals/${id}/freeze/release` });
 
-    const quota = await app.inject({ method: 'GET', url: '/api/goals/freeze/quota' });
-    expect(quota.statusCode).toBe(200);
-    expect((JSON.parse(quota.body) as { used: boolean }).used).toBe(false);
+    const second = await app.inject({
+      method: 'POST',
+      url: `/api/goals/${b.id}/freeze`,
+      payload: { endDay: addDaysKey(today, 5), reason: '別件' },
+    });
+    expect(second.statusCode).toBe(409);
   });
 
   it('枠の状態は使った目標が分かる形で返る', async () => {

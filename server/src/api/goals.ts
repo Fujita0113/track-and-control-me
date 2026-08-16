@@ -19,6 +19,8 @@ import {
   continueGoal,
   endGoal,
   cancelEndGoal,
+  resumeGoal,
+  cancelResumeGoal,
   submitRulePhoto,
   answerRuleQuestion,
   listDueRules,
@@ -40,15 +42,11 @@ import {
 import { goalHistory } from '../services/goal-history.js';
 import { getBlueprint, importBlueprint, computeOpenPath, createRootTask, TaskTreeError } from '../services/task-tree.js';
 import {
-  reserveFreeze,
-  reserveFreezeMulti,
-  sameDayFreeze,
-  sameDayFreezeMulti,
+  freezeGoal,
+  freezeGoalMulti,
   updateFreeze,
-  cancelFreeze,
   releaseFreeze,
   freezeQuota,
-  sameDayFreezeQuota,
   FreezeValidationError,
   FreezeStateError,
 } from '../services/goal-freeze.js';
@@ -268,41 +266,41 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     }
   });
 
+  // --- 再開（発効済みの終了を取り消す・spec: goal-lifecycle-fork ADDED）----
+
+  app.post('/api/goals/:id/resume', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const b = (req.body ?? {}) as { reason?: string };
+    try {
+      return resumeGoal(db, id, { reason: b.reason ?? '' });
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
+  // 再開も翌日発効なので、発効前（today < resumed_day_key）は取り消せる（spec: goal-lifecycle-fork）。
+  app.post('/api/goals/:id/resume/cancel', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    try {
+      return cancelResumeGoal(db, id);
+    } catch (err) {
+      return replyGoalError(err, reply);
+    }
+  });
+
   // --- 大きい沿革（目標の年表・spec: goal-history）--------------------------
 
   app.get('/api/goals/history', async () => goalHistory(db));
 
-  // --- 一時凍結（spec: goal-freeze）-----------------------------------------
+  // --- 一時凍結（spec: goal-freeze MODIFIED・種別と予約フェーズを廃止・常に当日発効）-----------
   // 静的パス /api/goals/freeze/quota は /api/goals/:id 系と衝突しない（find-my-way は静的優先）。
 
-  // 期間凍結の枠（発効日＝翌日の月）に、当日凍結の枠（today の月）を `sameDay` として添える。
-  // 月末は両者が違う月を指すため、モーダルは選択中の種別に対応するほうを出す（design D4）。
-  app.get('/api/goals/freeze/quota', async () => ({ ...freezeQuota(db), sameDay: sameDayFreezeQuota(db) }));
+  app.get('/api/goals/freeze/quota', async () => freezeQuota(db));
 
   app.post('/api/goals/freeze/multi', async (req, reply) => {
     const b = (req.body ?? {}) as { goalIds?: number[]; endDay?: string; reason?: string };
     try {
-      return reserveFreezeMulti(db, b.goalIds ?? [], { endDay: b.endDay ?? '', reason: b.reason ?? '' });
-    } catch (err) {
-      return replyGoalError(err, reply);
-    }
-  });
-
-  // 当日凍結（今日1日だけ・期限は受け取らない・spec: goal-freeze ADDED）。
-  app.post('/api/goals/freeze/same-day/multi', async (req, reply) => {
-    const b = (req.body ?? {}) as { goalIds?: number[]; reason?: string };
-    try {
-      return sameDayFreezeMulti(db, b.goalIds ?? [], { reason: b.reason ?? '' });
-    } catch (err) {
-      return replyGoalError(err, reply);
-    }
-  });
-
-  app.post('/api/goals/:id/freeze/same-day', async (req, reply) => {
-    const id = Number((req.params as { id: string }).id);
-    const b = (req.body ?? {}) as { reason?: string };
-    try {
-      return sameDayFreeze(db, id, { reason: b.reason ?? '' });
+      return freezeGoalMulti(db, b.goalIds ?? [], { endDay: b.endDay ?? '', reason: b.reason ?? '' });
     } catch (err) {
       return replyGoalError(err, reply);
     }
@@ -312,7 +310,7 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     const id = Number((req.params as { id: string }).id);
     const b = (req.body ?? {}) as { endDay?: string; reason?: string };
     try {
-      return reserveFreeze(db, id, { endDay: b.endDay ?? '', reason: b.reason ?? '' });
+      return freezeGoal(db, id, { endDay: b.endDay ?? '', reason: b.reason ?? '' });
     } catch (err) {
       return replyGoalError(err, reply);
     }
@@ -323,15 +321,6 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     const b = (req.body ?? {}) as { endDay?: string; reason?: string };
     try {
       return updateFreeze(db, id, { endDay: b.endDay ?? '', reason: b.reason ?? '' });
-    } catch (err) {
-      return replyGoalError(err, reply);
-    }
-  });
-
-  app.delete('/api/goals/:id/freeze', async (req, reply) => {
-    const id = Number((req.params as { id: string }).id);
-    try {
-      return { canceled: cancelFreeze(db, id) };
     } catch (err) {
       return replyGoalError(err, reply);
     }

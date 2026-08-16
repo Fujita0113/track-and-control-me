@@ -1,14 +1,19 @@
 import type { DB } from '../db/index.js';
 import { addDaysKey } from './day-key.js';
 import { getGoal, goalPace, type GoalPaceView, type GoalTargetHoursView } from './goals.js';
+import { todayKey } from './summary.js';
 
 /**
- * 大きい沿革＝目標そのものの年表（spec: goal-history / design D7）。
+ * 大きい沿革＝目標そのものの年表（spec: goal-history MODIFIED / design D7・goal-lifecycle-fork D2）。
  *
- * 載るのは目標の**作成・終了・完走**の3種のみ（ルール操作・凍結は⑤沿革が読み手）。
+ * 載るのは目標の**作成・終了・再開・完走**の4種のみ（ルール操作・凍結は⑤沿革が読み手）。
  * 終了・完走の行は数字（目標時間の到達/未達）・自己申告（めざした状態）・証拠写真の3つを並べる。
  * 到達判定と自己申告は**終了・完走の時点で焼き込む**（`goal.final_pace_json` / `outcome_met`）。
  * 写真は焼き込まず、常に**都度解決**する（後から出した写真を反映するため）。
+ *
+ * 終了→再開は無制限に繰り返せるため（design: goal-lifecycle-fork D2）、1目標が複数の
+ * 「終了・再開」ペアを持ちうる。確定済みのサイクルは `goal_end_interval` にアーカイブされ、
+ * 現在（まだアーカイブされていない）1サイクルは `goal` 行自身が持つ（両方を合成する）。
  *
  * 「完走」は明示的なイベントが起きない（cron を持たない設計）ため、焼き込みが無い。
  * その代わり `goalPace()` は完走後（`today > 実効 end_day`）ずっと同じ値を返す
@@ -17,7 +22,7 @@ import { getGoal, goalPace, type GoalPaceView, type GoalTargetHoursView } from '
  * ここで独自の判定ロジックを持たない。
  */
 
-export type GoalHistoryEntryKind = 'created' | 'ended' | 'completed';
+export type GoalHistoryEntryKind = 'created' | 'ended' | 'resumed' | 'completed';
 
 export interface GoalHistoryPhoto {
   imageId: number;
@@ -41,8 +46,8 @@ export interface GoalHistoryEntry {
   /** めざした状態の自己申告（3値）。未回答・対象外は null。 */
   outcomeMet: boolean | null;
   /**
-   * 'ended' が**まだ発効していない**（終了予約中＝`today < ended_day_key`）か。
-   * 終了は翌日発効なので、終えた当日から「予約中」の印つきで並ぶ（spec: goal-history MODIFIED）。
+   * 'ended'/'resumed' が**まだ発効していない**（予約中＝`today < ended_day_key`/`resumed_day_key`）か。
+   * どちらも翌日発効なので、要求した当日から「予約中」の印つきで並ぶ（spec: goal-history MODIFIED）。
    * 'created'/'completed' は常に false。
    */
   pending: boolean;
@@ -61,6 +66,17 @@ interface GoalRow {
   final_pace_json: string | null;
   outcome_caption: string | null;
   outcome_met: number | null;
+  resumed_day_key: string | null;
+  resume_reason: string | null;
+}
+
+interface GoalEndIntervalRow {
+  ended_day_key: string;
+  resumed_day_key: string;
+  end_reason: string | null;
+  resume_reason: string | null;
+  outcome_met: number | null;
+  final_pace_json: string | null;
 }
 
 /** 証拠写真の都度解決（design D7・goal-report ③ と同じ規則: 最古=Before・最新=After）。 */
@@ -89,7 +105,7 @@ function outcomeMetOf(row: { outcome_met: number | null }): boolean | null {
 
 /** dayKey 昇順・同日内は id 昇順で決定的に並べるためのソートキー。 */
 function sortKey(dayKey: string, id: number, rank: number): string {
-  return `${dayKey}|${String(id).padStart(10, '0')}|${rank}`;
+  return `${dayKey}|${String(id).padStart(10, '0')}|${String(rank).padStart(4, '0')}`;
 }
 
 /**
@@ -100,18 +116,20 @@ export function goalHistory(db: DB, nowMs = Date.now()): GoalHistoryEntry[] {
   const rows = db
     .prepare(
       `SELECT id, name, purpose, start_day, start_reason, ended_day_key, end_reason,
-              final_pace_json, outcome_caption, outcome_met
+              final_pace_json, outcome_caption, outcome_met, resumed_day_key, resume_reason
          FROM goal ORDER BY id`,
     )
     .all() as GoalRow[];
 
+  const today = todayKey(db, nowMs);
   const out: { key: string; entry: GoalHistoryEntry }[] = [];
   for (const row of rows) {
     const view = getGoal(db, row.id, nowMs);
     // 「＋作成」行の初期写真＝そのキャプションで最古の画像（Before）。設定時に置いていなければ null。
     const initialPhoto = resolvePhotos(db, row.id, row.outcome_caption).before;
+    let rank = 0;
     out.push({
-      key: sortKey(row.start_day, row.id, 0),
+      key: sortKey(row.start_day, row.id, rank++),
       entry: {
         kind: 'created',
         goalId: row.id,
@@ -127,11 +145,55 @@ export function goalHistory(db: DB, nowMs = Date.now()): GoalHistoryEntry[] {
       },
     });
 
+    // 終了→再開は無制限に繰り返せるため、確定済み（アーカイブ済み）の全サイクルを先に並べる
+    // （spec: goal-history MODIFIED・design: goal-lifecycle-fork D2）。
+    const archivedCycles = db
+      .prepare(
+        `SELECT ended_day_key, resumed_day_key, end_reason, resume_reason, outcome_met, final_pace_json
+           FROM goal_end_interval WHERE goal_id = ? ORDER BY id`,
+      )
+      .all(row.id) as GoalEndIntervalRow[];
+    for (const cyc of archivedCycles) {
+      out.push({
+        key: sortKey(cyc.ended_day_key, row.id, rank++),
+        entry: {
+          kind: 'ended',
+          goalId: row.id,
+          name: row.name,
+          dayKey: cyc.ended_day_key,
+          purpose: null,
+          reason: cyc.end_reason,
+          pace: cyc.final_pace_json ? (JSON.parse(cyc.final_pace_json) as GoalPaceView) : null,
+          targetHours: null,
+          outcomeMet: outcomeMetOf(cyc),
+          photos: resolvePhotos(db, row.id, row.outcome_caption),
+          pending: today < cyc.ended_day_key,
+        },
+      });
+      out.push({
+        key: sortKey(cyc.resumed_day_key, row.id, rank++),
+        entry: {
+          kind: 'resumed',
+          goalId: row.id,
+          name: row.name,
+          dayKey: cyc.resumed_day_key,
+          purpose: null,
+          reason: cyc.resume_reason,
+          pace: null,
+          targetHours: null,
+          outcomeMet: null,
+          photos: { before: null, after: null },
+          pending: today < cyc.resumed_day_key,
+        },
+      });
+    }
+
     // 「−終える」の行は `ended_day_key`（＝発効日）から導出する。終了は翌日発効なので、
     // 発効前でも「予約中」として当日から並び、取消で `ended_day_key` が消えれば行も消える。
+    // 未アーカイブな現サイクルが再開済み（`resumed_day_key` 設定済み）なら「→再開」の行も続ける。
     if (row.ended_day_key != null) {
       out.push({
-        key: sortKey(row.ended_day_key, row.id, 1),
+        key: sortKey(row.ended_day_key, row.id, rank++),
         entry: {
           kind: 'ended',
           goalId: row.id,
@@ -146,10 +208,30 @@ export function goalHistory(db: DB, nowMs = Date.now()): GoalHistoryEntry[] {
           pending: view.endingOn != null,
         },
       });
-    } else if (view.status === 'completed') {
+      if (row.resumed_day_key != null) {
+        out.push({
+          key: sortKey(row.resumed_day_key, row.id, rank++),
+          entry: {
+            kind: 'resumed',
+            goalId: row.id,
+            name: row.name,
+            dayKey: row.resumed_day_key,
+            purpose: null,
+            reason: row.resume_reason,
+            pace: null,
+            targetHours: null,
+            outcomeMet: null,
+            photos: { before: null, after: null },
+            pending: view.resumingOn != null,
+          },
+        });
+      }
+    }
+
+    if (view.status === 'completed') {
       const completedDayKey = addDaysKey(view.endDay, 1);
       out.push({
-        key: sortKey(completedDayKey, row.id, 1),
+        key: sortKey(completedDayKey, row.id, rank++),
         entry: {
           kind: 'completed',
           goalId: row.id,

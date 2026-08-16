@@ -1,51 +1,26 @@
-// 一時凍結の UI 部品（spec: goal-freeze・issue #60）。
-import { h, clear, toast } from './util.js';
+// 一時凍結の UI 部品（spec: goal-freeze MODIFIED・種別と予約フェーズを廃止・issue #103）。
+import { h, toast } from './util.js';
 import { api } from './api.js';
 import { shortDay, ruleDisplayLabel, ruleKindIcon } from './rule-form.js';
 
-/**
- * 種別に対応する月枠を取り出す（design D4）。当日凍結は today の月、期間凍結は翌日の月を見るので、
- * 月の最終日だけ両者は違う月を指す。`sameDay` を持たない応答（デモ）は期間凍結の枠で代用する。
- */
-function quotaOf(quota, kind) {
-  if (!quota) return null;
-  return kind === 'same_day' ? (quota.sameDay || quota) : quota;
-}
-
 /** 月枠の状態を一言で（spec: goal-freeze。表示は必ず重複チェックと同じ「start_day の月」で判定する）。 */
-function quotaLine(quota, goalId, kind = 'period') {
-  const q = quotaOf(quota, kind);
-  if (!q || !q.used) {
+function quotaLine(quota, goalId) {
+  if (!quota || !quota.used) {
     return h('p', { class: 'muted gf-quota', text: '今月の凍結枠は空いています（アプリ全体で月1回）。' });
   }
-  const who = q.goalId === goalId ? 'この目標が' : `「${q.goalName}」が`;
+  const who = quota.goalId === goalId ? 'この目標が' : `「${quota.goalName}」が`;
   return h('p', {
     class: 'muted gf-quota',
-    text: `今月の凍結枠は使用済みです（${who} ${shortDay(q.startDay)}〜${shortDay(q.endDay)} で使用中・${q.recoversOn} に回復）。`,
+    text: `今月の凍結枠は使用済みです（${who} ${shortDay(quota.startDay)}〜${shortDay(quota.endDay)} で使用中・${quota.recoversOn} に回復）。`,
   });
 }
 
-/** 種別ごとの代金（spec: goal-freeze MODIFIED「操作導線」の明示要求）。 */
-const FREEZE_KINDS = [
-  {
-    kind: 'period',
-    label: '期間を指定して翌日から',
-    cost: '明日から効きます。凍結した日数ぶん期限が後ろへ延びます。',
-  },
-  {
-    kind: 'same_day',
-    label: '今日1日だけ',
-    cost: '今日から効きます。そのかわり期限は延びません（残り日数が1日減ります）。',
-  },
-];
-
 /**
- * 一時凍結のモーダルを開く (issue #60・当日凍結の追加)。
- * 既定は**期間凍結（翌日発効）**（design D10）。当日凍結を既定にすると今夜のノルマを壊すまでの
- * クリック数が最短になり、衝動に対する摩擦が消えるため、当日凍結は「わざわざ選ぶもの」にする。
+ * 一時凍結のモーダルを開く（issue #103・種別選択を廃止し常に当日発効の単一凍結に統合）。
+ * 入力ステップ: 1. 理由（必須） → 2. 終了日（当日以降で自由指定） → 3. 対象の目標選択 → 4. 決定。
  */
-export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null, initialKind = 'period') {
-  const activeGoals = (goals || []).filter((g) => g.status === 'active' && (!g.freeze || g.freeze.state === 'none'));
+export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null) {
+  const activeGoals = (goals || []).filter((g) => g.status === 'active' && (!g.freeze || g.freeze.state === 'released'));
 
   const closeBtn = h('button', { class: 'icon-btn', type: 'button', text: '✕' });
 
@@ -71,12 +46,8 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null, i
 
   const body = modal.querySelector('.modal-body');
 
-  // 種別は既定が期間凍結。当日凍結が選べない（＝その月の枠が埋まっている）ときだけ当日から開く。
-  let kind = initialKind === 'same_day' ? 'same_day' : 'period';
-  const usedFor = (k) => !!(quotaOf(quota, k) || {}).used;
-
-  if (usedFor('period') && usedFor('same_day')) {
-    body.appendChild(quotaLine(quota, defaultGoalId, 'period'));
+  if (quota && quota.used) {
+    body.appendChild(quotaLine(quota, defaultGoalId));
     body.appendChild(h('div', { class: 'actions' },
       h('button', { class: 'btn', type: 'button', text: '閉じる', onClick: closeModal }),
     ));
@@ -93,24 +64,20 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null, i
     return;
   }
 
-  // 既定の種別が使えない（その月の枠が埋まっている）ときは、まだ空いているほうから始める。
-  if (usedFor(kind)) kind = kind === 'period' ? 'same_day' : 'period';
-
-  // 入力ステップ: 種別 → 理由 → 期限（期間凍結のみ）→ 対象目標選択
+  // 1. 理由（必須）
   const reasonInp = h('textarea', {
     class: 'pc-textarea',
     rows: '2',
     placeholder: '例: 大タスク・出張に集中するため',
   });
 
+  // 2. 終了日（当日以降で自由指定。同じ日を指定すれば実質1日だけの凍結になる）。
   const endInput = h('input', { class: 'pc-input pc-input-date', type: 'date' });
+  const todayStr = new Date().toISOString().split('T')[0];
+  endInput.min = todayStr;
+  endInput.value = todayStr;
 
-  // 今日の翌日（最短解凍日）をデフォルト最小値に
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  endInput.min = tomorrow.toISOString().split('T')[0];
-
-  // 対象目標の選択リスト (checkbox で複数選択可能・ルール一覧を併記)
+  // 3. 対象目標の選択リスト (checkbox で複数選択可能)
   const selectedGoalIds = new Set();
   if (defaultGoalId && activeGoals.some((g) => g.id === defaultGoalId)) {
     selectedGoalIds.add(defaultGoalId);
@@ -164,17 +131,17 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null, i
     goalListEl.appendChild(item);
   });
 
-  const submitBtn = h('button', { class: 'btn primary', type: 'button' });
+  // 4. 決定
+  const submitBtn = h('button', { class: 'btn primary', type: 'button', text: '一時凍結する（当日発効）' });
 
   submitBtn.addEventListener('click', async () => {
-    const sameDay = kind === 'same_day';
     const reason = reasonInp.value.trim();
     if (!reason) {
       toast('凍結する理由を入力してください', 'error');
       reasonInp.focus();
       return;
     }
-    if (!sameDay && !endInput.value) {
+    if (!endInput.value) {
       toast('凍結の終了日を選択してください', 'error');
       endInput.focus();
       return;
@@ -187,67 +154,31 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null, i
     submitBtn.disabled = true;
     try {
       const ids = Array.from(selectedGoalIds);
-      if (sameDay) {
-        await api.sameDayFreezeMulti(ids, { reason });
-        toast(`今日1日だけ凍結しました（${ids.length}件・今日から）`, 'ok');
-      } else {
-        await api.reserveGoalFreezeMulti(ids, { endDay: endInput.value, reason });
-        toast(`凍結を予約しました（${ids.length}件・翌日発効）`, 'ok');
-      }
+      await api.freezeGoalMulti(ids, { endDay: endInput.value, reason });
+      toast(`一時凍結しました（${ids.length}件・今日から）`, 'ok');
       closeModal();
       await onChanged();
     } catch (err) {
-      toast((err.data && err.data.error) || (sameDay ? '凍結できませんでした' : '予約できませんでした'), 'error');
+      toast((err.data && err.data.error) || '凍結できませんでした', 'error');
       submitBtn.disabled = false;
     }
   });
 
-  // 1. 種別（既定は期間凍結）。それぞれの代金と、どちらも同じ月枠を1回使うことを明示する。
-  const quotaHost = h('div', { class: 'gf-quota-host' });
-  const endField = h('div', { class: 'field gf-enddate-field' },
-    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '3. 凍結終了日' }),
-    endInput,
-  );
-  const kindSeg = h('div', { class: 'gf-kind-seg' });
-  const kindBtns = new Map();
-
-  const syncKind = () => {
-    for (const [k, btn] of kindBtns) btn.classList.toggle('on', k === kind);
-    // 当日凍結は「今日1日だけ」で期間を持たないので、期限の入力欄自体を出さない。
-    endField.hidden = kind === 'same_day';
-    clear(quotaHost);
-    quotaHost.appendChild(quotaLine(quota, defaultGoalId, kind));
-    const blocked = usedFor(kind);
-    submitBtn.disabled = blocked;
-    submitBtn.textContent = kind === 'same_day' ? '今日1日だけ凍結する' : '一時凍結を予約（翌日発効）';
-  };
-
-  FREEZE_KINDS.forEach(({ kind: k, label, cost }) => {
-    const btn = h('button', { class: 'gf-kind-btn', type: 'button', 'data-kind': k },
-      h('span', { class: 'gf-kind-label', text: label }),
-      h('span', { class: 'gf-kind-cost', text: cost }),
-    );
-    btn.addEventListener('click', () => { kind = k; syncKind(); });
-    kindBtns.set(k, btn);
-    kindSeg.appendChild(btn);
-  });
+  body.appendChild(quotaLine(quota, defaultGoalId));
 
   body.appendChild(h('div', { class: 'field' },
-    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '1. 凍結のしかたを選ぶ' }),
-    kindSeg,
-    h('p', { class: 'muted gf-kind-note', text: 'どちらも同じ月枠を1回使います（アプリ全体で月1回）。' }),
-  ));
-  body.appendChild(quotaHost);
-
-  body.appendChild(h('div', { class: 'field' },
-    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '2. 凍結する理由（必須）' }),
+    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '1. 凍結する理由（必須）' }),
     reasonInp,
   ));
 
-  body.appendChild(endField);
+  body.appendChild(h('div', { class: 'field' },
+    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '2. 凍結終了日' }),
+    endInput,
+    h('p', { class: 'muted', text: '今日を選べば実質1日だけの凍結になります。今日から効きます。' }),
+  ));
 
   body.appendChild(h('div', { class: 'field' },
-    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '4. 対象の目標を選択（複数選択可）' }),
+    h('span', { class: 'pc-field-label', style: { fontWeight: '600' }, text: '3. 対象の目標を選択（複数選択可）' }),
     goalListEl,
   ));
 
@@ -256,42 +187,13 @@ export function openFreezeModal(goals, quota, onChanged, defaultGoalId = null, i
     submitBtn,
   ));
 
-  syncKind();
   document.body.appendChild(modal);
 }
 
-function reservedView(goal, freeze, onChanged) {
-  const wrap = h('div', { class: 'gf-block' },
-    h('div', { class: 'gf-head' }, h('span', { class: 'gf-title', text: '一時凍結（予約中）' })),
-    h('p', { class: 'muted', text: `${shortDay(freeze.startDay)} から凍結予定（〜${shortDay(freeze.endDay)}）― ${freeze.reason}` }),
-  );
-  const cancelBtn = h('button', { class: 'btn btn-ghost pc-sm', type: 'button', text: '取消' });
-  cancelBtn.addEventListener('click', async () => {
-    if (!confirm('凍結の予約を取り消しますか？')) return;
-    cancelBtn.disabled = true;
-    try {
-      await api.cancelGoalFreeze(goal.id);
-      toast('凍結の予約を取り消しました', 'ok');
-      await onChanged();
-    } catch (err) {
-      toast((err.data && err.data.error) || '取消できませんでした', 'error');
-      cancelBtn.disabled = false;
-    }
-  });
-  wrap.appendChild(cancelBtn);
-  return wrap;
-}
-
 function frozenView(goal, freeze, onChanged) {
-  const sameDay = freeze.kind === 'same_day';
   const wrap = h('div', { class: 'gf-block gf-frozen' },
-    h('div', { class: 'gf-head' }, h('span', { class: 'gf-title', text: sameDay ? '❄ 今日1日だけ凍結中' : '❄ 一時凍結中' })),
-    h('p', {
-      class: 'muted',
-      text: sameDay
-        ? `${shortDay(freeze.startDay)}（今日）のみ ― ${freeze.reason}（期限は延びません）`
-        : `${shortDay(freeze.startDay)} 〜 ${shortDay(freeze.endDay)} ― ${freeze.reason}`,
-    }),
+    h('div', { class: 'gf-head' }, h('span', { class: 'gf-title', text: '❄ 一時凍結中' })),
+    h('p', { class: 'muted', text: `${shortDay(freeze.startDay)} 〜 ${shortDay(freeze.endDay)} ― ${freeze.reason}` }),
   );
 
   const formHost = h('div', { class: 'gf-form', hidden: true });
@@ -333,48 +235,31 @@ function frozenView(goal, freeze, onChanged) {
     }
   });
 
-  // 当日凍結には延長の導線を出さない（延長を許すと期限延長つきの期間凍結へ化ける・design D3）。
-  wrap.appendChild(sameDay
-    ? h('div', { class: 'row', style: { gap: '6px' } }, releaseBtn)
-    : h('div', { class: 'row', style: { gap: '6px' } }, extendBtn, releaseBtn));
-  if (!sameDay) wrap.appendChild(formHost);
+  wrap.appendChild(h('div', { class: 'row', style: { gap: '6px' } }, extendBtn, releaseBtn));
+  wrap.appendChild(formHost);
   return wrap;
 }
 
-function unreservedView(goal, quota, allGoals, onChanged) {
-  const periodUsed = !!(quotaOf(quota, 'period') || {}).used;
-  const sameDayUsed = !!(quotaOf(quota, 'same_day') || {}).used;
+function unfrozenView(goal, quota, allGoals, onChanged) {
+  const used = !!(quota && quota.used);
   const wrap = h('div', { class: 'gf-block' },
     h('div', { class: 'gf-head' }, h('span', { class: 'gf-title', text: '一時凍結' })),
-    quotaLine(quota, goal.id, 'period'),
+    quotaLine(quota, goal.id),
   );
 
-  const open = (initialKind) => openFreezeModal(allGoals || [goal], quota, onChanged, goal.id, initialKind);
+  if (used) return wrap;
 
-  if (!periodUsed) {
-    const btn = h('button', { class: 'btn btn-ghost pc-sm', type: 'button', text: '❄ 一時凍結する' });
-    btn.addEventListener('click', () => open('period'));
-    wrap.appendChild(btn);
-    return wrap;
-  }
-
-  // 月の最終日だけ、期間凍結（翌月の枠）と当日凍結（今月の枠）で見る月が食い違う（design D4）。
-  // 期間凍結の枠が埋まっていても当日凍結の枠が空いていることがあるので、その入口だけは残す。
-  if (!sameDayUsed && quota && quota.sameDay) {
-    wrap.appendChild(h('p', { class: 'muted gf-quota gf-quota-sameday', text: `${quota.sameDay.month} の枠はまだ空いているため、今日1日だけの凍結は行えます。` }));
-    const btn = h('button', { class: 'btn btn-ghost pc-sm', type: 'button', text: '❄ 今日1日だけ凍結する' });
-    btn.addEventListener('click', () => open('same_day'));
-    wrap.appendChild(btn);
-  }
+  const btn = h('button', { class: 'btn btn-ghost pc-sm', type: 'button', text: '❄ 一時凍結する' });
+  btn.addEventListener('click', () => openFreezeModal(allGoals || [goal], quota, onChanged, goal.id));
+  wrap.appendChild(btn);
   return wrap;
 }
 
 /** 振り返りタブの目標カードに置く凍結ブロック（編集可能・spec: goal-freeze）。 */
 export function buildFreezeBlock(goal, quota, onChanged, allGoals = []) {
   const freeze = goal.freeze;
-  if (freeze && freeze.state === 'reserved') return reservedView(goal, freeze, onChanged);
   if (freeze && freeze.state === 'frozen') return frozenView(goal, freeze, onChanged);
-  return unreservedView(goal, quota, allGoals, onChanged);
+  return unfrozenView(goal, quota, allGoals, onChanged);
 }
 
 /** その目標が今場所に凍結中か（ルールブロックの折りたたみに使う）。 */
@@ -388,11 +273,7 @@ export function buildFreezeReadOnly(goal, quota) {
     h('div', { class: 'gf-head' }, h('span', { class: 'gf-title', text: '一時凍結' })),
   );
   const f = goal.freeze;
-  if (f && f.state === 'reserved') {
-    wrap.appendChild(h('p', { class: 'muted', text: `${shortDay(f.startDay)} から凍結予定（〜${shortDay(f.endDay)}）― ${f.reason}` }));
-  } else if (f && f.state === 'frozen' && f.kind === 'same_day') {
-    wrap.appendChild(h('p', { class: 'muted', text: `❄ ${shortDay(f.startDay)}（今日1日だけ）凍結中 ― ${f.reason}（期限は延びません）` }));
-  } else if (f && f.state === 'frozen') {
+  if (f && f.state === 'frozen') {
     wrap.appendChild(h('p', { class: 'muted', text: `❄ ${shortDay(f.startDay)} 〜 ${shortDay(f.endDay)} 凍結中 ― ${f.reason}` }));
   } else {
     wrap.appendChild(quotaLine(quota, goal.id));
