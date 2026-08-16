@@ -433,8 +433,8 @@ function journalCorner(goal, content, date, quota) {
   // デモは閲覧専用なので作成・凍結の操作導線を出さない（spec: demo-mode）。
   if (date === state.today && !isDemo()) {
     const onFreezeChanged = async () => { await loadJournals(date); };
-    // 未予約時の月枠状況＋予約ボタンは #rf-freeze-shared に1箇所だけ出す（目標コーナーごとの複製をしない・spec: goal-freeze）。
-    if (goal.freeze && (goal.freeze.state === 'reserved' || goal.freeze.state === 'frozen')) {
+    // 未凍結時の月枠状況＋凍結ボタンは #rf-freeze-shared に1箇所だけ出す（目標コーナーごとの複製をしない・spec: goal-freeze）。
+    if (goal.freeze && goal.freeze.state === 'frozen') {
       corner.appendChild(buildFreezeBlock(goal, quota, onFreezeChanged, ctx.activeGoals));
     }
     corner.appendChild(buildGoalRulesBlock(goal, date, null, { frozen: isFrozenNow(goal) }));
@@ -574,8 +574,8 @@ async function loadJournals(date) {
   let quota = null;
   if (date === state.today && !isDemo()) {
     quota = await api.getFreezeQuota().catch(() => null);
-    // 未予約の月枠状況＋「❄ 一時凍結する」ボタンはサイドバーに1箇所だけ出す（目標コーナーごとに複製しない・spec: goal-freeze）。
-    const unfrozenGoals = goals.filter((g) => !g.freeze || g.freeze.state === 'none');
+    // 未凍結の月枠状況＋「❄ 一時凍結する」ボタンはサイドバーに1箇所だけ出す（目標コーナーごとに複製しない・spec: goal-freeze）。
+    const unfrozenGoals = goals.filter((g) => !g.freeze || g.freeze.state === 'released');
     if (unfrozenGoals.length) {
       ctx.journalsHost.appendChild(h('div', { id: 'rf-freeze-shared' },
         buildFreezeBlock(unfrozenGoals[0], quota, async () => { await loadJournals(date); }, ctx.activeGoals),

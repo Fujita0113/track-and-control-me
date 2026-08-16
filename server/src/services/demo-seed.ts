@@ -20,12 +20,12 @@ export const DEMO_END_DAY = '2026-07-10'; // Day30（凍結前の素の終了日
 export const DEMO_PRE_START_DAY = addDaysKey(DEMO_START_DAY, -1); // 開始前（start − 1）
 export const DEMO_GOAL_ID = 1; // 主目標・空 DB への最初の挿入なので rowid=1。
 
-// --- 一時凍結サンプル（既存の谷 Day11-12 に重ねる・spec: goal-freeze / design D10）------------
+// --- 一時凍結サンプル（既存の谷 Day11-12 に重ねる・spec: goal-freeze MODIFIED / design D1）------
 // Day11-12 の谷（作業・計画・振り返りが崩れる）を「急な差し込み案件」による一時凍結として説明する。
 // 凍結日は達成日数の分母から抜けるため、既存の谷日へ重ねれば達成日数の期待値は変わらないか
 // 増える方向にしか動かない（プロジェクト必須ルール: 日数が関わる機能はデモモードで成果を明示）。
-const DEMO_FREEZE_RESERVE_DAY = addDaysKey(DEMO_START_DAY, 9); // Day10 に予約（翌日発効）＝2026-06-20
-export const DEMO_FREEZE_START_DAY = addDaysKey(DEMO_START_DAY, 10); // Day11 発効＝2026-06-21
+// 種別・予約フェーズは廃止され常に当日発効になったため、Day11 に「その場で」凍結する。
+export const DEMO_FREEZE_START_DAY = addDaysKey(DEMO_START_DAY, 10); // Day11 に当日発効＝2026-06-21
 export const DEMO_FREEZE_END_DAY = addDaysKey(DEMO_START_DAY, 11); // Day12 まで＝2026-06-22
 const DEMO_FREEZE_DAYS = 2; // 経過凍結日数（Day11-12 の2日）。実効 end_day はこの分だけ後ろへ延びる。
 const DEMO_FREEZE_REASON = '急な差し込み案件（納期の迫った大型リリース対応）に数日ぶん全振りする必要が出た。';
@@ -76,19 +76,40 @@ const GOAL3_WORK_MIN = [100, 140, 50, 130, 90];
 // 手動チェックを飛ばした日（1始まり Day 番号）。両方達成の日＝達成日数 24/30。
 const WALK_MISS_DAYS = new Set<number>([5, 12, 20]); // 朝散歩 met 27/30
 const STRETCH_MISS_DAYS = new Set<number>([8, 12, 15, 22]); // ストレッチ met 26/30
-// --- 当日凍結サンプル（既存の谷 Day12 に重ねる・spec: goal-freeze ADDED）--------------------
-// 主目標の**期間凍結**（Day11-12・翌日発効）と対にして、代金の違いを並べて読ませる:
-//   期間凍結 … 07-10 の期限が 07-12 へ**延びる**（凍結日数ぶん前へ）
-//   当日凍結 … 05-30 の期限は**延びない**（対象外にはなるが、残り日数が1日減る）
+// --- 4つ目のデモ目標: 終了→再開のサイクル（spec: goal-lifecycle-fork ADDED / goal-history
+// MODIFIED・issue #103）------------------------------------------------------------------
+// 「終える」に「再開する」を足した本変更の主役。10日の目標を Day3 で理由つきに終え（発効 Day4）、
+// Day6 に理由つきで再開する（発効 Day7）。終了していた Day4-6 の3日ぶんレポート・大きい沿革で
+// 「対象外」表示になり、期限（もとの10日）が3日後ろへ延びることを示す（design D3）。
+// 主目標・2つ目・3つ目の目標とは無関係な別期間（2月）に置く。
+export const DEMO_GOAL4_ID = 4;
+export const DEMO_GOAL4_START_DAY = '2026-02-01'; // Day1
+export const DEMO_GOAL4_END_DAY = addDaysKey(DEMO_GOAL4_START_DAY, 9); // Day10 = 2026-02-10
+export const DEMO_GOAL4_ENDED_DAY = addDaysKey(DEMO_GOAL4_START_DAY, 3); // Day4 に発効＝2026-02-04
+export const DEMO_GOAL4_RESUMED_DAY = addDaysKey(DEMO_GOAL4_START_DAY, 6); // Day7 に発効＝2026-02-07
+/** 終了していた3日（Day4-6）ぶん延長された実効 end_day（design D3）。 */
+export const DEMO_GOAL4_EFFECTIVE_END_DAY = addDaysKey(DEMO_GOAL4_END_DAY, 3); // 2026-02-13
+const GOAL4_NAME = '英語学習を続ける';
+const GOAL4_PURPOSE = '毎日少しずつでも英語に触れ続ける';
+const GOAL4_START_REASON = '継続できているかを可視化したい';
+const GOAL4_END_REASON = '体調を崩したので一旦休む';
+const GOAL4_RESUME_REASON = '体調が戻ったので再開する';
+export const RULE_GOAL4_ID = 11;
+
+// --- 2つ目の目標の一時凍結サンプル（既存の谷 Day12 に重ねる・spec: goal-freeze MODIFIED）-----
+// 種別統合後は「今日1日だけ」（終了日=当日）を指定しても、凍結1日ぶん実効 end_day が延びる
+// （旧・当日凍結の「期限は延びない」という代金は無くなった・design D1）。
 // 既存の谷（散歩もストレッチも抜けた Day12）へ重ねるので達成日数 24/30 は変わらない
 // （未達成だった日が「対象外」に変わるだけ）。月枠はアプリ全体で月1回なので、
 // 主目標の凍結（6月）と月をまたいで衝突しない5月に置く。
-export const DEMO_GOAL2_SAME_DAY_FREEZE_DAY = addDaysKey(DEMO_GOAL2_START_DAY, 11); // Day12 = 2026-05-12
-const GOAL2_SAME_DAY_FREEZE_REASON = '翌朝いちばんの面接に持っていく課題が終わらない。今夜だけ外す。';
+export const DEMO_GOAL2_FREEZE_DAY = addDaysKey(DEMO_GOAL2_START_DAY, 11); // Day12 = 2026-05-12
+/** 凍結1日ぶん延長された実効 end_day（design D1）。 */
+export const DEMO_GOAL2_EFFECTIVE_END_DAY = addDaysKey(DEMO_GOAL2_END_DAY, 1); // 2026-05-31
+const GOAL2_FREEZE_REASON = '翌朝いちばんの面接に持っていく課題が終わらない。今夜だけ外す。';
 // 2つ目の目標の日記（Before/After＋中盤の谷のみ・他日は空でフォールバック確認）。
 const GOAL2_JOURNAL: Record<number, string> = {
   1: '# 朝散歩を始める\n時間や量で自分を追い込むのに疲れた。今回は「やったか/やってないか」だけ。朝に外へ出て、軽くストレッチ。それだけを30日。',
-  12: '**今日だけ凍結した。** 翌朝の面接に持っていく課題が終わらず、散歩もストレッチも今夜は無理だと分かったので「今日1日だけ」の凍結を使った。対象外にはなるが期限は延びない（5/30 のまま）。今夜を買った代金がこれ。',
+  12: '**今日1日だけ凍結した。** 翌朝の面接に持っていく課題が終わらず、散歩もストレッチも今夜は無理だと分かったので、終了日を今日のまま一時凍結を使った。対象外になり、凍結1日ぶん期限も後ろへ延びる。',
   30: '# 30日を終えて\n時間で測らないチェックだけでも、続けた事実はちゃんと積み上がった。カレンダーが埋まっていくのが素直に嬉しい。',
 };
 
@@ -418,6 +439,46 @@ function seedRuleChronicle(db: DB): void {
 export const DEMO_KAKEIBO_MONTH = '2026-08';
 export const DEMO_KAKEIBO_TODAY = '2026-08-11';
 
+/**
+ * 4つ目のデモ目標: 終了→再開のサイクル（spec: goal-lifecycle-fork ADDED・issue #103）。
+ * 10日の目標を Day3 に理由つきで終え（発効 Day4）、Day6 に理由つきで再開する（発効 Day7）。
+ * `goal.ended_day_key`/`resumed_day_key` に直接書く（endGoal/resumeGoal は呼ばない・
+ * デモは集計テーブルへ直接焼き込む方式・プロジェクト必須ルール）。
+ * 終了していた Day4-6 は未評価のまま（frozen 表示は evalByDay の有無に依存しないため）、
+ * それ以外の実日（Day1-3・Day7-13）だけ達成として焼き込む。
+ */
+function seedResumeCycleDemo(db: DB): void {
+  db.prepare(
+    `INSERT INTO goal
+       (id, name, purpose, start_day, end_day, created_at, start_reason,
+        ended_day_key, end_reason, resumed_day_key, resume_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    DEMO_GOAL4_ID, GOAL4_NAME, GOAL4_PURPOSE, DEMO_GOAL4_START_DAY, DEMO_GOAL4_END_DAY, SEED_TS, GOAL4_START_REASON,
+    DEMO_GOAL4_ENDED_DAY, GOAL4_END_REASON, DEMO_GOAL4_RESUMED_DAY, GOAL4_RESUME_REASON,
+  );
+
+  db.prepare(
+    `INSERT INTO rule (id, target, comparator, threshold_seconds, label, signal_key, start_day, end_day, status, created_at)
+     VALUES (?, 'MANUAL_CHECK', 'GTE', NULL, '英語学習', NULL, ?, NULL, 'active', ?)`,
+  ).run(RULE_GOAL4_ID, DEMO_GOAL4_START_DAY, SEED_TS);
+  db.prepare('INSERT INTO goal_rule (goal_id, rule_id) VALUES (?, ?)').run(DEMO_GOAL4_ID, RULE_GOAL4_ID);
+
+  const insEval = db.prepare(
+    `INSERT INTO unlock_evaluation
+       (day_key, status, conditions_met, per_condition_results, first_met_at, reveal_fired, is_final, updated_at)
+     VALUES (?, 'UNLOCKED', 1, ?, ?, 0, 1, ?)`,
+  );
+  const per = JSON.stringify([{ conditionKey: rk(RULE_GOAL4_ID), target: 'MANUAL_CHECK', met: true, label: '英語学習' }]);
+  // Day1-3（終える前）・Day7-10（再開後、元の期限内）・Day11-13（延長ぶん）はすべて達成として焼き込む。
+  // Day4-6（終了していた期間）は焼き込まない＝frozen 表示は評価データの有無に依存しない。
+  for (let i = 0; i < 13; i++) {
+    const dayKey = addDaysKey(DEMO_GOAL4_START_DAY, i);
+    if (dayKey >= DEMO_GOAL4_ENDED_DAY && dayKey < DEMO_GOAL4_RESUMED_DAY) continue;
+    insEval.run(dayKey, per, SEED_TS, SEED_TS);
+  }
+}
+
 function seedKakeiboDemo(db: DB): void {
   const insEntry = db.prepare(
     `INSERT INTO kakeibo_entry
@@ -616,17 +677,16 @@ export function seedDemo(db: DB): void {
     // tx() の外で force 再集計する（recompute の transaction ネストを避けるため）。
     seedForgottenBlockDemo(db);
 
-    // 一時凍結の予約（Day10 に予約・翌日 Day11 発効・design: goal-freeze D10）。
-    // 生きている凍結（goal_freeze）と、事実のログ（goal_freeze_change・op='reserve'）を両方置く。
-    // 'activate'（発効）はログに書かず、この生きている行から都度合成される（design D6）。
+    // 一時凍結（Day11 に当日発効・design: goal-freeze MODIFIED D1）。
+    // 生きている凍結（goal_freeze）と、事実のログ（goal_freeze_change・op='activate'）を両方置く。
     db.prepare(
       `INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(DEMO_GOAL_ID, DEMO_FREEZE_START_DAY, DEMO_FREEZE_END_DAY, DEMO_FREEZE_REASON, SEED_TS, SEED_TS);
     db.prepare(
       `INSERT INTO goal_freeze_change (goal_id, day_key, op, start_day, before_end_day, after_end_day, reason, created_at)
-       VALUES (?, ?, 'reserve', ?, NULL, ?, ?, ?)`,
-    ).run(DEMO_GOAL_ID, DEMO_FREEZE_RESERVE_DAY, DEMO_FREEZE_START_DAY, DEMO_FREEZE_END_DAY, DEMO_FREEZE_REASON, SEED_TS);
+       VALUES (?, ?, 'activate', ?, NULL, ?, ?, ?)`,
+    ).run(DEMO_GOAL_ID, DEMO_FREEZE_START_DAY, DEMO_FREEZE_START_DAY, DEMO_FREEZE_END_DAY, DEMO_FREEZE_REASON, SEED_TS);
 
     // サンプル画像（③④の見え方確認用・design D8）。
     // 「作業スペース」= 初日/中間/最終日の3枚（③デフォルトは初日↔最終日、全比較は3枚）、
@@ -645,6 +705,7 @@ export function seedDemo(db: DB): void {
 
     seedRuleChronicle(db);
     seedBlueprintDemo(db);
+    seedResumeCycleDemo(db);
 
     // --- 2つ目のデモ目標: 手動チェックのみ（非時間型）を追った完走目標 -----------
     // 時間型ルールが無いため、完走レポートは①達成カレンダーのみ・②時間の推移は出ない。
@@ -678,28 +739,28 @@ export function seedDemo(db: DB): void {
       const j = GOAL2_JOURNAL[i + 1];
       if (j) insJournal.run(DEMO_GOAL2_ID, dayKey, j, SEED_TS, SEED_TS);
     }
-    // 当日凍結（Day12・その日1日だけ・期限は延びない）。期間凍結と違い予約の日は無く、
-    // 打った当日がそのまま start_day = end_day になる（沿革ログの day_key も同じ日）。
+    // 一時凍結（Day12・終了日も当日＝実質1日だけの凍結・当日発効）。統合後は同じ日を指定しても
+    // 凍結1日ぶん実効 end_day が延びる（design D1）。
     db.prepare(
-      `INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, kind, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'same_day', ?, ?)`,
+      `INSERT INTO goal_freeze (goal_id, start_day, end_day, reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(
       DEMO_GOAL2_ID,
-      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
-      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
-      GOAL2_SAME_DAY_FREEZE_REASON,
+      DEMO_GOAL2_FREEZE_DAY,
+      DEMO_GOAL2_FREEZE_DAY,
+      GOAL2_FREEZE_REASON,
       SEED_TS,
       SEED_TS,
     );
     db.prepare(
       `INSERT INTO goal_freeze_change (goal_id, day_key, op, start_day, before_end_day, after_end_day, reason, created_at)
-       VALUES (?, ?, 'reserve', ?, NULL, ?, ?, ?)`,
+       VALUES (?, ?, 'activate', ?, NULL, ?, ?, ?)`,
     ).run(
       DEMO_GOAL2_ID,
-      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
-      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
-      DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
-      GOAL2_SAME_DAY_FREEZE_REASON,
+      DEMO_GOAL2_FREEZE_DAY,
+      DEMO_GOAL2_FREEZE_DAY,
+      DEMO_GOAL2_FREEZE_DAY,
+      GOAL2_FREEZE_REASON,
       SEED_TS,
     );
 

@@ -1,7 +1,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { createGoal, endGoal, cancelEndGoal, addRuleToGoal, removeGoalRule, addJournalImage, addDaysKey } from './goals.js';
+import {
+  createGoal,
+  endGoal,
+  cancelEndGoal,
+  resumeGoal,
+  cancelResumeGoal,
+  addRuleToGoal,
+  removeGoalRule,
+  addJournalImage,
+  addDaysKey,
+} from './goals.js';
 import { goalHistory } from './goal-history.js';
 import { resolveIdentity, renameIdentity } from './group-identity.js';
 
@@ -25,6 +35,7 @@ const NOW_D4 = jst(2026, 8, 4);
 const NOW_D5 = jst(2026, 8, 5);
 const NOW_D6 = jst(2026, 8, 6);
 const NOW_AFTER = jst(2026, 8, 7);
+const NOW_D8 = jst(2026, 8, 8);
 const MIN = 60_000;
 const H = 3600;
 
@@ -236,5 +247,59 @@ describe('焼き込みと都度解決の切り分け', () => {
     endGoal(db, g.id, { reason: '逃げた' }, NOW_D4);
     const h = goalHistory(db, NOW_D5);
     expect(h.some((e) => e.kind === 'ended' && e.reason === '逃げた')).toBe(true);
+  });
+});
+
+describe('再開は「→再開」として理由つきで載る（spec: goal-history MODIFIED・issue #103）', () => {
+  it('発効済みの再開の行が理由つきで載る', () => {
+    const g = createGoal(db, baseInput(), NOW_D1);
+    endGoal(db, g.id, { reason: '一旦降りる' }, NOW_D4); // ended_day_key = 8/5。
+    resumeGoal(db, g.id, { reason: 'コーディングテストが終わった' }, NOW_D5); // resumed_day_key = 8/6。
+
+    const h = goalHistory(db, NOW_D6);
+    expect(h.map((e) => e.kind)).toEqual(['created', 'ended', 'resumed']);
+    const resumed = h.find((e) => e.kind === 'resumed')!;
+    expect(resumed.dayKey).toBe('2026-08-06');
+    expect(resumed.reason).toBe('コーディングテストが終わった');
+    expect(resumed.pending).toBe(false);
+  });
+
+  it('再開予約中の行は予約中として当日から並ぶ', () => {
+    const g = createGoal(db, baseInput(), NOW_D1);
+    endGoal(db, g.id, { reason: '一旦降りる' }, NOW_D4);
+    resumeGoal(db, g.id, { reason: '再開したい' }, NOW_D5);
+
+    const h = goalHistory(db, NOW_D5);
+    const resumed = h.find((e) => e.kind === 'resumed')!;
+    expect(resumed.dayKey).toBe('2026-08-06');
+    expect(resumed.pending).toBe(true);
+  });
+
+  it('再開を取り消すと「→再開」の行は消える', () => {
+    const g = createGoal(db, baseInput(), NOW_D1);
+    endGoal(db, g.id, { reason: '一旦降りる' }, NOW_D4);
+    resumeGoal(db, g.id, { reason: '再開したい' }, NOW_D5);
+    cancelResumeGoal(db, g.id, NOW_D5);
+
+    const h = goalHistory(db, NOW_D5);
+    expect(h.map((e) => e.kind)).toEqual(['created', 'ended']);
+  });
+
+  it('終了→再開のサイクルを繰り返すと全サイクルが並ぶ', () => {
+    const g = createGoal(db, baseInput(), NOW_D1);
+    endGoal(db, g.id, { reason: '1回目に降りる' }, NOW_D4); // ended_day_key = 8/5。
+    resumeGoal(db, g.id, { reason: '1回目の再開' }, NOW_D5); // resumed_day_key = 8/6。
+    endGoal(db, g.id, { reason: '2回目に降りる' }, NOW_D6); // ended_day_key = 8/7。
+    resumeGoal(db, g.id, { reason: '2回目の再開' }, NOW_AFTER); // resumed_day_key = 8/8。
+
+    const h = goalHistory(db, NOW_D8);
+    expect(h.map((e) => e.kind)).toEqual(['created', 'ended', 'resumed', 'ended', 'resumed']);
+    expect(h.map((e) => e.reason)).toEqual([
+      '試験前だが手は止めたくない',
+      '1回目に降りる',
+      '1回目の再開',
+      '2回目に降りる',
+      '2回目の再開',
+    ]);
   });
 });

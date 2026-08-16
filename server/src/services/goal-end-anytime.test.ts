@@ -14,7 +14,7 @@ import {
 } from './goals.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { getChronicle } from './goal-chronicle.js';
-import { reserveFreeze, sameDayFreeze, getFreeze } from './goal-freeze.js';
+import { freezeGoal, getFreeze } from './goal-freeze.js';
 
 /**
  * いつでも理由つきで終えられる（spec: goal-lifecycle-fork ADDED・issue #76）。
@@ -23,7 +23,7 @@ import { reserveFreeze, sameDayFreeze, getFreeze } from './goal-freeze.js';
  *   ① めざした状態の答え（3値・任意） ② 証拠写真（任意） ③ 理由（必須）
  *
  * 発効は **翌日**（`ended_day_key = today + 1`）。今夜ノルマを外す必要がある正当な事情は
- * `goal-freeze` の当日凍結（月1枠）が担うので、目標終了に当日発効の力は要らない。
+ * `goal-freeze` の一時凍結（月1枠）が担うので、目標終了に当日発効の力は要らない。
  * 上限の無い当日発効ボタンは「ノルマ全消しの無制限なボタン」になり、記録の汚れだけを抑止に
  * 当てにすると、ブレーキが最も必要な局面（調子が悪いとき）で効かないためである。
  *
@@ -173,15 +173,6 @@ describe('終了は発効前なら取り消せる', () => {
     expect(() => cancelEndGoal(db, g.id, NOW_D4)).toThrow(GoalLifecycleError);
   });
 
-  it('取り消しても凍結予約は戻らない（枠を解放済みのため復元できない）', () => {
-    const g = activeGoal();
-    reserveFreeze(db, g.id, { endDay: addDaysKey(START, 4), reason: '体調不良' }, NOW_D1);
-    endGoal(db, g.id, { reason: REASON }, NOW_D1);
-    cancelEndGoal(db, g.id, NOW_D1);
-    expect(getGoal(db, g.id, NOW_D1).status).toBe('active');
-    expect(getFreeze(db, g.id, NOW_D1)).toBeNull();
-  });
-
   it('取り消しても終了時に出した証拠写真は残る（記録は消さない）', () => {
     const g = activeGoal({ outcomeCaption: 'AtCoder レーティング' });
     endGoal(db, g.id, { reason: REASON, photo: { dataUrl: dataUrl() } }, NOW_D4);
@@ -273,32 +264,29 @@ describe('完走の「終える」も同じ問い・同じ翌日発効', () => {
 });
 
 describe('凍結との相互作用', () => {
-  it('未発効の凍結予約は取り消され、適用済みの延長と沿革は残る', () => {
+  it('凍結を経てから終えても、凍結の記録はそのまま残り、適用済みの延長と沿革も残る', () => {
     const g = activeGoal();
-    // 8/1 に予約 → 翌日 8/2 発効、8/3 まで。8/4 時点で 2 日ぶん適用済み（このぶんで8月の凍結枠を消費する）。
-    reserveFreeze(db, g.id, { endDay: addDaysKey(START, 2), reason: '体調不良' }, NOW_D1);
+    // 8/1 に凍結（当日発効・8/3まで）。8/4 時点で凍結は既に経過済み（3日ぶん適用済み・以降は
+    // 増えず安定する＝frozenDaysUpTo は経過区間を min(end_day, today) でキャップするため）。
+    freezeGoal(db, g.id, { endDay: addDaysKey(START, 2), reason: '体調不良' }, NOW_D1);
     const extendedEnd = getGoal(db, g.id, NOW_D4).endDay;
     expect(extendedEnd > END).toBe(true);
-    // 2件目の予約は、凍結枠（アプリ全体で月1回・8月分は上で消費済み）と衝突しないよう
-    // 9月の枠で、8/31（翌日9/1発効＝まだ発効していない）に行う。
-    const NOW_0831 = jst(2026, 8, 31);
-    const NOW_0902 = jst(2026, 9, 2);
-    reserveFreeze(db, g.id, { endDay: '2026-09-10', reason: 'まだ休みたい' }, NOW_0831);
 
-    // 未発効のまま、同じ 8/31 のうちに理由つきで終える。
-    endGoal(db, g.id, { reason: REASON }, NOW_0831);
+    // 凍結を経た後に理由つきで終える。
+    endGoal(db, g.id, { reason: REASON }, NOW_D4);
 
-    // 未発効だった2件目の予約は取り消され、1件目の適用済みの延長ぶんと凍結の沿革は残る。
-    expect(getFreeze(db, g.id, NOW_0902)?.state).toBe('released');
-    expect(getGoal(db, g.id, NOW_0902).endDay).toBe(extendedEnd);
+    // 終了は永続ルールをゲートから外すだけで、凍結の記録（解凍済み・適用済みの延長・沿革）は
+    // 取り消されずそのまま残る。
+    expect(getFreeze(db, g.id, NOW_D5)?.state).toBe('released');
+    expect(getGoal(db, g.id, NOW_D5).endDay).toBe(extendedEnd);
     expect(JSON.stringify(getChronicle(db, g.id).freezes)).toContain('体調不良');
   });
 
-  it('当日凍結で今夜を空けた上で終えると、当日は凍結で外れ、翌日以降は終了で外れる', () => {
+  it('一時凍結で今夜を空けた上で終えると、当日は凍結で外れ、翌日以降は終了で外れる', () => {
     const g = activeGoal();
-    sameDayFreeze(db, g.id, { reason: '明日の面接の課題' }, NOW_D5);
+    freezeGoal(db, g.id, { endDay: D5, reason: '明日の面接の課題' }, NOW_D5);
     endGoal(db, g.id, { reason: REASON }, NOW_D5);
-    // 8/5 は当日凍結のぶんで外れている（終了はまだ効いていない）。
+    // 8/5 は凍結のぶんで外れている（終了はまだ効いていない）。
     expect(evaluateDay(db, D5, NOW_D5).perCondition).toHaveLength(0);
     // 8/6 は凍結が明けているが、終了が発効しているので戻ってこない。
     expect(evaluateDay(db, '2026-08-06', NOW_D6).perCondition).toHaveLength(0);

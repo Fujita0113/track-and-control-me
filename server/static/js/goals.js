@@ -139,7 +139,7 @@ async function renderList(root) {
 // ✓/× はここでだけ使ってよい（診断であって断罪ではない・design D7-b）。合否・スコア・紙吹雪は出さない。
 // 行頭は記号ではなく過去形の文にする。「＋作成」は「＋ 新しい目標」ボタンと同じ記号＋動詞で、
 // 押せる操作に見えてしまっていた。年表なので「起きたこと」として読ませる。
-const HISTORY_KIND_VERB = { created: 'をはじめた', ended: 'を終えた', completed: 'を走りきった' };
+const HISTORY_KIND_VERB = { created: 'をはじめた', ended: 'を終えた', resumed: 'を再開した', completed: 'を走りきった' };
 
 function goalHistoryPhotoPair(imgBase, photos) {
   if (!photos || (!photos.before && !photos.after)) return null;
@@ -239,11 +239,11 @@ function goalCard(g, root) {
   else meta.appendChild(h('span', { class: 'badge ok', text: '完走' }));
   // 終了予約中（終えたが未発効）。状態は進行中/完走のままで、発効日を併記する（spec: goal-challenge MODIFIED）。
   if (g.endingOn) meta.appendChild(h('span', { class: 'badge', text: `終了予約中（${shortDay(g.endingOn)} から）` }));
-  // 一時凍結の状態（凍結中・予約中）を badge で示す（spec: goal-freeze）。
+  // 再開予約中（再開したが未発効）。状態は終了のままで、発効日を併記する（spec: goal-challenge MODIFIED）。
+  if (g.resumingOn) meta.appendChild(h('span', { class: 'badge', text: `再開予約中（${shortDay(g.resumingOn)} から）` }));
+  // 一時凍結中を badge で示す（spec: goal-freeze MODIFIED・予約フェーズは廃止）。
   if (g.freeze && g.freeze.state === 'frozen') {
-    meta.appendChild(h('span', { class: 'badge gf-badge', text: g.freeze.kind === 'same_day' ? '❄ 今日だけ凍結中' : '❄ 凍結中' }));
-  } else if (g.freeze && g.freeze.state === 'reserved') {
-    meta.appendChild(h('span', { class: 'badge gf-badge', text: '凍結予約中' }));
+    meta.appendChild(h('span', { class: 'badge gf-badge', text: '❄ 凍結中' }));
   }
 
   const head = h('div', { class: 'row' },
@@ -282,6 +282,24 @@ function goalCard(g, root) {
     const endBtn = h('button', { class: 'btn small', text: '終える', type: 'button' });
     endBtn.addEventListener('click', () => openEndDialog(g, () => renderList(root)));
     head.appendChild(endBtn);
+  }
+
+  // 「再開する」導線（発効済みの終了のみ・spec: goal-lifecycle-fork ADDED）。
+  // 再開予約中は代わりに「再開を取り消す」を出す（発効前だけ取り消せる・design D4）。
+  if (!isDemo() && g.status === 'ended' && g.resumingOn) {
+    const cancelResumeBtn = h('button', { class: 'btn small', text: '再開を取り消す', type: 'button' });
+    attachTooltip(cancelResumeBtn, { label: `${shortDay(g.resumingOn)} の発効前なら取り消せます` });
+    cancelResumeBtn.addEventListener('click', async () => {
+      if (!confirm(`「${g.name}」の再開を取り消しますか？`)) return;
+      cancelResumeBtn.disabled = true;
+      try { await api.cancelResumeGoal(g.id); toast('再開を取り消しました', 'ok'); renderList(root); }
+      catch (err) { toast(err.data?.error || `失敗: ${err.message}`, 'err'); cancelResumeBtn.disabled = false; }
+    });
+    head.appendChild(cancelResumeBtn);
+  } else if (!isDemo() && g.status === 'ended') {
+    const resumeBtn = h('button', { class: 'btn small', text: '再開する', type: 'button' });
+    resumeBtn.addEventListener('click', () => openResumeDialog(g, () => renderList(root)));
+    head.appendChild(resumeBtn);
   }
 
   // 削除の表示条件はサーバの削除ガード（`ended_day_key != null` で拒否）と一致させる。
@@ -437,6 +455,44 @@ function openEndDialog(g, onDone) {
   ));
   ctrlEnterToSave(body, save, '終える');
   openModal(body, '目標を終える');
+}
+
+// --- 再開する（発効済みの終了のみ・spec: goal-lifecycle-fork ADDED）-------------------------
+
+/** 再開導線。理由（必須）だけを問う。発効は翌日で、発効するまでは取り消せる旨を明示する（design D4）。 */
+function openResumeDialog(g, onDone) {
+  const body = h('div', { class: 'modal-body stack' });
+  body.appendChild(h('p', { class: 'muted' },
+    `「${g.name}」を再開します。`,
+    h('strong', { text: '明日からパスワードの条件に戻ります' }),
+    '。発効するまでは取り消せます。',
+  ));
+
+  const reasonInp = h('textarea', { class: 'gr-textarea gr-end-reason-input', rows: '2', placeholder: '例: コーディングテストが終わったので再開したい' });
+  body.appendChild(h('label', { class: 'gr-flabel', text: '理由（必須）' }));
+  body.appendChild(reasonInp);
+
+  const save = h('button', { class: 'btn primary', text: 'この目標を再開する', type: 'button' });
+  save.addEventListener('click', async () => {
+    const reason = reasonInp.value.trim();
+    if (!reason) { toast('理由を入力してください', 'err'); return; }
+    save.disabled = true;
+    try {
+      await api.resumeGoal(g.id, { reason });
+      toast('明日からこの目標を再開します', 'ok');
+      closeModal();
+      onDone();
+    } catch (err) {
+      toast(err.data?.error || `失敗: ${err.message}`, 'err');
+      save.disabled = false;
+    }
+  });
+  body.appendChild(h('div', { class: 'actions' },
+    h('button', { class: 'btn', text: 'キャンセル', type: 'button', onclick: closeModal }),
+    save,
+  ));
+  ctrlEnterToSave(body, save, '再開する');
+  openModal(body, '目標を再開する');
 }
 
 // --- 新規作成フォーム -----------------------------------------------------
@@ -863,6 +919,9 @@ function blockChronicle(rep, imgBase) {
   if (rep.chronicle.endedNote) {
     list.appendChild(chronicleEndedNote(rep, rep.chronicle.endedNote));
   }
+  if (rep.chronicle.resumedNote) {
+    list.appendChild(chronicleResumedNote(rep, rep.chronicle.resumedNote));
+  }
   card.appendChild(list);
   return card;
 }
@@ -875,8 +934,6 @@ function freezeDayCount(startDay, endDay) {
 }
 
 const FREEZE_KIND_LABEL = {
-  reserve: '凍結を予約',
-  cancel: '凍結の予約を取消',
   activate: '凍結が発効',
   extend: '凍結を延長',
   release: '凍結を解除',
@@ -893,7 +950,7 @@ function freezeEntryEl(f) {
     h('div', { class: 'gr-chr-date-sub', text: shortDay(f.dayKey) }),
   );
   let text = FREEZE_KIND_LABEL[f.kind] || f.kind;
-  if (f.kind === 'reserve' || f.kind === 'activate') text += `（${shortDay(f.startDay)}〜${shortDay(f.afterEndDay)}）`;
+  if (f.kind === 'activate') text += `（${shortDay(f.startDay)}〜${shortDay(f.afterEndDay)}）`;
   else if (f.kind === 'extend') text += `（${shortDay(f.beforeEndDay)} → ${shortDay(f.afterEndDay)}）`;
   else if (f.kind === 'release') text += `（凍結 ${freezeDayCount(f.startDay, f.afterEndDay)} 日）`;
   const stmt = h('p', { class: 'gr-chr-stmt', text: `❄ ${text}` });
@@ -973,6 +1030,17 @@ function chronicleEndedNote(rep, note) {
     h('div', { class: 'gr-chr-day-num', text: String(note.dayNumber) }),
   );
   const stmt = h('p', { class: 'gr-chr-stmt', text: `${rep.goal.name} をここで終える` },
+    h('span', { class: 'gr-chr-reason', text: note.reason }));
+  return h('article', { class: 'gr-chr-entry' }, dateCol, h('div', { class: 'gr-chr-main' }, stmt));
+}
+
+/** 発効済みの終了を理由つきで再開したときの最終エントリ（spec: goal-lifecycle-fork ADDED）。 */
+function chronicleResumedNote(rep, note) {
+  const dateCol = h('div', { class: 'gr-chr-date' },
+    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
+    h('div', { class: 'gr-chr-day-num', text: String(note.dayNumber) }),
+  );
+  const stmt = h('p', { class: 'gr-chr-stmt', text: `${rep.goal.name} を再開する` },
     h('span', { class: 'gr-chr-reason', text: note.reason }));
   return h('article', { class: 'gr-chr-entry' }, dateCol, h('div', { class: 'gr-chr-main' }, stmt));
 }

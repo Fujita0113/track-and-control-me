@@ -307,13 +307,16 @@ export const ChronicleEndedNoteSchema = z.object({
   dayNumber: z.number().int(),
 });
 
-/** 目標の一時凍結イベント種別（spec: goal-freeze）。`activate`（発効）はログではなく導出して合成される。 */
-export const FreezeEntryKindSchema = z.enum(['reserve', 'cancel', 'activate', 'extend', 'release']);
+/**
+ * 目標の一時凍結イベント種別（spec: goal-freeze MODIFIED・種別と予約フェーズを廃止・design D1）。
+ * `activate` は予約したその場での当日発効（旧: `reserve`）。
+ */
+export const FreezeEntryKindSchema = z.enum(['activate', 'extend', 'release']);
 export type FreezeEntryKind = z.infer<typeof FreezeEntryKindSchema>;
 
 /**
- * 沿革1件＝目標の凍結イベント（予約・取消・発効・延長・解除・design: goal-freeze D4・D6）。
- * 理由テキストがあるのは `reserve`/`extend` のみ（`cancel`/`activate`/`release` は null）。
+ * 沿革1件＝目標の凍結イベント（発効・延長・解除・design: goal-freeze D1・D6）。
+ * 理由テキストがあるのは `activate`/`extend` のみ（`release` は null）。
  */
 export const FreezeEntrySchema = z.object({
   kind: FreezeEntryKindSchema,
@@ -333,11 +336,13 @@ export const ChronicleSchema = z.object({
   entries: z.array(ChronicleEntrySchema),
   freezes: z.array(FreezeEntrySchema),
   endedNote: ChronicleEndedNoteSchema.nullable(),
+  /** 「終える」に続く「再開」の理由つき最終エントリ（spec: goal-lifecycle-fork ADDED・design D4）。 */
+  resumedNote: ChronicleEndedNoteSchema.nullable(),
 });
 export type Chronicle = z.infer<typeof ChronicleSchema>;
 
-/** 目標の一時凍結の状態（予約中/凍結中/解凍済み）（spec: goal-freeze D1）。 */
-export const FreezeStateSchema = z.enum(['reserved', 'frozen', 'released']);
+/** 目標の一時凍結の状態（凍結中/解凍済み。予約フェーズは廃止・spec: goal-freeze MODIFIED D1）。 */
+export const FreezeStateSchema = z.enum(['frozen', 'released']);
 export type FreezeState = z.infer<typeof FreezeStateSchema>;
 
 /** 目標の現在の凍結（`GoalView.freeze`）。一度も凍結したことが無ければ null（server 側で表現）。 */

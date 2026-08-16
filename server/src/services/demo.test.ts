@@ -32,7 +32,12 @@ import {
   DEMO_AFTER_END_DAY,
   DEMO_GOAL2_START_DAY,
   DEMO_GOAL2_END_DAY,
-  DEMO_GOAL2_SAME_DAY_FREEZE_DAY,
+  DEMO_GOAL2_FREEZE_DAY,
+  DEMO_GOAL2_EFFECTIVE_END_DAY,
+  DEMO_GOAL4_ID,
+  DEMO_GOAL4_ENDED_DAY,
+  DEMO_GOAL4_RESUMED_DAY,
+  DEMO_GOAL4_EFFECTIVE_END_DAY,
   DEMO_ALLOC_DAY,
   DEMO_FORGOTTEN_DAY,
   RULE_TOTAL_ID,
@@ -168,12 +173,12 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
       expect(g.freeze!.state).toBe('frozen');
     });
 
-    it('沿革に予約・発効が理由つきで残る', () => {
+    it('沿革に発効が理由つきで残る（種別・予約フェーズは廃止・spec: goal-freeze MODIFIED）', () => {
       const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
       const freezes = rep.chronicle.freezes;
-      expect(freezes.map((f) => f.kind)).toEqual(['reserve', 'activate']);
+      expect(freezes.map((f) => f.kind)).toEqual(['activate']);
       expect(freezes[0]!.reason).toContain('差し込み案件');
-      expect(freezes[1]!.startDay).toBe(DEMO_FREEZE_START_DAY);
+      expect(freezes[0]!.startDay).toBe(DEMO_FREEZE_START_DAY);
     });
   });
 
@@ -272,19 +277,19 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
   });
 
   it('手動チェックのみの目標（DEMO_GOAL2）は①のみで②時間の推移が出ない', () => {
-    // 一覧には主目標・手動チェックのみ目標・目標時間つきで終えた目標の3件が並ぶ。
+    // 一覧には主目標・手動チェックのみ目標・目標時間つきで終えた目標・終了→再開の目標の4件が並ぶ。
     const goals = listGoals(db, vnow(DEMO_AFTER_END_DAY));
-    expect(goals.length).toBe(3);
+    expect(goals.length).toBe(4);
     const g2 = goals.find((g) => g.id === DEMO_GOAL2_ID)!;
     expect(g2.name).toBe('朝の散歩を習慣にする');
 
     const rep = getGoalReport(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
-    // ① ルールは手動チェック2つ・各30マス。全て非時間型。
+    // ① ルールは手動チェック2つ・各31マス（凍結1日ぶん実効 end_day が延びる）。全て非時間型。
     expect(rep.rules.length).toBe(2);
     for (const p of rep.rules) {
       expect(p.target).toBe('MANUAL_CHECK');
       expect(p.isTimeType).toBe(false);
-      expect(p.cells.length).toBe(30);
+      expect(p.cells.length).toBe(31);
     }
     // ② 時間の推移は出ない（時間型ルールゼロ）＋変更ログも無い。
     expect(rep.hasTimeType).toBe(false);
@@ -303,25 +308,64 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(getJournal(db, DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY).content).toContain('朝散歩を始める');
   });
 
-  it('当日凍結の日は対象外になるが、期限は延びない（期間凍結との代金の違い・spec: goal-freeze ADDED）', () => {
+  it('1日だけの一時凍結でも対象外になり、期限が1日延びる（種別統合後の挙動・spec: goal-freeze MODIFIED）', () => {
     const g2 = getGoal(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
-    // 当日凍結は `end_day` を延ばさない。期間凍結を打った主目標は 07-10 → 07-12 に延びている
-    // （下の expect と並べて読むのがこのサンプルの狙い）。
-    expect(g2.endDay).toBe(DEMO_GOAL2_END_DAY);
-    expect(g2.freeze!.kind).toBe('same_day');
-    expect(g2.freeze!.startDay).toBe(DEMO_GOAL2_SAME_DAY_FREEZE_DAY);
-    expect(g2.freeze!.endDay).toBe(DEMO_GOAL2_SAME_DAY_FREEZE_DAY);
+    // 統合後は「終了日=当日」を指定しても凍結1日ぶん実効 end_day が延びる（旧・当日凍結の
+    // 「期限は延びない」という代金は無くなった）。
+    expect(g2.endDay).toBe(DEMO_GOAL2_EFFECTIVE_END_DAY);
+    expect(g2.freeze!.startDay).toBe(DEMO_GOAL2_FREEZE_DAY);
+    expect(g2.freeze!.endDay).toBe(DEMO_GOAL2_FREEZE_DAY);
     expect(getGoal(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY)).endDay).toBe(DEMO_EFFECTIVE_END_DAY);
 
     const rep = getGoalReport(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
-    // 期限が延びないので日数は 30 のまま（期間凍結の主目標は 30 → 32 に増えている）。
-    expect(rep.goal.dayCount).toBe(30);
+    // 凍結1日ぶん日数は 30 → 31 に増える。
+    expect(rep.goal.dayCount).toBe(31);
     // Day12（既存の谷）は「未達成」ではなく「対象外」として並ぶ。達成日数 24 は変わらない。
     const walk = rep.rules.find((p) => p.conditionKey === `rule:${RULE_WALK_ID}`)!;
-    expect(walk.cells[11]!.dayKey).toBe(DEMO_GOAL2_SAME_DAY_FREEZE_DAY);
+    expect(walk.cells[11]!.dayKey).toBe(DEMO_GOAL2_FREEZE_DAY);
     expect(walk.cells[11]!.frozen).toBe(true);
     expect(walk.cells[11]!.met).toBe(false);
     expect(rep.goal.achievedDays).toBe(24);
+  });
+
+  describe('終了→再開のサイクルのサンプル（spec: goal-lifecycle-fork ADDED・issue #103）', () => {
+    it('終了していた3日ぶん実効 end_day が延び、その3日はレポートで対象外になる', () => {
+      const g4 = getGoal(db, DEMO_GOAL4_ID, vnow(DEMO_AFTER_END_DAY));
+      expect(g4.status).toBe('completed');
+      expect(g4.endDay).toBe(DEMO_GOAL4_EFFECTIVE_END_DAY);
+      expect(g4.dayCount).toBe(13);
+      expect(g4.resumingOn).toBeNull();
+
+      const rep = getGoalReport(db, DEMO_GOAL4_ID, vnow(DEMO_AFTER_END_DAY));
+      expect(rep.goal.dayCount).toBe(13);
+      const rule = rep.rules[0]!;
+      // Day4-6（終了していた期間）は対象外、Day1-3・Day7-13 は達成。
+      expect(rule.cells[3]!.dayKey).toBe(DEMO_GOAL4_ENDED_DAY);
+      expect(rule.cells[3]!.frozen).toBe(true);
+      expect(rule.cells[5]!.frozen).toBe(true);
+      expect(rule.cells[0]!.frozen).toBe(false);
+      expect(rule.cells[0]!.met).toBe(true);
+      expect(rule.cells[6]!.dayKey).toBe(DEMO_GOAL4_RESUMED_DAY);
+      expect(rule.cells[6]!.frozen).toBe(false);
+      expect(rule.cells[6]!.met).toBe(true);
+      expect(rule.cells[12]!.met).toBe(true); // Day13（延長ぶん）
+      expect(rep.goal.achievedDays).toBe(10); // Day4-6 の3日を除く10日。
+    });
+
+    it('大きい沿革に「終える」「→再開」が理由つきで並ぶ', () => {
+      const h = goalHistory(db, vnow(DEMO_AFTER_END_DAY));
+      const ended = h.find((e) => e.kind === 'ended' && e.goalId === DEMO_GOAL4_ID)!;
+      expect(ended).toBeDefined();
+      expect(ended.dayKey).toBe(DEMO_GOAL4_ENDED_DAY);
+      expect(ended.reason).toContain('体調を崩した');
+      expect(ended.pending).toBe(false);
+
+      const resumed = h.find((e) => e.kind === 'resumed' && e.goalId === DEMO_GOAL4_ID)!;
+      expect(resumed).toBeDefined();
+      expect(resumed.dayKey).toBe(DEMO_GOAL4_RESUMED_DAY);
+      expect(resumed.reason).toContain('体調が戻った');
+      expect(resumed.pending).toBe(false);
+    });
   });
 });
 
@@ -347,10 +391,10 @@ describe('目標時間・大きい沿革のサンプル（spec: goal-target-hour
     expect(g.startDay).toBe(DEMO_GOAL3_START_DAY);
   });
 
-  it('大きい沿革に3件の目標（作成・作成・作成）と、終えた目標の行に3つ（到達判定・答え・Before→After）が並ぶ', () => {
+  it('大きい沿革に4件の目標（作成×4）と、終えた目標の行に3つ（到達判定・答え・Before→After）が並ぶ', () => {
     const h = goalHistory(db, vnow(DEMO_AFTER_END_DAY));
     const created = h.filter((e) => e.kind === 'created');
-    expect(created.length).toBe(3);
+    expect(created.length).toBe(4);
     expect(created.some((e) => e.name === 'AtCoderのレーティングを上げる')).toBe(true);
 
     const ended = h.find((e) => e.kind === 'ended' && e.goalId === DEMO_GOAL3_ID)!;
@@ -539,9 +583,9 @@ describe('本番非干渉ガードレール（5.1）', () => {
     const before = (prod.prepare('SELECT COUNT(*) AS c FROM goal').get() as { c: number }).c;
     expect(before).toBe(0);
 
-    // デモ DB を構築・リセット・読み取り（主目標＋手動チェックのみ目標＋終えた目標の3件）。
+    // デモ DB を構築・リセット・読み取り（主目標＋手動チェックのみ目標＋終えた目標＋終了→再開目標の4件）。
     const demo = getDemoDb();
-    expect(listGoals(demo, vnow(DEMO_AFTER_END_DAY)).length).toBe(3);
+    expect(listGoals(demo, vnow(DEMO_AFTER_END_DAY)).length).toBe(4);
     resetDemoDb();
     getGoalReport(getDemoDb(), DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
 
