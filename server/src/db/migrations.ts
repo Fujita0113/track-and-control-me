@@ -1488,4 +1488,47 @@ CREATE TABLE goal_end_interval (
 CREATE INDEX idx_goal_end_interval_goal ON goal_end_interval(goal_id, id);
 `,
   },
+  {
+    version: 33,
+    name: 'reorganize-goal-freeze-and-resume-catchup',
+    // migration 32 は SQL 文面を確定する前に実DB(track.sqlite)へ一度別内容で適用され
+    // user_version=32 を記録してしまっていたため、確定後の v32 SQL が二度と流れず
+    // real DB だけ goal_freeze.kind 残存／goal.resumed_day_key 欠落／goal_end_interval
+    // 未作成のまま取り残されていた（migrations-must-not-be-edited-in-place と同型の事故）。
+    // 各変更を存在チェックしてから個別に追いつかせる（v32 が正しく適用済みの DB では no-op）。
+    run: (db) => {
+      const goalCols = db.prepare('PRAGMA table_info(goal)').all() as { name: string }[];
+      if (!goalCols.some((c) => c.name === 'resumed_day_key')) {
+        db.exec('ALTER TABLE goal ADD COLUMN resumed_day_key TEXT');
+      }
+      if (!goalCols.some((c) => c.name === 'resume_reason')) {
+        db.exec('ALTER TABLE goal ADD COLUMN resume_reason TEXT');
+      }
+
+      const freezeCols = db.prepare('PRAGMA table_info(goal_freeze)').all() as { name: string }[];
+      if (freezeCols.some((c) => c.name === 'kind')) {
+        db.exec('ALTER TABLE goal_freeze DROP COLUMN kind');
+      }
+
+      const hasEndInterval = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='goal_end_interval'")
+        .get();
+      if (!hasEndInterval) {
+        db.exec(`
+CREATE TABLE goal_end_interval (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id INTEGER NOT NULL REFERENCES goal(id) ON DELETE CASCADE,
+  ended_day_key TEXT NOT NULL,
+  resumed_day_key TEXT NOT NULL,
+  end_reason TEXT,
+  resume_reason TEXT,
+  outcome_met INTEGER,
+  final_pace_json TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_goal_end_interval_goal ON goal_end_interval(goal_id, id);
+`);
+      }
+    },
+  },
 ];
