@@ -172,6 +172,13 @@ export function listEntries(db: DB, monthKey: string): KakeiboEntryRow[] {
     .all(`${monthKey}%`) as KakeiboEntryRow[];
 }
 
+/** 日付範囲（両端含む・月をまたいでよい）で取得する（design: kakeibo-recent-forecast「分母は常に7固定」用）。 */
+export function listEntriesInRange(db: DB, fromDayKey: string, toDayKey: string): KakeiboEntryRow[] {
+  return db
+    .prepare('SELECT * FROM kakeibo_entry WHERE day_key BETWEEN ? AND ? ORDER BY day_key DESC, id DESC')
+    .all(fromDayKey, toDayKey) as KakeiboEntryRow[];
+}
+
 export function suggestNames(db: DB, prefix: string): string[] {
   const rows = db
     .prepare(

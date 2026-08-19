@@ -195,6 +195,63 @@ describe('今週の残り予算（design D7）', () => {
   });
 });
 
+describe('直近7日ベースの予想（issue #105・change: kakeibo-recent-forecast）', () => {
+  it('直近7日（8/5–8/11）の日々の出費から1日平均を出す。分母は常に7', () => {
+    const f = forecastMonth(db, MONTH, TODAY);
+    // 8/6 2,600 + 8/7 3,480 + 8/8 820 + 8/9 1,100（歯医者3,300は自動特別費で母数から除外）
+    // + 8/10 1,280 + 8/11 620 = 9,900
+    expect(f.recent.dailyPoolYen).toBe(9_900);
+    expect(f.recent.dailyAverageYen).toBe(1_414); // floor(9900 / 7)
+  });
+
+  it('直近7日ベースの月末予想・上限超過日は「これまでの平均」と別の値になる', () => {
+    const f = forecastMonth(db, MONTH, TODAY);
+    expect(f.recent.forecastYen).toBe(28_280); // 1,414 × 20
+    expect(f.recent.landingYen).toBe(70_110); // 40,030 + 28,280 + 1,800
+    expect(f.recent.overYen).toBe(8_110);
+    expect(f.recent.crossDayKey).toBe('2026-08-26');
+    // 「これまでの平均」の値は変わらない（既存の基準と併存する）。
+    expect(f.landingYen).toBe(77_010);
+    expect(f.crossDayKey).toBe('2026-08-23');
+  });
+
+  it('今日までの実績・特別費・予定出費・固定費は基準に関わらず共通', () => {
+    const f = forecastMonth(db, MONTH, TODAY);
+    expect(f.recent.actualYen).toBe(f.actualYen);
+    expect(f.recent.fixedYen).toBe(f.fixedYen);
+    expect(f.recent.specialYen).toBe(f.specialYen);
+    expect(f.recent.plannedYen).toBe(f.plannedYen);
+    expect(f.recent.capYen).toBe(f.capYen);
+  });
+
+  it('直近7日の対象期間は月をまたぎ、分母は経過日数に縮めず常に7のまま', () => {
+    const db2 = openDb(':memory:');
+    // 前月末（7/29〜7/31）に記録があり、8月に入って3日目（経過3日）。
+    createEntry(db2, { dayKey: '2026-07-29', name: '前月A', amountYen: 700, category: 'FOOD', importance: 'MUST' });
+    createEntry(db2, { dayKey: '2026-07-30', name: '前月B', amountYen: 700, category: 'FOOD', importance: 'MUST' });
+    createEntry(db2, { dayKey: '2026-07-31', name: '前月C', amountYen: 700, category: 'FOOD', importance: 'MUST' });
+    createEntry(db2, { dayKey: '2026-08-01', name: '今月A', amountYen: 1_000, category: 'FOOD', importance: 'MUST' });
+    createEntry(db2, { dayKey: '2026-08-02', name: '今月B', amountYen: 1_000, category: 'FOOD', importance: 'MUST' });
+    createEntry(db2, { dayKey: '2026-08-03', name: '今月C', amountYen: 1_000, category: 'FOOD', importance: 'MUST' });
+    setBudget(db2, '2026-08', { capYen: 100_000, wasteCapYen: 4_000 });
+
+    const f = forecastMonth(db2, '2026-08', '2026-08-03');
+    // 7/28〜8/3 の直近7日: 7/29-31（700×3=2,100）+ 8/1-3（1,000×3=3,000）= 5,100 円。
+    // 経過日数（3日）に縮めた 3,000 ÷ 3 = 1,000 ではないことを確認する。
+    expect(f.recent.dailyPoolYen).toBe(5_100);
+    expect(f.recent.dailyAverageYen).toBe(728); // floor(5100 / 7)
+  });
+
+  it('前月に記録が無くてもゼロ除算にはならない（トラッキング開始直後）', () => {
+    const db3 = openDb(':memory:');
+    createEntry(db3, { dayKey: '2026-08-01', name: '初日', amountYen: 500, category: 'FOOD', importance: 'MUST' });
+    setBudget(db3, '2026-08', { capYen: 100_000, wasteCapYen: 4_000 });
+    const f = forecastMonth(db3, '2026-08', '2026-08-01');
+    expect(f.recent.dailyPoolYen).toBe(500);
+    expect(f.recent.dailyAverageYen).toBe(71); // floor(500 / 7)
+  });
+});
+
 describe('「無駄遣い」の合計と上限（spec: kakeibo-forecast）', () => {
   it('合計・割合・上限超過がモックどおり', () => {
     const w = wasteSummary(db, MONTH);

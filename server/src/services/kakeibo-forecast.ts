@@ -1,6 +1,6 @@
 import type { DB } from '../db/index.js';
 import { addDaysKey, dayDiff } from './day-key.js';
-import { isSpecialEntry, listEntries, type KakeiboEntryRow } from './kakeibo.js';
+import { isSpecialEntry, listEntries, listEntriesInRange, type KakeiboEntryRow } from './kakeibo.js';
 import { getBudget, budgetDerived, listFixedCosts, listPlannedExpenses } from './kakeibo-budget.js';
 import { floor10, daysInMonth, monthOf } from './kakeibo-shared.js';
 
@@ -44,6 +44,54 @@ export interface ForecastMonthResult {
   overYen: number;
   crossDayKey: string | null;
   series: ForecastSeriesPoint[];
+  recent: ForecastRecentResult;
+}
+
+/** 「直近7日ベース」基準ぶんの値（design: kakeibo-recent-forecast decision 1・2）。 */
+export interface ForecastRecentResult {
+  dailyPoolYen: number;
+  dailyAverageYen: number;
+  forecastYen: number;
+  landingYen: number;
+  overYen: number;
+  crossDayKey: string | null;
+  actualYen: number;
+  fixedYen: number;
+  specialYen: number;
+  plannedYen: number;
+  capYen: number;
+  series: ForecastSeriesPoint[];
+}
+
+/** 残り日を1日ずつ歩いて積む（閉じた式にしない・design D5）。基準（全期間／直近7日）で共有する。 */
+function buildForecastSeries(
+  monthKey: string,
+  days: number,
+  elapsedDays: number,
+  fixedYen: number,
+  entriesByDay: Map<string, number>,
+  plannedByDay: Map<string, number>,
+  dailyAverageYen: number,
+  capYen: number,
+): { series: ForecastSeriesPoint[]; landingYen: number; crossDayKey: string | null } {
+  const series: ForecastSeriesPoint[] = [];
+  let cumulative = fixedYen;
+  let crossDayKey: string | null = null;
+  for (let d = 1; d <= days; d++) {
+    const dayKey = `${monthKey}-${String(d).padStart(2, '0')}`;
+    if (d <= elapsedDays) {
+      cumulative += entriesByDay.get(dayKey) ?? 0;
+      series.push({ dayKey, kind: 'ACTUAL', cumulativeYen: cumulative, plannedYen: 0 });
+    } else {
+      const dayPlanned = plannedByDay.get(dayKey) ?? 0;
+      cumulative += dailyAverageYen + dayPlanned;
+      series.push({ dayKey, kind: 'FORECAST', cumulativeYen: cumulative, plannedYen: dayPlanned });
+    }
+    if (crossDayKey == null && cumulative > capYen) crossDayKey = dayKey;
+  }
+  const last = series[series.length - 1];
+  const landingYen = last ? last.cumulativeYen : fixedYen;
+  return { series, landingYen, crossDayKey };
 }
 
 /**
@@ -84,25 +132,39 @@ export function forecastMonth(
     entriesByDay.set(e.day_key, (entriesByDay.get(e.day_key) ?? 0) + e.amount_yen);
   }
 
-  const series: ForecastSeriesPoint[] = [];
-  let cumulative = fixedYen;
-  let crossDayKey: string | null = null;
-  for (let d = 1; d <= days; d++) {
-    const dayKey = `${monthKey}-${String(d).padStart(2, '0')}`;
-    if (d <= elapsedDays) {
-      cumulative += entriesByDay.get(dayKey) ?? 0;
-      series.push({ dayKey, kind: 'ACTUAL', cumulativeYen: cumulative, plannedYen: 0 });
-    } else {
-      const dayPlanned = plannedByDay.get(dayKey) ?? 0;
-      cumulative += dailyAverageYen + dayPlanned;
-      series.push({ dayKey, kind: 'FORECAST', cumulativeYen: cumulative, plannedYen: dayPlanned });
-    }
-    if (crossDayKey == null && cumulative > capYen) crossDayKey = dayKey;
-  }
-
-  const last = series[series.length - 1];
-  const landingYen = last ? last.cumulativeYen : actualYen + forecastYen + plannedYen;
+  const { series, landingYen, crossDayKey } = buildForecastSeries(
+    monthKey,
+    days,
+    elapsedDays,
+    fixedYen,
+    entriesByDay,
+    plannedByDay,
+    dailyAverageYen,
+    capYen,
+  );
   const overYen = Math.max(0, landingYen - capYen);
+
+  // 直近7日ベース（design decision 2: 分母は常に7固定・対象期間は月をまたいでよい）。
+  const recentFromDayKey = addDaysKey(todayDayKey, -6);
+  const recentEntries = listEntriesInRange(db, recentFromDayKey, todayDayKey);
+  const recentVariableYen = recentEntries.reduce((a, e) => a + e.amount_yen, 0);
+  const recentSpecialYen = recentEntries
+    .filter((e) => effectiveSpecial(e, overrides))
+    .reduce((a, e) => a + e.amount_yen, 0);
+  const recentDailyPoolYen = recentVariableYen - recentSpecialYen;
+  const recentDailyAverageYen = Math.floor(recentDailyPoolYen / 7);
+  const recentForecastYen = recentDailyAverageYen * remainingDays;
+  const recentBuilt = buildForecastSeries(
+    monthKey,
+    days,
+    elapsedDays,
+    fixedYen,
+    entriesByDay,
+    plannedByDay,
+    recentDailyAverageYen,
+    capYen,
+  );
+  const recentOverYen = Math.max(0, recentBuilt.landingYen - capYen);
 
   return {
     fixedYen,
@@ -120,6 +182,20 @@ export function forecastMonth(
     overYen,
     crossDayKey,
     series,
+    recent: {
+      dailyPoolYen: recentDailyPoolYen,
+      dailyAverageYen: recentDailyAverageYen,
+      forecastYen: recentForecastYen,
+      landingYen: recentBuilt.landingYen,
+      overYen: recentOverYen,
+      crossDayKey: recentBuilt.crossDayKey,
+      actualYen,
+      fixedYen,
+      specialYen,
+      plannedYen,
+      capYen,
+      series: recentBuilt.series,
+    },
   };
 }
 

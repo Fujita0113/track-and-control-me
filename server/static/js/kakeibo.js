@@ -1,11 +1,11 @@
 // 家計簿タブ本体（design D15: {month, view} の2状態）。
 // ホーム/履歴/分析/予算のサブタブ切替と、共有モーダル（明細・予想の計算内訳調整）を持つ。
-import { h, clear, closeModal, openModal, attachTooltip, ctrlEnterToSave, isTypingTarget, toast, emptyState } from './util.js';
+import { h, clear, closeModal, openModal, attachTooltip, ctrlEnterToSave, isTypingTarget, toast, emptyState, addDays } from './util.js';
 import { api } from './api.js';
 import { state as appState } from './state.js';
 import { isDemo } from './demo.js';
 import { shrinkImage, isImageFile } from './images.js';
-import { renderChart } from './kakeibo-chart.js';
+import { createChart } from './kakeibo-chart.js';
 import { showHistoryView } from './kakeibo-history.js';
 import { showAnalysisView } from './kakeibo-analysis.js';
 import { showBudgetView } from './kakeibo-budget.js';
@@ -33,7 +33,7 @@ export function impLabel(imp) { return imp == null ? '内訳未入力' : (IMPORT
 export function monthLabel(m) { const [y, mo] = (m || '').split('-'); return `${y}年${Number(mo)}月`; }
 function parseYen(v) { return Number(String(v || '').replace(/[^\d.-]/g, '')) || 0; }
 
-const kbState = { month: null, view: 'home' };
+const kbState = { month: null, view: 'home', basis: 'all' };
 let sectionEl = null;
 
 // デモの家計簿は目標タブの仮想日付とは無関係の固定シナリオ（server/src/services/demo-seed.ts の
@@ -112,47 +112,109 @@ function fmtDayShort(dayKey) {
   return `${Number(m)}/${Number(d)}`;
 }
 
+// 基準で変わる値だけを1つの形に揃える（design decision 1）。特別費・予定出費・固定費・今日までの実績・
+// 上限は2基準で同じ値（サーバが recent 側にも同じものを写して返す）なので、ここには含めない。
+function basisView(data, basis) {
+  const { landing } = data;
+  const src = basis === 'recent' ? landing.recent : landing;
+  return { landingYen: src.landingYen, overYen: src.overYen, crossDayKey: src.crossDayKey, actualYen: landing.actualYen };
+}
+
+/**
+ * 基準の切り替え。押す前から両方の1日平均が見えるようにセルの中へ数字を入れてある
+ * （切り替えないと相手の数字が分からない状態を避けるため）。
+ * 読み上げ名はグラフのフッター文と揃えて「これまでの平均ペース」「直近7日ベース」を aria-label で与える。
+ */
+function renderBasisToggle(basis, onChange) {
+  const seg = h('div', { class: 'kb-basis-seg', role: 'group', 'aria-label': '予想に使う1日平均の基準' });
+  const cells = [
+    { key: 'all', name: '今月のペース', full: 'これまでの平均ペース' },
+    { key: 'recent', name: '直近7日のペース', full: '直近7日ベース' },
+  ];
+  for (const c of cells) {
+    const on = basis === c.key;
+    const btn = h('button', {
+      class: `kb-basis-btn${on ? ' on' : ''}`, type: 'button',
+      'aria-label': c.full, 'aria-pressed': on ? 'true' : 'false',
+    }, c.name);
+    btn.addEventListener('click', () => { if (!on) onChange(c.key); });
+    seg.appendChild(btn);
+  }
+  return h('div', { class: 'kb-basis' }, seg);
+}
+
 async function renderHome(body) {
   const data = await ctx().fetchHome(kbState.month);
   clear(body);
 
-  const { landing, summary, series } = data;
+  const { landing, summary } = data;
   const card = h('div', { class: 'kb-card', style: { marginBottom: '16px' } });
   card.appendChild(h('div', { class: 'kb-head' },
     h('span', { class: 't', text: '今月の支出推移と月末予想' }),
     h('span', { class: 'kb-meta', text: `上限 ${fmtYen(landing.capYen)}` })));
-  const big = h('div', { class: 'kb-big sm' },
-    h('span', { class: 'cur', text: '¥' }),
-    h('span', { class: 'n kb-amt', text: landing.landingYen.toLocaleString('ja-JP') }));
-  if (landing.overYen > 0) big.appendChild(h('span', { class: 'kb-over', text: `▲ ${fmtYen(landing.overYen)} 超過` }));
-  big.appendChild(h('span', { class: 'muted', style: { fontSize: '12.5px' } }, '今日まで ', h('b', { class: 'kb-amt', style: { color: 'var(--text)' }, text: landing.actualYen.toLocaleString('ja-JP') })));
-  card.appendChild(big);
 
+  const bigWrap = h('div', {});
   const plot = h('div', { class: 'kb-plot' });
-  const chartWrap = h('div', { class: 'kb-chart' }, renderChart({
-    series, capYen: landing.capYen, crossDayKey: landing.crossDayKey, fixedYen: landing.fixedYen, landingYen: landing.landingYen,
-  }));
-  const foot = h('div', { class: 'kb-chart-foot' },
-    h('div', { class: 'kb-chart-legend' },
-      h('span', {}, h('i', { class: 'ln' }), '実績'),
-      h('span', {}, h('i', { class: 'ln pred' }), '予想'),
-      h('span', {}, h('i', { class: 'ln cap' }), '上限')));
-  if (landing.crossDayKey) foot.appendChild(h('span', { class: 'kb-cross' }, 'このペースだと ', h('b', { text: fmtDayShort(landing.crossDayKey) }), ' に上限超過'));
-  chartWrap.appendChild(foot);
-  plot.appendChild(chartWrap);
-  card.appendChild(plot);
-
   const summaryRow = h('div', { class: 'kb-summary' });
-  const items = h('div', { class: 'kb-summary-items' },
-    h('span', {}, '日々の出費: 1日平均 ', h('b', { text: fmtYen(summary.dailyAverageYen) })),
-    h('span', {}, '特別費: ', h('b', { text: fmtYen(summary.specialYen) })),
-    h('span', {}, '予定出費: ', h('b', { text: fmtYen(summary.plannedYen) })),
-    h('span', {}, '固定費: ', h('b', { text: fmtYen(summary.fixedYen) })));
-  summaryRow.appendChild(items);
-  const adjustBtn = h('button', { class: 'btn small', type: 'button', text: '予想の計算内訳・調整 ›' });
-  adjustBtn.addEventListener('click', () => openAdjustModal(ctx()));
-  summaryRow.appendChild(adjustBtn);
+  card.appendChild(bigWrap);
+  card.appendChild(plot);
   card.appendChild(summaryRow);
+
+  // グラフは作り直さず update() で描き替える（基準の切り替えを補間で見せるため）。
+  const chart = createChart();
+  const crossEl = h('span', { class: 'kb-cross' });
+  const chartWrap = h('div', { class: 'kb-chart' }, chart.el,
+    h('div', { class: 'kb-chart-foot' },
+      h('div', { class: 'kb-chart-legend' },
+        h('span', {}, h('i', { class: 'ln' }), '実績'),
+        h('span', {}, h('i', { class: 'ln pred' }), '予想')),
+      crossEl));
+  plot.appendChild(chartWrap);
+
+  const items = h('div', { class: 'kb-summary-items' });
+  const adjustBtn = h('button', {
+    class: 'btn small',
+    type: 'button',
+    text: '内訳・調整 ›',
+    'aria-label': '予想の計算内訳・調整 ›',
+  });
+  adjustBtn.addEventListener('click', () => openAdjustModal(ctx()));
+  summaryRow.appendChild(items);
+  summaryRow.appendChild(adjustBtn);
+
+  function draw(basis, animate) {
+    kbState.basis = basis;
+    clear(bigWrap);
+    const v = basisView(data, basis);
+    const currentDailyAvg = basis === 'recent' ? landing.recent.dailyAverageYen : summary.dailyAverageYen;
+
+    const big = h('div', { class: 'kb-big sm' },
+      h('span', { class: 'cur', text: '¥' }),
+      h('span', { class: 'n kb-amt', text: v.landingYen.toLocaleString('ja-JP') }));
+    if (v.overYen > 0) big.appendChild(h('span', { class: 'kb-over', text: `▲ ${fmtYen(v.overYen)} 超過` }));
+    bigWrap.appendChild(big);
+    bigWrap.appendChild(renderBasisToggle(basis, (next) => draw(next, true)));
+
+    clear(items);
+    items.append(
+      h('span', {}, '1日ペース: ', h('b', { text: fmtYen(currentDailyAvg) })),
+      h('span', {}, '特別費: ', h('b', { text: fmtYen(summary.specialYen) })),
+      h('span', {}, '予定出費: ', h('b', { text: fmtYen(summary.plannedYen) })),
+      h('span', {}, '固定費: ', h('b', { text: fmtYen(summary.fixedYen) })),
+    );
+
+    chart.update({
+      seriesAll: data.series, seriesRecent: landing.recent.series,
+      avgAll: summary.dailyAverageYen, avgRecent: landing.recent.dailyAverageYen,
+      crossAll: landing.crossDayKey, crossRecent: landing.recent.crossDayKey,
+      capYen: landing.capYen, fixedYen: landing.fixedYen, basis,
+    }, { animate });
+
+    clear(crossEl);
+    if (v.crossDayKey) crossEl.append(h('b', { text: fmtDayShort(v.crossDayKey) }), ' に上限超過ペース');
+  }
+
+  draw(kbState.basis, false);
   body.appendChild(card);
 
   const row2 = h('div', { class: 'kb-row2' });
@@ -176,8 +238,7 @@ function renderWasteCard(w) {
   const card = h('div', { class: 'kb-waste' });
   card.appendChild(h('div', { class: 'kb-head', style: { marginBottom: '2px' } }, h('span', { class: 't', text: '今月の「無駄遣い」' })));
   card.appendChild(h('div', { class: 'kb-big sm' },
-    h('span', { class: 'cur', text: '¥' }), h('span', { class: 'n kb-amt', text: w.totalYen.toLocaleString('ja-JP') }),
-    h('span', { class: 'muted', style: { fontSize: '12.5px' }, text: `変動費の ${w.ratioPct}%` })));
+    h('span', { class: 'cur', text: '¥' }), h('span', { class: 'n kb-amt', text: w.totalYen.toLocaleString('ja-JP') })));
   const pctOfCap = w.capYen > 0 ? Math.min(100, (w.totalYen / w.capYen) * 100) : 0;
   const gauge = h('div', { class: 'kb-gauge' });
   if (w.totalYen > w.capYen) gauge.appendChild(h('i', { class: 'over', style: { width: '100%' } }));
@@ -193,11 +254,6 @@ function renderWasteCard(w) {
       h('span', { class: 'v', text: fmtYen(r.amountYen) })));
   }
   card.appendChild(rowsWrap);
-  if (w.effect && w.effect.reducibleYen > 0) {
-    card.appendChild(h('p', { style: { marginTop: '12px', fontSize: '12.5px', color: '#7a2f27' } },
-      '上限ぶん ', h('b', { text: fmtYen(w.effect.reducibleYen) }), ' を抑えると月末の超過が ',
-      h('b', { text: fmtYen(w.effect.overNowYen) }), ' → ', h('b', { text: fmtYen(w.effect.overAfterYen) }), '。'));
-  }
   return card;
 }
 

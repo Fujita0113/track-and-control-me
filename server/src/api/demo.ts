@@ -44,7 +44,7 @@ import {
 import { listEntries } from '../services/kakeibo.js';
 import { getBudget, listFixedCosts, listPlannedExpenses, budgetDerived } from '../services/kakeibo-budget.js';
 import { forecastMonth, listAdjustRows, weeklyRemaining, wasteSummary, wasteReductionEffect } from '../services/kakeibo-forecast.js';
-import { importanceBreakdown, categoryTree } from '../services/kakeibo-analysis.js';
+import { importanceBreakdown, categoryTree, weeklyBreakdown } from '../services/kakeibo-analysis.js';
 
 import { filterForDisplay } from '../rules/evaluate.js';
 
@@ -344,6 +344,7 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
         overYen: f.overYen,
         crossDayKey: f.crossDayKey,
         fixedYen: f.fixedYen,
+        recent: f.recent,
       },
       summary: {
         dailyAverageYen: f.dailyAverageYen,
@@ -372,7 +373,11 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
 
   app.get('/api/demo/kakeibo/analysis', async () => {
     const db = getDemoDb();
-    return { importance: importanceBreakdown(db, DEMO_KAKEIBO_MONTH), tree: categoryTree(db, DEMO_KAKEIBO_MONTH) };
+    return {
+      importance: importanceBreakdown(db, DEMO_KAKEIBO_MONTH),
+      tree: categoryTree(db, DEMO_KAKEIBO_MONTH),
+      weeks: weeklyBreakdown(db, DEMO_KAKEIBO_MONTH, DEMO_KAKEIBO_TODAY),
+    };
   });
 
   app.get('/api/demo/kakeibo/budget', async () => {
