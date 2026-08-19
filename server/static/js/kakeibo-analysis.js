@@ -32,7 +32,40 @@ export async function showAnalysisView(body, kctx) {
   body.appendChild(h('div', { class: 'section-head' }, h('h2', { text: monthLabel(kctx.month) }), h('div', { class: 'row' }, ...monthNav(kctx))));
 
   body.appendChild(renderImportanceCard(data.importance));
+  body.appendChild(renderWeeklyCard(data.weeks));
   body.appendChild(renderTreeCard(data.tree, kctx));
+}
+
+/** 週ごとの支出（design: kakeibo-recent-forecast decision 3）。月をまたぐ部分週・進行中の週が分かる棒グラフ。 */
+function renderWeeklyCard(weeks) {
+  const card = h('div', { class: 'kb-card', style: { marginBottom: '16px' } });
+  card.appendChild(h('div', { class: 'kb-head', style: { marginBottom: '10px' } },
+    h('span', { class: 't', text: '週ごとの支出' }),
+    h('span', { class: 'kb-meta', text: '月曜始まり · 基準線は週の目標' })));
+  if (!weeks || weeks.length === 0) {
+    card.appendChild(emptyState('この月の記録はまだありません'));
+    return card;
+  }
+  const maxV = Math.max(...weeks.map((w) => Math.max(w.spentYen, w.targetYen)), 1);
+  const list = h('div', { class: 'kb-weekly' });
+  for (const w of weeks) {
+    const pct = Math.min(100, (w.spentYen / maxV) * 100);
+    const targetPct = Math.min(100, (w.targetYen / maxV) * 100);
+    const over = w.spentYen > w.targetYen;
+    const row = h('div', { class: `kb-weekly-row${w.inProgress ? ' inprogress' : ''}` });
+    row.appendChild(h('div', { class: 'kb-weekly-lbl' },
+      h('span', { text: `${fmtMD(w.weekFromDayKey)}–${fmtMD(w.weekToDayKey)}` }),
+      w.isPartial ? h('span', { class: 'kb-meta', text: ' 部分週' }) : null,
+      w.inProgress ? h('span', { class: 'kb-meta', text: ' 進行中' }) : null));
+    row.appendChild(h('div', { class: 'kb-weekly-track' },
+      h('i', { class: `kb-weekly-fill${over ? ' over' : ''}`, style: { width: `${pct}%` } }),
+      h('i', { class: 'kb-weekly-target', style: { left: `${targetPct}%` } })));
+    row.appendChild(h('span', { class: 'v', text: fmtYen(w.spentYen) }));
+    list.appendChild(row);
+  }
+  card.appendChild(list);
+  card.appendChild(h('div', { class: 'kb-stack-foot' }, h('span', {}, '週の目標 ', h('b', { text: fmtYen(weeks[0].targetYen) }))));
+  return card;
 }
 
 function renderImportanceCard(imp) {

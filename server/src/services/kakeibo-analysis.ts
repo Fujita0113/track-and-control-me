@@ -1,5 +1,8 @@
 import type { DB } from '../db/index.js';
+import { addDaysKey } from './day-key.js';
 import { listEntries, type KakeiboEntryRow } from './kakeibo.js';
+import { budgetDerived } from './kakeibo-budget.js';
+import { monthOf } from './kakeibo-shared.js';
 
 /**
  * 分析（spec: kakeibo-analysis・design D7・D10）。
@@ -142,4 +145,62 @@ export function categoryTree(db: DB, monthKey: string): CategoryTreeRow[] {
   }
 
   return tree;
+}
+
+export interface WeeklyBreakdownRow {
+  weekFromDayKey: string;
+  weekToDayKey: string;
+  spentYen: number;
+  targetYen: number;
+  isPartial: boolean;
+  inProgress: boolean;
+}
+
+/** 月曜始まりの週の月曜日（design: kakeibo-recent-forecast decision 3）。 */
+function mondayOf(dayKey: string): string {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const date = new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1));
+  const sinceMonday = (date.getUTCDay() + 6) % 7;
+  return addDaysKey(dayKey, -sinceMonday);
+}
+
+/**
+ * 分析タブの「週ごとの支出」（design: kakeibo-recent-forecast decision 3）。
+ * `forecastMonth` の直近7日ローリング窓とは別物: ここは月境界をまたがず、月をまたぐ週は
+ * その月に属する日数分だけの部分週として返す。
+ */
+export function weeklyBreakdown(db: DB, monthKey: string, todayDayKey: string): WeeklyBreakdownRow[] {
+  const [y, m] = monthKey.split('-').map(Number);
+  const year = y ?? 0;
+  const month = m ?? 1;
+  const firstDayKey = `${monthKey}-01`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const lastDayKey = `${monthKey}-${String(lastDay).padStart(2, '0')}`;
+
+  const targetYen = budgetDerived(db, monthKey).weeklyTargetYen;
+  const isCurrentMonth = monthOf(todayDayKey) === monthKey;
+
+  const weeks: WeeklyBreakdownRow[] = [];
+  let naturalFrom = mondayOf(firstDayKey);
+  while (naturalFrom <= lastDayKey) {
+    const naturalTo = addDaysKey(naturalFrom, 6);
+    const weekFromDayKey = naturalFrom < firstDayKey ? firstDayKey : naturalFrom;
+    const weekToDayKey = naturalTo > lastDayKey ? lastDayKey : naturalTo;
+
+    if (weekFromDayKey > todayDayKey) break;
+
+    const isPartial = weekFromDayKey !== naturalFrom || weekToDayKey !== naturalTo;
+    const inProgress = isCurrentMonth && todayDayKey >= weekFromDayKey && todayDayKey <= weekToDayKey;
+    const spentYen = (
+      db.prepare('SELECT COALESCE(SUM(amount_yen), 0) AS s FROM kakeibo_entry WHERE day_key BETWEEN ? AND ?').get(
+        weekFromDayKey,
+        weekToDayKey,
+      ) as { s: number }
+    ).s;
+
+    weeks.push({ weekFromDayKey, weekToDayKey, spentYen, targetYen, isPartial, inProgress });
+    naturalFrom = addDaysKey(naturalFrom, 7);
+  }
+
+  return weeks;
 }

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type DB } from '../db/index.js';
 import { createEntry, createBulkEntry } from './kakeibo.js';
-import { importanceBreakdown, categoryTree } from './kakeibo-analysis.js';
+import { setBudget, upsertFixedCost } from './kakeibo-budget.js';
+import { importanceBreakdown, categoryTree, weeklyBreakdown } from './kakeibo-analysis.js';
 
 /**
  * 分析（spec: kakeibo-analysis）。
@@ -110,5 +111,69 @@ describe('カテゴリ → 名称 → 明細（kakeibo-analysis）', () => {
     for (const c of tree) {
       expect(c.names.reduce((a, n) => a + n.amountYen, 0)).toBe(c.amountYen);
     }
+  });
+});
+
+describe('週ごとの支出（issue #105・change: kakeibo-recent-forecast）', () => {
+  // 2026年8月は8/1が土曜始まり。月曜始まりの週に割ると 8/1–8/2（前月からの部分週）・
+  // 8/3–8/9（フル）・8/10–8/16（今日 8/11 を含む進行中の週）・8/17–8/23…（まだ始まっていない）。
+  const TODAY = '2026-08-11';
+
+  beforeEach(() => {
+    setBudget(db, MONTH, { capYen: 62_000, wasteCapYen: 4_000 });
+    upsertFixedCost(db, MONTH, { name: '電気代', amountYen: 8_500 });
+    upsertFixedCost(db, MONTH, { name: 'ガス代', amountYen: 3_000 });
+    upsertFixedCost(db, MONTH, { name: '通信費', amountYen: 4_400 });
+    upsertFixedCost(db, MONTH, { name: 'サブスク', amountYen: 1_480 });
+    // 週の目標 = floor10((62,000 − 17,380) ÷ 31 × 7) = 10,070（design D7 / kakeibo-forecast.test.ts と同じ値）。
+  });
+
+  it('月曜始まりの週ごとに、月内の日数分だけ集計する（月をまたぐ部分週）', () => {
+    const weeks = weeklyBreakdown(db, MONTH, TODAY);
+    expect(weeks[0]).toMatchObject({
+      weekFromDayKey: '2026-08-01',
+      weekToDayKey: '2026-08-02',
+      spentYen: 9_450, // 8/01 4,200 + 8/02 5,250（1,850 + まとめ登録 3,400）
+      isPartial: true,
+      inProgress: false,
+    });
+  });
+
+  it('フルの週はそのまま7日ぶんの合計になる', () => {
+    const weeks = weeklyBreakdown(db, MONTH, TODAY);
+    expect(weeks[1]).toMatchObject({
+      weekFromDayKey: '2026-08-03',
+      weekToDayKey: '2026-08-09',
+      spentYen: 11_300, // 8/06 2,600 + 8/07 3,480 + 8/08 820 + 8/09 4,400（一蘭 + 歯医者）
+      isPartial: false,
+      inProgress: false,
+    });
+  });
+
+  it('今日を含む週は進行中と分かる', () => {
+    const weeks = weeklyBreakdown(db, MONTH, TODAY);
+    expect(weeks[2]).toMatchObject({
+      weekFromDayKey: '2026-08-10',
+      weekToDayKey: '2026-08-16',
+      spentYen: 1_900, // 8/10 1,280 + 8/11 620（8/12以降はまだ無い）
+      inProgress: true,
+    });
+  });
+
+  it('まだ始まっていない週は含まれない', () => {
+    const weeks = weeklyBreakdown(db, MONTH, TODAY);
+    expect(weeks).toHaveLength(3); // 8/17〜以降の週はまだ始まっていないので出ない
+  });
+
+  it('週の目標を横断する基準線ぶんの値を各週が持つ', () => {
+    const weeks = weeklyBreakdown(db, MONTH, TODAY);
+    for (const w of weeks) expect(w.targetYen).toBe(10_070);
+  });
+
+  it('過去の月（今日を含まない）は、進行中の週も無く、その月の全週が出る', () => {
+    // 7月は 8/11 という「今日」を含まないため、全週が完了扱いになる。
+    const weeks = weeklyBreakdown(db, '2026-07', TODAY);
+    expect(weeks.every((w) => w.inProgress === false)).toBe(true);
+    expect(weeks.length).toBeGreaterThan(0);
   });
 });

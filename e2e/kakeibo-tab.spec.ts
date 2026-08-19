@@ -66,10 +66,10 @@ test.describe.serial('家計簿タブ', () => {
     await page.getByRole('button', { name: 'あとで' }).click({ timeout: 3000 }).catch(() => {});
     await gotoKakeibo(page);
 
-    const landing = page.locator('.kb-card', { hasText: '今月の支出推移と月末予想' }).locator('.kb-big.sm .n');
-    const summary = page.locator('.kb-summary-items');
+    const forecastCard = page.locator('.kb-card', { hasText: '今月の支出推移と月末予想' });
+    const landing = forecastCard.locator('.kb-big.sm .n');
     const beforeLanding = parseYen((await landing.textContent()) || '');
-    const beforeSummary = (await summary.textContent()) || '';
+    const beforeSummary = (await forecastCard.textContent()) || '';
 
     await page.fill('input[aria-label="金額"]', '31000');
     await page.fill('.kb-name-input', 'E2E記録テスト');
@@ -78,12 +78,12 @@ test.describe.serial('家計簿タブ', () => {
 
     await gotoKakeibo(page); // ビューを開き直して最新の値を取得する
     const afterLanding = parseYen((await landing.textContent()) || '');
-    const afterSummary = (await summary.textContent()) || '';
+    const afterSummary = (await forecastCard.textContent()) || '';
     expect(afterLanding).toBeGreaterThan(beforeLanding);
     expect(afterSummary).not.toBe(beforeSummary);
 
-    // 折れ線（SVG）が描かれている。
-    await expect(page.locator('.kb-chart svg')).toBeVisible();
+    // 折れ線（Canvas）が描かれている。
+    await expect(page.locator('.kb-chart canvas')).toBeVisible();
   });
 
   test('履歴の行で「特別費（除外）」を選ぶ → 1日平均が下がり、月末予想と上限超過日が変わる', async ({ page, request }) => {
@@ -111,7 +111,9 @@ test.describe.serial('家計簿タブ', () => {
     expect(after.landing.landingYen).toBeLessThan(before.landing.landingYen);
 
     await gotoKakeibo(page); // ホームでも新しい値になっていることを見る
-    await expect(page.locator('.kb-summary-items')).toContainText(`¥${after.summary.dailyAverageYen.toLocaleString('ja-JP')}`);
+    await expect(page.locator('.kb-card', { hasText: '今月の支出推移と月末予想' })).toContainText(
+      `¥${after.summary.dailyAverageYen.toLocaleString('ja-JP')}`,
+    );
   });
 
   test('ホームの「予想の計算内訳・調整」で切り替える → 4つの数字が同時に出し直され、キャンセルでは保存されていない', async ({ page, request }) => {

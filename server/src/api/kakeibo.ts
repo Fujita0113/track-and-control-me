@@ -36,7 +36,7 @@ import {
   wasteSummary,
   wasteReductionEffect,
 } from '../services/kakeibo-forecast.js';
-import { importanceBreakdown, categoryTree } from '../services/kakeibo-analysis.js';
+import { importanceBreakdown, categoryTree, weeklyBreakdown } from '../services/kakeibo-analysis.js';
 
 /** 家計簿 API（design D14「画面1つにつきエンドポイント1つ」・spec: kakeibo-*）。 */
 export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void {
@@ -74,6 +74,7 @@ export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void
         overYen: f.overYen,
         crossDayKey: f.crossDayKey,
         fixedYen: f.fixedYen,
+        recent: f.recent,
       },
       summary: {
         dailyAverageYen: f.dailyAverageYen,
@@ -94,7 +95,11 @@ export function registerKakeiboRoutes(app: FastifyInstance, deps: ApiDeps): void
 
   app.get('/api/kakeibo/analysis', async (req) => {
     const month = monthParam(req);
-    return { importance: importanceBreakdown(db, month), tree: categoryTree(db, month) };
+    return {
+      importance: importanceBreakdown(db, month),
+      tree: categoryTree(db, month),
+      weeks: weeklyBreakdown(db, month, todayKey(db)),
+    };
   });
 
   app.get('/api/kakeibo/budget', async (req) => {
