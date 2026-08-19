@@ -7,7 +7,7 @@ import { thirtyDayEnd } from './goal-input.js';
  * `ユーザーフロー.md` の背骨を1本で踏む:
  *   振り返りタブの目標コーナーでルール（📷単発・💬範囲）を足す
  *   → 今日タブで不足条件に出る＆パスワードが出ない
- *   → その場で写真・答えを出す → ゲートが開く → 目標タブでレポートプレビュー → ⑤沿革に載る
+ *   → その場で写真・答えを出す → ゲートが開く
  *
  * ★日付を跨ぐ挙動（単発の繰り越し・範囲の非繰り越し・未到来）はここでは扱わない。
  * 実時刻に依存せず1日で完結する筋だけを踏む（日付が絡む挙動は
@@ -151,27 +151,6 @@ test('ルールを足す → 今日タブで詰まり → 写真で開き → �
   // 達成したのでパスワードが表示できる状態になる（生成コマンドは走らせない）。
   await expect(page.locator('.card', { hasText: 'パスワード' })).toContainText('達成済み');
 
-  // --- 4. 目標タブ: 走行中プレビュー → ⑤沿革に載っている ----------------------
-  await page.locator('#tabs button[data-target="goals"]').click();
-  const card = page.locator('.gr-goal-card', { hasText: GOAL_NAME });
-  // 進行中の導線は「レポートプレビュー」（完走後は「レポートを開く」）。
-  await card.getByRole('button', { name: 'レポートプレビュー' }).click();
-
-  const chronicle = page.locator('.gr-card', { hasText: '⑤ 沿革' });
-  await expect(chronicle).toBeVisible();
-  // ルール追加が理由つきの年表として並ぶ（Plan の入れ子ではなく rule_change の時系列）。
-  await expect(chronicle).toContainText(CAPTION);
-  await expect(chronicle).toContainText(PHOTO_REASON);
-  await expect(chronicle.locator('.gr-chr-plate-img')).toHaveCount(1); // 提出した写真が図版として載る。
-  // 質問は Q&A としてぶら下がる。
-  await expect(chronicle).toContainText(QUESTION);
-  await expect(chronicle.locator('.gr-chr-qa p')).toContainText('泡立ちは良い');
-
-  // 走行中プレビューでは最終日写真の CTA を出さない（最終日がまだ来ていない）。
-  await expect(page.locator('.gr-report')).not.toContainText('最終日の写真を追加');
-  // ①カレンダーは Day1 の3ルールだけが埋まり、Day2 以降は未到来／対象外＝空白。
-  // 凡例のスウォッチも .gr-cell を使うのでグリッド内に絞って数える。
-  await expect(page.locator('.gr-cal .gr-cell.done')).toHaveCount(3);
-  await expect(page.locator('.gr-cal .gr-cell.miss')).toHaveCount(0); // 未到来を未達成マスにしない。
-  await expect(page.locator('.gr-cal .gr-cell.future')).toHaveCount(87); // 3ルール × 残り29日。
+  // レポート画面（goal-report）は廃止されたため、⑤沿革・①カレンダーの検証はここには無い。
+  // ゲートが開くまでが、この spec の担当範囲（spec: goal-check-gate）。
 });

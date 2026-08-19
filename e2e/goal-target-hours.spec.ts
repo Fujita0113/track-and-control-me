@@ -10,6 +10,8 @@ import { addDaysKey } from './goal-input.js';
  *   → めざした状態「できなかった」＋写真＋理由で終える
  *   → 大きい沿革の行に3つ（到達判定・答え・Before→After）が並ぶ
  *
+ * 行から先の遷移（旧: レポート）は goal-report 廃止に伴い削除。見通しへの遷移は apply が新規 e2e で覆う。
+ *
  * インメモリ DB（本番非干渉）・実時刻に依存せず1日で完結する筋だけを踏む。
  */
 
@@ -103,9 +105,4 @@ test('目標時間つきで作成 → カードにペース → 理由つきで�
   // ③ 証拠写真（Before→After）。
   await expect(endedRow.locator('.gr-fig-cap', { hasText: 'Before' })).toBeVisible();
   await expect(endedRow.locator('.gr-fig-cap', { hasText: 'After' })).toBeVisible();
-
-  // 行をクリックするとレポートへ飛べる。
-  await endedRow.click();
-  await expect(page.locator('.gr-report')).toBeVisible();
-  await expect(page.locator('.gr-h1')).toContainText(GOAL_NAME);
 });
