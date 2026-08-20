@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>進捗グラフ — デザインモック</title>
+<style>
+  :root{
+    --bg:#f4f6fa; --panel:#ffffff; --panel-2:#f8fafc; --line:#e3e8ef; --line-2:#eef2f7;
+    --text:#1b2733; --muted:#66727f; --muted-2:#91a0b0;
+    --accent:#1a73e8; --accent-weak:#e8f0fe;
+    --ok:#188038; --ok-weak:#e6f4ea;
+    --warn:#b06000; --warn-weak:#fef7e0;
+    --err:#d93025; --err-weak:#fce8e6;
+    --radius:12px;
+    --shadow:0 1px 3px rgba(20,33,51,.08), 0 1px 2px rgba(20,33,51,.04);
+    --shadow-lg:0 10px 30px rgba(20,33,51,.18);
+    --font:-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic UI",Meiryo,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:var(--font);color:var(--text);background:var(--bg);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;}
+  .mockstrip{background:#20263a;color:#aab3c8;font-size:11.5px;letter-spacing:.04em;padding:6px 24px;text-align:center;}
+  .mockstrip b{color:#e7ebf5;font-weight:600;}
+  .page{max-width:920px;margin:0 auto;padding:28px 20px 64px;}
+
+  h1,h2,h3,h4{margin:0;font-weight:650;}
+  p{margin:0;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);}
+
+  /* ---- 目標カード（既存 goalCard を再現。導線数は変えず「レポートプレビュー」→「進捗グラフ」に差し替え） ---- */
+  .goalcard{padding:16px 18px;margin-bottom:18px;}
+  .gc-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .gc-row h3{font-size:16px;}
+  .badge{display:inline-flex;align-items:center;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--panel-2);color:var(--muted);border:1px solid var(--line);}
+  .badge.accent{background:var(--accent-weak);color:var(--accent);border-color:transparent;}
+  .spacer{flex:1;}
+  .btn{font-family:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;}
+  .btn.small{padding:5px 11px;font-size:12px;}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .gc-purpose{color:var(--muted);font-size:12.5px;margin-top:10px;}
+  .gc-purpose strong{color:var(--text);font-weight:600;}
+  .gc-period{color:var(--muted-2);font-size:12px;margin-top:3px;}
+  .gc-forecast{
+    margin-top:12px; padding:9px 12px; background:var(--panel-2); border:1px solid var(--line-2); border-radius:9px;
+    display:flex; align-items:baseline; gap:16px; font-size:12.5px; color:var(--muted);
+  }
+  .gc-forecast b{color:var(--text); font-weight:650;}
+  .gc-forecast .fc-avg-dot,.gc-forecast .fc-recent-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;}
+  .gc-forecast .fc-avg-dot{background:var(--muted-2);}
+  .gc-forecast .fc-recent-dot{background:var(--accent);}
+
+  /* ---- 進捗グラフ本体 ---- */
+  .burnup{padding:22px 24px 26px;}
+  .bu-eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.06em;color:var(--muted-2);text-transform:uppercase;}
+  .bu-title{font-size:20px;margin-top:3px;}
+  .bu-target{color:var(--muted);font-size:12.5px;margin-top:4px;}
+
+  .bu-hero2{display:flex;align-items:center;justify-content:space-between;gap:20px;margin:18px 0 4px;flex-wrap:wrap;}
+  .fc-big{display:flex;align-items:baseline;gap:9px;}
+  .fc-big .fc-date-big{font-size:44px;font-weight:750;letter-spacing:-.01em;color:var(--text);line-height:1;}
+  .fc-big .fc-suffix{font-size:13px;color:var(--muted);}
+
+  .pace-toggle{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px;background:var(--panel-2);flex:none;}
+  .pace-toggle button{font-family:inherit;font-size:12.5px;font-weight:650;border:none;background:transparent;color:var(--muted);padding:8px 15px;border-radius:999px;cursor:pointer;}
+  .pace-toggle button.active{background:var(--accent);color:#fff;}
+
+  .bu-viewbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:16px;padding-top:12px;border-top:1px solid var(--line-2);font-size:12px;color:var(--muted);}
+
+  svg#chart{width:100%;height:auto;display:block;margin-top:4px;}
+  .ax-label{font-size:10.5px;fill:var(--muted-2);}
+  .grid-line{stroke:var(--line-2);stroke-width:1;}
+  .month-line{stroke:var(--line);stroke-width:1;}
+  .cum-line{fill:none;stroke:var(--accent);stroke-width:2.6;stroke-linejoin:round;stroke-linecap:round;}
+  .freeze-band{fill:#dbe6fb;opacity:.55;}
+  .freeze-label{font-size:10px;fill:#4a6fb0;font-weight:650;}
+  .today-line{stroke:var(--text);stroke-width:1.2;stroke-dasharray:1 3;opacity:.5;}
+  .today-sub{font-size:11.5px;fill:var(--text);font-weight:700;}
+  .today-hline{stroke:var(--text);stroke-width:1;stroke-dasharray:1 3;opacity:.4;}
+  .today-hlabel{font-size:10.5px;fill:var(--text);font-weight:700;}
+
+  .fc-target-guide{stroke:var(--muted-2);stroke-dasharray:2 4;stroke-width:1;opacity:.6;}
+  .fc-line{fill:none;}
+  .fc-line.strong{stroke:var(--accent);stroke-width:3;stroke-dasharray:8 5;stroke-linecap:round;}
+  .fc-line.dim{stroke:var(--accent);stroke-width:1.4;stroke-dasharray:2 4;opacity:.35;}
+  .fc-target-dot{fill:#fff;stroke:var(--accent);stroke-width:3;}
+  .fc-target-label{font-size:13px;font-weight:750;fill:var(--accent);}
+  .fc-target-sub{font-size:10.5px;fill:var(--muted);}
+  .fc-dim-label{font-size:10.5px;fill:var(--muted-2);text-anchor:middle;}
+
+  .ach-dot.branch.done{fill:var(--text);stroke:none;}
+  .ach-dot.branch.todo{fill:#fff;stroke:var(--text);stroke-width:2;cursor:pointer;}
+  .ach-dot.branch.todo:hover{stroke:var(--accent);}
+  .ach-dot.leaf{cursor:pointer;}
+  .ach-dot.leaf.done{fill:var(--text);stroke:#fff;stroke-width:1.5;}
+  .ach-dot.leaf.todo{fill:#fff;stroke:var(--text);stroke-width:1.6;cursor:pointer;}
+  .ach-dot.leaf:hover{stroke:var(--accent);}
+  .ach-label{font-size:11px;font-weight:650;fill:var(--text);}
+
+  .zoom-band{fill:transparent;cursor:zoom-in;}
+  .zoom-band:hover{fill:rgba(26,115,232,.08);}
+  .day-band{fill:transparent;cursor:pointer;}
+  .day-band:hover{fill:rgba(24,128,56,.09);}
+
+  .bu-legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:11.5px;color:var(--muted);}
+  .bu-legend span{display:inline-flex;align-items:center;gap:6px;}
+  .swatch{width:16px;height:0;border-top-width:2.5px;border-top-style:solid;display:inline-block;}
+  .swatch.dash{border-top-style:dashed;}
+  .dot-swatch{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  .dot-swatch.done{background:var(--text);}
+  .dot-swatch.todo{background:#fff;border:1.6px solid var(--text);}
+
+  .foot-note{margin-top:18px;font-size:11.5px;color:var(--muted-2);}
+
+  /* ---- モーダル（子タスクの詳細・振り返りリンク） ---- */
+  .modal-overlay{position:fixed;inset:0;background:rgba(20,26,38,.42);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;}
+  .modal-overlay[hidden]{display:none;}
+  .modal-panel{background:var(--panel);border-radius:14px;box-shadow:var(--shadow-lg);padding:22px 24px;max-width:320px;width:100%;position:relative;}
+  .modal-close{position:absolute;top:10px;right:12px;border:none;background:transparent;font-size:19px;color:var(--muted-2);cursor:pointer;line-height:1;padding:4px;}
+  .modal-title{font-size:14.5px;font-weight:700;margin-bottom:10px;}
+  .modal-row{font-size:12.5px;color:var(--muted);margin-top:5px;}
+  .modal-row b{color:var(--text);}
+  .modal-cta{margin-top:14px;width:100%;}
+
+  /* ---- その他の状態ギャラリー ---- */
+  .states{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px;}
+  @media (max-width:640px){.states{grid-template-columns:1fr;}}
+  .state-card{padding:16px 17px;}
+  .state-card h4{font-size:12.5px;color:var(--muted);margin-bottom:2px;}
+  .state-card .sub{font-size:11.5px;color:var(--muted-2);margin-bottom:10px;}
+  .mini-svg{width:100%;height:96px;}
+  .cap-label{font-size:10.5px;fill:var(--muted);font-weight:600;}
+  .empty-box{
+    height:96px;border:1.5px dashed var(--line);border-radius:9px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:8px;color:var(--muted-2);font-size:12px;
+  }
+  .empty-box .ghost-btn{font-size:11.5px;font-weight:650;color:var(--accent);border:1px solid var(--accent-weak);background:var(--accent-weak);padding:4px 11px;border-radius:999px;}
+</style>
+</head>
+<body>
+
+<div class="mockstrip"><b>設計モック</b> — openspec/changes/goal-burnup-forecast の proposal.md / design.md を元にした静的 HTML（実装ではありません）</div>
+
+<div class="page">
+
+  <!-- 目標カード：導線は4つのまま。「レポートプレビュー」の位置が「進捗グラフ」になる -->
+  <section class="card goalcard">
+    <div class="gc-row">
+      <h3>アルゴリズム特訓</h3>
+      <span class="badge accent">Day 111/214</span>
+      <div class="spacer"></div>
+      <button class="btn small primary">進捗グラフ</button>
+      <button class="btn small">タスク一覧</button>
+      <button class="btn small">終える</button>
+    </div>
+    <p class="gc-purpose"><strong>めざす状態: </strong>週5回、AtCoder 系の演習を淡々と回せている状態</p>
+    <div class="gc-period">2026-05-01 〜 2026-11-30</div>
+    <div class="gc-forecast" id="gc-forecast"></div>
+  </section>
+
+  <!-- 進捗グラフ本体 -->
+  <section class="card burnup">
+    <div class="bu-eyebrow">進捗グラフ</div>
+    <h2 class="bu-title">アルゴリズム特訓</h2>
+    <p class="bu-target">計測対象: 目標時間「アルゴリズム」2h/日</p>
+
+    <div class="bu-hero2">
+      <div class="fc-big"><span class="fc-date-big" id="fc-date-big"></span><span class="fc-suffix">完了見込み</span></div>
+      <div class="pace-toggle" role="group" aria-label="予測ペースの切り替え">
+        <button type="button" class="active" data-pace="avg">全体平均ペース</button>
+        <button type="button" data-pace="recent">直近3日ペース</button>
+      </div>
+    </div>
+
+    <div class="bu-viewbar">
+      <span id="bu-view-label"></span>
+      <button type="button" id="bu-reset" class="btn small" hidden>← 全期間に戻す</button>
+    </div>
+
+    <svg id="chart" viewBox="0 0 960 460" role="img" aria-label="累積作業時間の推移とタスク達成の記録">
+      <!-- JS で描画 -->
+    </svg>
+    <div class="bu-legend">
+      <span><i class="swatch" style="border-color:var(--accent)"></i>累積作業時間（実測）</span>
+      <span><i class="dot-swatch done"></i>完了タスク（クリックで詳細）</span>
+      <span><i class="dot-swatch todo"></i>進行中の枝（クリックで内訳）</span>
+      <span><i class="swatch dash" style="border-color:var(--accent)"></i>選んだペースの完了予想</span>
+    </div>
+
+    <p class="foot-note">凍結中（7/10〜7/16）は実測 0h の日として暦どおり数える。月の帯をクリックすると期間を絞り込め、日付が見える範囲まで拡大すると、その日をクリックして振り返りへ移動できる。</p>
+  </section>
+
+  <!-- その他の状態 -->
+  <section class="states">
+    <div class="card state-card">
+      <h4>完走後・終了後</h4>
+      <div class="sub">累積線とタスク達成の記録は残る。グラフの見方は進行中と変わらない</div>
+      <svg class="mini-svg" viewBox="0 0 300 96">
+        <line x1="14" y1="82" x2="286" y2="82" stroke="#e3e8ef" stroke-width="1"/>
+        <path d="M14,80 L60,74 L100,60 L140,48 L180,34 L220,22 L260,16 L286,14" fill="none" stroke="#1a73e8" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="140" cy="48" r="4" fill="#1b2733"/>
+        <circle cx="220" cy="22" r="4" fill="#1b2733"/>
+        <circle cx="286" cy="14" r="5" fill="#1b2733"/>
+        <text x="250" y="8" class="cap-label" style="fill:#66727f">完走</text>
+      </svg>
+    </div>
+    <div class="card state-card">
+      <h4>計測対象が未設定</h4>
+      <div class="sub">目標時間も時間型ルールも無いとき。構成は変えず、中身だけ空状態にする</div>
+      <div class="empty-box">
+        <span>まだ何で測るか決まっていません</span>
+        <span class="ghost-btn">対象を決める</span>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="modal-overlay" id="modal-overlay" hidden>
+  <div class="modal-panel">
+    <button class="modal-close" id="modal-close" type="button" aria-label="閉じる">×</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var START='2026-05-01', END='2026-11-10', TODAY='2026-08-19';
+  var DAY=86400000;
+  function dOf(s){ return new Date(s+'T00:00:00Z').getTime(); }
+  function dayOffset(base,s){ return (dOf(s)-dOf(base))/DAY; }
+  function addDays(s,n){ return new Date(dOf(s)+n*DAY).toISOString().slice(0,10); }
+  function fmt(s){ var p=s.split('-'); return (+p[1])+'/'+(+p[2]); }
+  function fmtLong(s){ var p=s.split('-'); return (+p[1])+'月'+(+p[2])+'日'; }
+  function maxStr(a,b){ return a>b?a:b; }
+  function minStr(a,b){ return a<b?a:b; }
+  function pad(n){ return n<10?'0'+n:''+n; }
+  function daysInMonth(y,m){ return new Date(Date.UTC(y,m,0)).getUTCDate(); }
+
+  var W=960, H=460, ML=52, MR=20, MT=22, MB=38;
+  var PW=W-ML-MR, PH=H-MT-MB;
+  var yMax=170;
+
+  var CUM=[
+    ['2026-05-01',0],['2026-05-07',4],['2026-05-14',9],['2026-05-21',13],['2026-05-28',19],
+    ['2026-06-04',25],['2026-06-11',30],['2026-06-14',32],['2026-06-18',36],['2026-06-25',42],
+    ['2026-07-02',48],['2026-07-09',53],['2026-07-10',53],['2026-07-16',53],['2026-07-17',53],
+    ['2026-07-22',58],['2026-07-25',63],['2026-07-29',68],['2026-08-05',75],['2026-08-12',80],
+    ['2026-08-16',84],['2026-08-17',87],['2026-08-18',91],['2026-08-19',96]
+  ];
+  function cumAt(s){
+    var t=dOf(s);
+    if (t<=dOf(CUM[0][0])) return CUM[0][1];
+    if (t>=dOf(TODAY)) return CUM[CUM.length-1][1];
+    for (var i=0;i<CUM.length-1;i++){
+      var d0=dOf(CUM[i][0]), d1=dOf(CUM[i+1][0]);
+      if (t>=d0 && t<=d1){
+        var f=d1>d0 ? (t-d0)/(d1-d0) : 0;
+        return CUM[i][1] + (CUM[i+1][1]-CUM[i][1])*f;
+      }
+    }
+    return CUM[CUM.length-1][1];
+  }
+  var TODAY_H = cumAt(TODAY);
+
+  // 根直下の枝（親タスク）。完了した枝は黒丸＋注釈、走行中の枝は白丸＋注釈
+  var BRANCHES=[
+    {name:'基礎30問', done:true, date:'2026-06-05'},
+    {name:'過去問セットA', done:true, date:'2026-07-09'},
+    {name:'過去問セットB', done:false, date:TODAY}
+  ];
+  // 走行中の枝（過去問セットB）の葉。完了は実日付に黒丸、未完了は今日の位置にまとめて白丸。どちらもクリックでモーダル
+  var LEAVES=[
+    {name:'過去問30-40', branch:'過去問セットB', done:true, date:'2026-07-22'},
+    {name:'過去問41-50', branch:'過去問セットB', done:true, date:'2026-08-05'},
+    {name:'過去問51-60', branch:'過去問セットB', done:true, date:'2026-08-16'},
+    {name:'過去問51-60_復習', branch:'過去問セットB', done:true, date:'2026-08-16'},
+    {name:'過去問61-70', branch:'過去問セットB', done:false, progress:0.6},
+    {name:'過去問71-80', branch:'過去問セットB', done:false, progress:0}
+  ];
+
+  var svg=document.getElementById('chart');
+  var NS='http://www.w3.org/2000/svg';
+  function el(tag, attrs){
+    var e=document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+  function clearSvg(){ while (svg.firstChild) svg.removeChild(svg.firstChild); }
+
+  var view={start:START, end:END};
+
+  function X(s){ var total=dayOffset(view.start,view.end); return ML + dayOffset(view.start,s)/total*PW; }
+  function Y(h){ return MT + PH - (h/yMax)*PH; }
+  function spanDays(){ return dayOffset(view.start,view.end); }
+  function isMonthMode(){ return spanDays() > 40; }
+
+  function monthsIn(s,e){
+    var sp=s.split('-').map(Number), ep=e.split('-').map(Number);
+    var y=sp[0], m=sp[1];
+    var out=[];
+    while (y<ep[0] || (y===ep[0] && m<=ep[1])){
+      var first=y+'-'+pad(m)+'-01';
+      var last=y+'-'+pad(m)+'-'+pad(daysInMonth(y,m));
+      out.push({
+        first:first, last:last,
+        clipStart:maxStr(first,s), clipEnd:minStr(last,e),
+        label:m+'月'
+      });
+      m++; if (m>12){ m=1; y++; }
+    }
+    return out;
+  }
+  function daysIn(s,e){
+    var out=[], cur=s;
+    while (cur<=e){ out.push(cur); cur=addDays(cur,1); }
+    return out;
+  }
+
+  function setView(s,e){ view={start:s,end:e}; render(); }
+  function resetView(){ setView(START,END); }
+  function zoomedNow(){ return !(view.start===START && view.end===END); }
+
+  function render(){
+    clearSvg();
+
+    // y軸グリッド
+    [0,40,80,120,160].forEach(function(h){
+      svg.appendChild(el('line',{class:'grid-line', x1:ML, x2:W-MR, y1:Y(h), y2:Y(h)}));
+      var t=el('text',{class:'ax-label', x:ML-8, y:Y(h)+3, 'text-anchor':'end'});
+      t.textContent=h+'h'; svg.appendChild(t);
+    });
+
+    if (isMonthMode()){
+      monthsIn(view.start,view.end).forEach(function(m){
+        var x1=X(m.clipStart), x2=X(addDays(m.clipEnd,1));
+        var band=el('rect',{class:'zoom-band', x:x1, y:MT, width:Math.max(2,x2-x1), height:PH});
+        band.appendChild(el('title',{}));
+        band.lastChild.textContent=m.label+'をクリックして拡大';
+        band.addEventListener('click', function(){
+          var s=maxStr(START, addDays(m.first,-3));
+          var eDate=minStr(END, addDays(m.last,3));
+          setView(s,eDate);
+        });
+        svg.appendChild(band);
+        if (m.first>=view.start){
+          svg.appendChild(el('line',{class:'month-line', x1:X(m.first), x2:X(m.first), y1:MT, y2:H-MB}));
+        }
+        var lx=(X(m.clipStart)+X(addDays(m.clipEnd,1)))/2;
+        var lbl=el('text',{class:'ax-label', x:lx, y:H-MB+16, 'text-anchor':'middle'});
+        lbl.textContent=m.label; svg.appendChild(lbl);
+      });
+    } else {
+      var days=daysIn(view.start,view.end);
+      var labelEvery=Math.max(1, Math.round(days.length/8));
+      days.forEach(function(d,idx){
+        var x=X(d), w=X(addDays(d,1))-x;
+        var band=el('rect',{class:'day-band', x:x, y:MT, width:Math.max(1,w), height:PH});
+        var title=el('title',{}); title.textContent=fmtLong(d)+'の振り返りを開く';
+        band.appendChild(title);
+        band.addEventListener('click', function(){ openReflectionModal(d); });
+        svg.appendChild(band);
+        if (idx%labelEvery===0 || d===TODAY){
+          svg.appendChild(el('line',{class:'month-line', x1:x, x2:x, y1:MT, y2:H-MB}));
+          var lbl=el('text',{class:'ax-label', x:x+w/2, y:H-MB+16, 'text-anchor':'middle'});
+          lbl.textContent=fmt(d); svg.appendChild(lbl);
+        }
+      });
+    }
+
+    // 凍結帯（表示範囲と交差する部分だけ）
+    var fzS=maxStr('2026-07-10', view.start), fzE=minStr('2026-07-16', view.end);
+    if (fzS<=fzE){
+      var fx1=X(fzS), fx2=X(addDays(fzE,1));
+      svg.appendChild(el('rect',{class:'freeze-band', x:fx1, y:MT, width:(fx2-fx1), height:PH}));
+      var fl=el('text',{class:'freeze-label', x:(fx1+fx2)/2, y:MT+13, 'text-anchor':'middle'});
+      fl.textContent='❄ 凍結'; svg.appendChild(fl);
+    }
+
+    // 累積線（実測。今日より先は描かない）
+    var lineEnd = minStr(view.end, TODAY);
+    if (view.start<=lineEnd){
+      var pts=[[view.start, cumAt(view.start)]];
+      CUM.forEach(function(p){ if (p[0]>view.start && p[0]<lineEnd) pts.push(p); });
+      pts.push([lineEnd, cumAt(lineEnd)]);
+      var d='M'+pts.map(function(p){ return X(p[0])+','+Y(p[1]); }).join(' L');
+      svg.appendChild(el('path',{class:'cum-line', d:d}));
+    }
+
+    // 今日ライン。横軸には今日の日付、縦軸には実測時間を点線で引いて数値を出す
+    if (view.start<=TODAY && TODAY<=view.end){
+      svg.appendChild(el('line',{class:'today-line', x1:X(TODAY), x2:X(TODAY), y1:MT, y2:H-MB}));
+      var ts=el('text',{class:'today-sub', x:X(TODAY), y:H-MB+29, 'text-anchor':'middle'}); ts.textContent=fmt(TODAY); svg.appendChild(ts);
+      svg.appendChild(el('line',{class:'today-hline', x1:ML, x2:X(TODAY), y1:Y(TODAY_H), y2:Y(TODAY_H)}));
+      var th=el('text',{class:'today-hlabel', x:ML-8, y:Y(TODAY_H)+3, 'text-anchor':'end'}); th.textContent=TODAY_H+'h'; svg.appendChild(th);
+    }
+
+    // 完了予想（選んだペースは太い破線＋大きい丸、もう片方は細い点線＋小さいラベルのみ。推移は描かない）
+    if (!zoomedNow()) drawForecastLayer();
+
+    // 親タスク（枝）の達成マーカー。常に注釈つき。進行中の枝はクリックで内訳（未完了の葉はここに集約し、隣に小さい丸を並べない）
+    BRANCHES.forEach(function(b){
+      if (b.date<view.start || b.date>view.end) return;
+      var x=X(b.date), y=Y(cumAt(b.date));
+      var dot=el('circle',{class:'ach-dot branch '+(b.done?'done':'todo'), cx:x, cy:y, r:6});
+      if (!b.done){
+        var bt=el('title',{}); bt.textContent=b.name+'（進行中・クリックで内訳）'; dot.appendChild(bt);
+        dot.addEventListener('click', function(){ openBranchModal(b); });
+      }
+      svg.appendChild(dot);
+      var label=el('text',{class:'ach-label', x:x+9, y:y-9});
+      label.textContent=b.name+(b.done?'':'（進行中）');
+      svg.appendChild(label);
+    });
+
+    // 子タスク（葉）の達成マーカー。完了ぶんだけ実日付に小さく描く。同じ日に複数完了した場合は1つにまとめ、クリックでその日の一覧を出す
+    var doneByDate={};
+    LEAVES.filter(function(l){ return l.done; }).forEach(function(l){
+      (doneByDate[l.date]=doneByDate[l.date]||[]).push(l);
+    });
+    Object.keys(doneByDate).forEach(function(dt){
+      if (dt<view.start || dt>view.end) return;
+      var items=doneByDate[dt], multi=items.length>1;
+      var x=X(dt), y=Y(cumAt(dt));
+      var dot=el('circle',{class:'ach-dot leaf done', cx:x, cy:y, r:multi?5.5:4});
+      var t=el('title',{});
+      t.textContent = multi ? (fmtLong(dt)+'に'+items.length+'件完了') : (items[0].name+'（完了・'+fmtLong(dt)+'）');
+      dot.appendChild(t);
+      dot.addEventListener('click', function(){ multi ? openDayLeavesModal(dt, items) : openLeafModal(items[0]); });
+      svg.appendChild(dot);
+    });
+
+    // 表示バー
+    var zoomed=zoomedNow();
+    document.getElementById('bu-view-label').textContent = zoomed
+      ? '表示: '+fmt(view.start)+' 〜 '+fmt(view.end)
+      : '全期間（'+fmt(START)+' 〜 '+fmt(END)+'）';
+    document.getElementById('bu-reset').hidden = !zoomed;
+  }
+
+  // ---- 完了予想（グラフ描画）。選んだペースだけ強調し、もう片方は細く残す。推移(過去の予想の動き)は描かない ----
+  var selectedPace='avg';
+  function drawForecastLayer(){
+    var FC = { avg:FC_AVG, recent:FC_RECENT };
+    var RATE = { avg:PACE_AVG, recent:PACE_RECENT };
+    var sel=selectedPace, other=sel==='avg'?'recent':'avg';
+
+    // 目安の高さ（残り想定を積み終える水準）を薄い横破線で
+    svg.appendChild(el('line',{class:'fc-target-guide', x1:ML, x2:X(FC[sel].date), y1:Y(SCOPE_NOW), y2:Y(SCOPE_NOW)}));
+
+    // 選ばれていない方 — 細い点線＋小さいテキストのみ（丸は出さない）
+    var od=FC[other].date;
+    svg.appendChild(el('line',{class:'fc-line dim', x1:X(TODAY), y1:Y(TODAY_H), x2:X(od), y2:Y(SCOPE_NOW)}));
+    var mx=X(TODAY)+(X(od)-X(TODAY))*0.55, my=Y(TODAY_H)+(Y(SCOPE_NOW)-Y(TODAY_H))*0.55;
+    var dimLabel=el('text',{class:'fc-dim-label', x:mx, y:my-8});
+    dimLabel.textContent=(other==='avg'?'全体平均なら ':'直近3日なら ')+fmt(od);
+    svg.appendChild(dimLabel);
+
+    // 選ばれている方 — 太い破線＋丸＋日付ラベル＋ペース
+    svg.appendChild(el('line',{class:'fc-line strong', x1:X(TODAY), y1:Y(TODAY_H), x2:X(FC[sel].date), y2:Y(SCOPE_NOW)}));
+    svg.appendChild(el('circle',{class:'fc-target-dot', cx:X(FC[sel].date), cy:Y(SCOPE_NOW), r:7}));
+    var lbl=el('text',{class:'fc-target-label', x:X(FC[sel].date)+10, y:Y(SCOPE_NOW)-8});
+    lbl.textContent=fmtLong(FC[sel].date)+' 到達';
+    svg.appendChild(lbl);
+    var sub=el('text',{class:'fc-target-sub', x:X(FC[sel].date)+10, y:Y(SCOPE_NOW)+11});
+    sub.textContent=RATE[sel].toFixed(1)+'h/日';
+    svg.appendChild(sub);
+  }
+
+  function updateHeroText(){
+    var sel=selectedPace;
+    var FC = sel==='avg'?FC_AVG:FC_RECENT;
+    document.getElementById('fc-date-big').textContent = fmtLong(FC.date);
+    document.querySelectorAll('.pace-toggle button').forEach(function(b){
+      b.classList.toggle('active', b.dataset.pace===sel);
+    });
+  }
+
+  document.getElementById('bu-reset').addEventListener('click', resetView);
+
+  // ---- モーダル ----
+  var overlay=document.getElementById('modal-overlay');
+  var modalBody=document.getElementById('modal-body');
+  function openModal(html){ modalBody.innerHTML=html; overlay.hidden=false; }
+  function closeModal(){ overlay.hidden=true; }
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  overlay.addEventListener('click', function(e){ if (e.target===overlay) closeModal(); });
+  document.addEventListener('keydown', function(e){ if (e.key==='Escape') closeModal(); });
+
+  function openLeafModal(l){
+    var html='<div class="modal-title">'+l.name+'</div>';
+    if (l.done){
+      html += '<div class="modal-row">状態: <b>完了</b></div>';
+      html += '<div class="modal-row">完了日: <b>'+fmtLong(l.date)+'</b></div>';
+    } else {
+      html += '<div class="modal-row">状態: <b>進行中</b></div>';
+      html += '<div class="modal-row">進捗: <b>'+Math.round(l.progress*100)+'%</b></div>';
+    }
+    html += '<div class="modal-row">枝: '+l.branch+'</div>';
+    openModal(html);
+  }
+  function openBranchModal(b){
+    var leaves=LEAVES.filter(function(l){ return l.branch===b.name; });
+    var html='<div class="modal-title">'+b.name+'（進行中）</div>';
+    leaves.forEach(function(l){
+      var state = l.done ? '完了・'+fmtLong(l.date) : (l.progress>0 ? '進行中 '+Math.round(l.progress*100)+'%' : '未着手');
+      html += '<div class="modal-row">'+(l.done?'✓ ':'・ ')+l.name+' — <b>'+state+'</b></div>';
+    });
+    openModal(html);
+  }
+  function openDayLeavesModal(dateStr, items){
+    var html='<div class="modal-title">'+fmtLong(dateStr)+' に完了</div>';
+    items.forEach(function(l){ html += '<div class="modal-row">✓ '+l.name+'</div>'; });
+    openModal(html);
+  }
+  function openReflectionModal(dateStr){
+    var html='<div class="modal-title">'+fmtLong(dateStr)+' の振り返り</div>';
+    html += '<div class="modal-row">この日の振り返りタブへ移動します（モックのため実際の遷移はありません）</div>';
+    html += '<button type="button" class="btn small primary modal-cta">振り返りを開く →</button>';
+    openModal(html);
+  }
+
+  // ---- 完了予想。残り想定は task-estimate 側の数字（スコープ線そのものは表示しない。予想の計算にだけ使う） ----
+  var SCOPE_NOW = 152;
+  var REMAIN = SCOPE_NOW - TODAY_H;
+  var PACE_AVG = TODAY_H / (dayOffset(START,TODAY)+1);
+  var PACE_RECENT = (TODAY_H - cumAt(addDays(TODAY,-3))) / 3;
+  function forecastFor(paceH){
+    var days=Math.ceil(REMAIN/paceH);
+    return { days:days, date:addDays(TODAY,days) };
+  }
+  var FC_AVG = forecastFor(PACE_AVG);
+  var FC_RECENT = forecastFor(PACE_RECENT);
+
+  document.getElementById('gc-forecast').innerHTML =
+    '<span><span class="fc-avg-dot"></span>全体平均 <b>'+fmt(FC_AVG.date)+'</b> 到達</span>' +
+    '<span><span class="fc-recent-dot"></span>直近3日 <b>'+fmt(FC_RECENT.date)+'</b> 到達</span>';
+
+  document.querySelectorAll('.pace-toggle button').forEach(function(b){
+    b.addEventListener('click', function(){ selectedPace=b.dataset.pace; updateHeroText(); render(); });
+  });
+
+  updateHeroText();
+  render();
+})();
+</script>
+
+</body>
+</html>
