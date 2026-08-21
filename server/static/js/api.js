@@ -93,6 +93,13 @@ export const api = {
     req('PATCH', `/api/tasks/${taskId}/tree-position`, { parentId, afterTaskId }),
   setSubtreeDone: (taskId, done) => req('POST', `/api/tasks/${taskId}/subtree-done`, { done }),
 
+  // 想定時間・小数の進捗（根直下＝想定時間／葉＝進捗・spec: task-estimate）。
+  // 通常は Gemini / Antigravity が HTTP 経由で書き込む口だが、アプリからも同じ経路を叩ける。
+  putTaskEstimate: (taskId, { estimatedSeconds, reason, actor }) =>
+    req('PUT', `/api/tasks/${taskId}/estimate`, { estimatedSeconds, reason, actor }),
+  putTaskProgress: (taskId, { ratio, reason, actor }) =>
+    req('PUT', `/api/tasks/${taskId}/progress`, { ratio, reason, actor }),
+
   // 設計図（目標単位のタスクツリー・spec: goal-blueprint）
   getGoalBlueprint: (goalId) => req('GET', `/api/goals/${goalId}/blueprint`),
   createGoalBlueprintRoot: (goalId, title) => req('POST', `/api/goals/${goalId}/blueprint/root`, { title }),
@@ -107,7 +114,8 @@ export const api = {
   //       targetHours?: { kind, secondsPerDay, groupIdentityIds?, timelineLabel? }, outcomeCaption?, outcomeImage?: { dataUrl } }
   createGoal: (b) => req('POST', '/api/goals', b),
   deleteGoal: (id) => req('DELETE', `/api/goals/${id}`),
-  getGoalReport: (id) => req('GET', `/api/goals/${id}/report`),
+  // 目標の唯一のビュー「進捗グラフ」（バーンアップ・spec: goal-burnup）。開始前は 409。
+  getGoalBurnup: (id) => req('GET', `/api/goals/${id}/burnup`),
   getGoalJournal: (id, date) => req('GET', `/api/goals/${id}/journal/${date}`),
   putGoalJournal: (id, date, content) => req('PUT', `/api/goals/${id}/journal/${date}`, { content }),
 
@@ -163,7 +171,7 @@ export const api = {
     reset: () => req('POST', '/api/demo/reset'),
     goals: (now) => req('GET', `/api/demo/goals?${q({ now })}`),
     goal: (id, now) => req('GET', `/api/demo/goals/${id}?${q({ now })}`),
-    report: (id, now) => req('GET', `/api/demo/goals/${id}/report?${q({ now })}`),
+    burnup: (id, now) => req('GET', `/api/demo/goals/${id}/burnup?${q({ now })}`),
     journal: (id, date) => req('GET', `/api/demo/goals/${id}/journal/${date}`),
     today: (now) => req('GET', `/api/demo/today?${q({ now })}`),
     allocation: (date) => req('GET', `/api/demo/timeline/${date}/allocation`),

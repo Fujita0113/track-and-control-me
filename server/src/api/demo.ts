@@ -5,7 +5,6 @@ import { zonedTimeToEpoch, parseDayKey } from '../aggregation/index.js';
 import {
   listGoals,
   getGoal,
-  getGoalReport,
   getJournal,
   getJournalImageBytes,
   addRuleToGoal,
@@ -15,12 +14,12 @@ import {
   endGoal,
   listDueRules,
   GoalNotFoundError,
-  GoalReportNotReadyError,
   GoalExtensionRequiredError,
   GoalLifecycleError,
   GoalValidationError,
   JournalImageNotFoundError,
 } from '../services/goals.js';
+import { goalBurnup } from '../services/goal-burnup.js';
 import {
   RuleNotFoundError,
   ReasonRequiredError,
@@ -143,21 +142,23 @@ export function registerDemoRoutes(app: FastifyInstance, _deps: ApiDeps): void {
     return freezeQuota(db, virtualNowMs(db, now));
   });
 
-  // GET /api/demo/goals/:id/report?now=<dayKey> — 完走レポート4ブロック。
-  app.get('/api/demo/goals/:id/report', async (req, reply) => {
+  // GET /api/demo/goals/:id/burnup?now=<dayKey> — 進捗グラフ（バーンアップ・デモ DB・読み取り専用）。
+  app.get('/api/demo/goals/:id/burnup', async (req, reply) => {
     const db = getDemoDb();
     const id = Number((req.params as { id: string }).id);
     const now = resolveNow((req.query as { now?: string }).now);
     try {
-      return getGoalReport(db, id, virtualNowMs(db, now));
+      getGoal(db, id, virtualNowMs(db, now)); // 存在確認（無ければ 404）。
+      const view = goalBurnup(db, id, virtualNowMs(db, now));
+      if (!view) {
+        reply.code(409);
+        return { error: '進捗グラフは開始日以降に開けます', notReady: true };
+      }
+      return view;
     } catch (err) {
       if (err instanceof GoalNotFoundError) {
         reply.code(404);
         return { error: err.message };
-      }
-      if (err instanceof GoalReportNotReadyError) {
-        reply.code(409);
-        return { error: err.message, notReady: true };
       }
       throw err;
     }

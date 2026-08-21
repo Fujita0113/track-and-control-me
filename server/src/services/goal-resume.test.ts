@@ -4,7 +4,6 @@ import { zonedTimeToEpoch } from '../aggregation/index.js';
 import {
   createGoal,
   getGoal,
-  getGoalReport,
   endGoal,
   resumeGoal,
   cancelResumeGoal,
@@ -169,18 +168,8 @@ describe('終了していた分だけ期限が延びる', () => {
     expect(view.dayNumber).toBe(16);
   });
 
-  it('終了していた日は達成カレンダーで対象外になる', () => {
-    const g = makeGoal();
-    endGoal(db, g.id, { reason: END_REASON }, NOW_0710);
-    resumeGoal(db, g.id, { reason: RESUME_REASON }, NOW_0714);
-
-    const report = getGoalReport(db, g.id, NOW_0716);
-    const cells = report.rules[0]!.cells;
-    const cell0711 = cells.find((c) => c.dayKey === '2026-07-11')!;
-    const cell0714 = cells.find((c) => c.dayKey === '2026-07-14')!;
-    expect(cell0711.frozen).toBe(true);
-    expect(cell0714.frozen).toBe(true);
-    const cell0701 = cells.find((c) => c.dayKey === '2026-07-01')!;
-    expect(cell0701.frozen).toBe(false);
-  });
+  // レポート（①達成カレンダーの frozen セル）は capability ごと廃止された
+  // （spec: goal-report REMOVED・goal-burnup-forecast）。終了区間ぶん期限が延びる事実は
+  // 直前のテストで getGoal() により検証済み。セル単位の frozen フラグに相当する
+  // 読み手はどこにも残らないため、それを検証していたテストはここで意図的に落とす。
 });

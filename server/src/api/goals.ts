@@ -5,7 +5,6 @@ import {
   listGoals,
   getGoal,
   deleteGoal,
-  getGoalReport,
   getJournal,
   saveJournal,
   listJournalImages,
@@ -28,7 +27,6 @@ import {
   GoalValidationError,
   GoalDeleteWindowError,
   GoalDeleteAfterEndError,
-  GoalReportNotReadyError,
   JournalNotWritableError,
   JournalImageError,
   JournalImageNotFoundError,
@@ -39,6 +37,7 @@ import {
   type NewGoalTargetHoursInput,
   type GoalStart,
 } from '../services/goals.js';
+import { goalBurnup } from '../services/goal-burnup.js';
 import { goalHistory } from '../services/goal-history.js';
 import { getBlueprint, importBlueprint, computeOpenPath, createRootTask, TaskTreeError } from '../services/task-tree.js';
 import {
@@ -86,10 +85,6 @@ function replyGoalError(err: unknown, reply: { code: (n: number) => void }): Rec
       proposedEndDay: err.proposedEndDay,
       goalEndDay: err.goalEndDay,
     };
-  }
-  if (err instanceof GoalReportNotReadyError) {
-    reply.code(409);
-    return { error: err.message, notReady: true };
   }
   if (
     err instanceof RuleImmutableFieldError ||
@@ -173,10 +168,17 @@ export function registerGoalRoutes(app: FastifyInstance, deps: ApiDeps): void {
     }
   });
 
-  app.get('/api/goals/:id/report', async (req, reply) => {
+  // 目標の唯一のビュー「進捗グラフ」（バーンアップ）。開始前は 409（レポートの 409 を引き継ぐ・spec: goal-burnup）。
+  app.get('/api/goals/:id/burnup', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
     try {
-      return getGoalReport(db, id);
+      getGoal(db, id); // 存在確認（無ければ 404）。
+      const view = goalBurnup(db, id);
+      if (!view) {
+        reply.code(409);
+        return { error: '進捗グラフは開始日以降に開けます', notReady: true };
+      }
+      return view;
     } catch (err) {
       return replyGoalError(err, reply);
     }

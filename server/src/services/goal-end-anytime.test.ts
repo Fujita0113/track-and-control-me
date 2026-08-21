@@ -4,7 +4,6 @@ import { zonedTimeToEpoch } from '../aggregation/index.js';
 import {
   createGoal,
   getGoal,
-  getGoalReport,
   endGoal,
   cancelEndGoal,
   listJournalImages,
@@ -14,6 +13,7 @@ import {
 } from './goals.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import { getChronicle } from './goal-chronicle.js';
+import { goalBurnup } from './goal-burnup.js';
 import { freezeGoal, getFreeze } from './goal-freeze.js';
 
 /**
@@ -131,10 +131,10 @@ describe('進行中でも終えられる（理由必須・翌日発効）', () =
     expect(evaluateDay(db, START, NOW_D4).perCondition).toHaveLength(1);
   });
 
-  it('終えてもレポート・沿革は読めるまま残る', () => {
+  it('終えても進捗グラフ・沿革は読めるまま残る', () => {
     const g = activeGoal();
     endGoal(db, g.id, { reason: REASON }, NOW_D4);
-    expect(() => getGoalReport(db, g.id, NOW_D5)).not.toThrow();
+    expect(() => goalBurnup(db, g.id, NOW_D5)).not.toThrow();
     expect(getChronicle(db, g.id).entries.length).toBeGreaterThan(0);
   });
 

@@ -322,11 +322,18 @@ const IMG_AFTER = solidPng([76, 175, 106]); // 緑（最終日）
 const IMG_SKY = solidPng([132, 178, 214]); // 空色（範囲Check の「その日の空」）
 const IMG_DESK = solidPng([196, 172, 140]); // 木目（単発Check の「朝の机」）
 
+/** day_key（JST）→ epoch ms（正午 JST=UTC 03:00・境界 04:00 に確実に収まる・demo-seed 既存の allocMs/forgottenMs と同じ流儀）。 */
+function jstNoonMs(y: number, m: number, d: number): number {
+  return Date.UTC(y, m - 1, d, 3, 0, 0);
+}
+
 /**
- * 主目標の設計図サンプル（spec: task-tree / goal-blueprint・プロジェクト必須ルール:
- * 日数が関わる機能はデモモードで成果を明示する）。3階層・一部完了・進行中の葉を1つ持つ。
- * 集計テーブル（task）へ直接焼き込むだけで日々の集計（daily_totals_snapshot 等）には触れない。
- * `Date.now()` 非依存（固定タイムスタンプ SEED_TS のみ）。
+ * 主目標の設計図サンプル（spec: task-tree / goal-blueprint / task-estimate / goal-burnup・
+ * プロジェクト必須ルール: 日数が関わる機能はデモモードで成果を明示する）。3階層・
+ * 根直下の枝が2つ完了・1つ走行中、走行中の枝に同じ日に葉が2件完了する例を含む
+ * （進捗グラフのタスク達成マーカーを実際に再現する・design: goal-burnup-forecast task 8.1）。
+ * 集計テーブル（task / task_estimate_change）へ直接焼き込むだけで日々の集計
+ * （daily_totals_snapshot 等）には触れない。`Date.now()` 非依存（固定タイムスタンプのみ）。
  */
 function seedBlueprintDemo(db: DB): void {
   const insTask = db.prepare(
@@ -342,22 +349,56 @@ function seedBlueprintDemo(db: DB): void {
     parent: number | null,
     goal: number | null,
     order: number,
-    notes: string | null = null,
+    opts: { notes?: string | null; doneAt?: number | null } = {},
   ): number =>
-    insTask.run({ title, status, notes, parent, goal, order, now: SEED_TS, doneAt: status === 'DONE' ? SEED_TS : null })
-      .lastInsertRowid as number;
+    insTask.run({
+      title,
+      status,
+      notes: opts.notes ?? null,
+      parent,
+      goal,
+      order,
+      now: SEED_TS,
+      doneAt: status === 'DONE' ? (opts.doneAt ?? SEED_TS) : null,
+    }).lastInsertRowid as number;
 
-  // 枝1: 質問への回答（2件完了/進行中1件のさらに下の枝で3階層を作る）。
-  const root1 = ins('苦手な質問への回答を用意する', 'HOLD', null, DEMO_GOAL_ID, 0);
-  ins('質問をピックアップする', 'DONE', root1, null, 0, '去年の資料から。20問くらいに絞る。');
-  const branch1b = ins('回答をまとめる', 'HOLD', root1, null, 1);
-  ins('Notion に下書きする', 'DOING', branch1b, null, 0); // 進行中の葉（openPath がここへ至る）
-  ins('先輩にレビューしてもらう', 'HOLD', branch1b, null, 1);
+  const getEstimate = db.prepare('SELECT estimated_seconds FROM task WHERE id = ?');
+  const setEstimate = db.prepare('UPDATE task SET estimated_seconds = ? WHERE id = ?');
+  const insEstimateChange = db.prepare(
+    `INSERT INTO task_estimate_change (task_id, field, from_value, to_value, reason, actor, day_key, created_at)
+     VALUES (?, 'estimate', ?, ?, ?, ?, ?, ?)`,
+  );
+  /** 根直下ノードへ想定時間を置く（Gemini との合議の再現・design D9）。変更前の値は都度読み直す。 */
+  const estimate = (taskId: number, hours: number, reason: string, dayKey: string, actor: 'human' | 'agent', at: number): void => {
+    const from = (getEstimate.get(taskId) as { estimated_seconds: number | null }).estimated_seconds;
+    setEstimate.run(hours * 3600, taskId);
+    insEstimateChange.run(taskId, from, hours * 3600, reason, actor, dayKey, at);
+  };
 
-  // 枝2: 志望動機（1件完了・1件未着手）。
-  const root2 = ins('志望動機を明確にする', 'HOLD', null, DEMO_GOAL_ID, 1);
-  ins('企業研究をする', 'DONE', root2, null, 0);
-  ins('自己分析をする', 'TODO', root2, null, 1);
+  // 枝1（完了・tree_order 0）: 志望動機（Day3-4 に完了）。
+  const root1 = ins('志望動機を明確にする', 'HOLD', null, DEMO_GOAL_ID, 0);
+  ins('企業研究をする', 'DONE', root1, null, 0, { doneAt: jstNoonMs(2026, 6, 13) }); // Day3
+  ins('自己分析をする', 'DONE', root1, null, 1, { doneAt: jstNoonMs(2026, 6, 14) }); // Day4
+  estimate(root1, 12, '当初の見立て', DEMO_START_DAY, 'agent', jstNoonMs(2026, 6, 11));
+
+  // 枝2（完了・tree_order 1）: 面接の練習（Day5 に完了）。
+  const root2 = ins('面接の練習をする', 'HOLD', null, DEMO_GOAL_ID, 1);
+  ins('模擬面接を1回受ける', 'DONE', root2, null, 0, { doneAt: jstNoonMs(2026, 6, 15) }); // Day5
+  estimate(root2, 4, '当初の見立て', DEMO_START_DAY, 'agent', jstNoonMs(2026, 6, 11));
+
+  // 枝3（走行中・tree_order 2）: 質問への回答（3階層・凍結明け Day13 に2件同日完了）。
+  const root3 = ins('苦手な質問への回答を用意する', 'HOLD', null, DEMO_GOAL_ID, 2);
+  ins('質問をピックアップする', 'DONE', root3, null, 0, {
+    notes: '去年の資料から。20問くらいに絞る。',
+    doneAt: jstNoonMs(2026, 6, 23), // Day13（凍結 Day11-12 明け）
+  });
+  ins('定番の質問リストを書き出す', 'DONE', root3, null, 1, { doneAt: jstNoonMs(2026, 6, 23) }); // 同日2件目
+  const branch3b = ins('回答をまとめる', 'HOLD', root3, null, 2);
+  ins('Notion に下書きする', 'DOING', branch3b, null, 0); // 進行中の葉（openPath がここへ至る）
+  ins('先輩にレビューしてもらう', 'HOLD', branch3b, null, 1);
+  // 走行中の枝は実測から単価を導き仮置きを上書きする（design D6）。当初の見立てより軽いと判断し直した記録を残す。
+  estimate(root3, 40, '当初の見立て', DEMO_START_DAY, 'agent', jstNoonMs(2026, 6, 11));
+  estimate(root3, 30, '一周目の感触からもう少し軽いと見直した', addDaysKey(DEMO_START_DAY, 12), 'human', jstNoonMs(2026, 6, 23));
 }
 
 /**

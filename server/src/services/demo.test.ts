@@ -4,11 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { listGoals, getGoal, getGoalReport, getJournal, GoalReportNotReadyError } from './goals.js';
+import { listGoals, getGoal, getJournal } from './goals.js';
+import { goalBurnup } from './goal-burnup.js';
+import { getChronicle } from './goal-chronicle.js';
 import { goalHistory } from './goal-history.js';
 import { getDayAllocation } from './day-allocation.js';
 import { daySummary } from './summary.js';
 import { getTimeline } from './timeline.js';
+import { totalWorkSecondsForDay } from './categories.js';
 import { getDemoDb, resetDemoDb } from './demo-db.js';
 import { addAutoExclusion, removeAutoExclusion } from './timeline.js';
 import { recompute } from './recompute.js';
@@ -98,62 +101,18 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(g.dayNumber).toBeNull();
   });
 
-  it('開始前のみレポート不可（進行中は走行中プレビューとして開ける）、完走後は4ブロックが埋まる', () => {
+  // レポート（①達成カレンダー・②時間推移・③写真比較・④日記ストリップ）は capability ごと廃止された
+  // （spec: goal-report REMOVED・goal-burnup-forecast）。開始前・進行中の開閉判定は進捗グラフ
+  // （burnup）が引き継ぎ、①のセル単位の met/frozen・achievedDays・②の閾値変更ログ・③の画像集約に
+  // 相当する読み手はどこにも残らないため、それらを検証していたテストはここで意図的に落とす。
+  // 日記本文は既存の getJournal() で別途検証済み（「日記は日付単位で引ける」）。
+  it('開始前のみ進捗グラフ不可（進行中は走行中プレビューとして開ける）', () => {
     // 開始前（まだ1日も走っていない）は拒否。
-    expect(() => getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_PRE_START_DAY))).toThrow(
-      GoalReportNotReadyError,
-    );
-    // 進行中は開ける（「完走後のみ」の制約は撤廃・spec: goal-report）。
-    expect(getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_START_DAY)).goal.status).toBe('active');
-
-    const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-    // ヘッダ: 達成 26/32（Day11-12 の一時凍結ぶん実効 end_day が2日延び、凍結2日は分母から抜ける
-    // ・延長された Day31-32 は全達成・spec: goal-freeze / goal-report）。
-    expect(rep.goal.dayCount).toBe(32);
-    expect(rep.goal.achievedDays).toBe(26);
-    expect(rep.goal.endDay).toBe(DEMO_EFFECTIVE_END_DAY);
-    // ① 永続ルール4つ（総作業 / 振り返り / 明日タスク / 筋トレ手動チェック）＋⑤沿革の写真/質問ルール4つ・各32マス。
-    expect(rep.rules.length).toBe(8);
-    for (const p of rep.rules) expect(p.cells.length).toBe(32);
-    // 手動チェックルール（筋トレ）が非時間型として乗る。
-    const kin = rep.rules.find((p) => p.conditionKey === `rule:${RULE_KIN_ID}`)!;
-    expect(kin).toBeDefined();
-    expect(kin.target).toBe('MANUAL_CHECK');
-    expect(kin.isTimeType).toBe(false);
-    expect(kin.label).toBe('筋トレ');
-    // Day11-12 は凍結（対象外）、Day16 は凍結していない谷で未達成、それ以外は達成。
-    expect(kin.cells[10]!.met).toBe(false); // Day11（凍結）
-    expect(kin.cells[10]!.frozen).toBe(true);
-    expect(kin.cells[11]!.frozen).toBe(true); // Day12（凍結）
-    expect(kin.cells[0]!.met).toBe(true); // Day1
-    expect(kin.cells[0]!.frozen).toBe(false);
-    expect(kin.cells[29]!.met).toBe(true); // Day30
-    expect(kin.cells[30]!.met).toBe(true); // Day31（凍結延長ぶん）
-    expect(kin.cells[31]!.met).toBe(true); // Day32（凍結延長ぶん）
-    // ② 時間型（総作業）あり＋Day13 の閾値変更（4h→3h・理由つき）。
-    expect(rep.hasTimeType).toBe(true);
-    expect(rep.ruleChanges.length).toBe(1);
-    expect(rep.ruleChanges[0]!.dayNumber).toBe(13);
-    expect(rep.ruleChanges[0]!.before).toEqual({ thresholdSeconds: 14400 });
-    expect(rep.ruleChanges[0]!.after).toEqual({ thresholdSeconds: 10800 });
-    expect(rep.ruleChanges[0]!.reason).toContain('課題週間');
-    // ③④ 32日ぶんの日記が全て埋まっている（Before/After＋凍結延長の Day31-32 含む）。
-    expect(rep.days.length).toBe(32);
-    expect(rep.days.every((d) => d.source === 'journal' && d.text.trim().length > 0)).toBe(true);
-    expect(rep.days[0]!.text).toContain('はじめて');
-    expect(rep.days[29]!.text).toContain('30日を終えて');
-  });
-
-  it('中盤の谷（未達成日）が存在し、後半は持ち直す', () => {
-    const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-    const total = rep.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
-    // Day11（凍結・対象外）は総作業も未達成扱いにならず frozen、Day30（後半）は達成。
-    expect(total.cells[10]!.met).toBe(false); // Day11（凍結）
-    expect(total.cells[10]!.frozen).toBe(true);
-    expect(total.cells[29]!.met).toBe(true); // Day30
-    // 閾値の引き下げが時系列に反映（Day1 は 4h、Day30 は 3h 基準）。
-    expect(total.cells[0]!.thresholdSeconds).toBe(14400);
-    expect(total.cells[29]!.thresholdSeconds).toBe(10800);
+    expect(goalBurnup(db, DEMO_GOAL_ID, vnow(DEMO_PRE_START_DAY))).toBeNull();
+    // 進行中は開ける。
+    expect(getGoal(db, DEMO_GOAL_ID, vnow(DEMO_START_DAY)).status).toBe('active');
+    // 完走後の実効 end_day は凍結2日ぶん延びる（spec: goal-freeze）。
+    expect(getGoal(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY)).endDay).toBe(DEMO_EFFECTIVE_END_DAY);
   });
 
   describe('一時凍結のサンプル（spec: goal-freeze・issue #60）', () => {
@@ -174,8 +133,7 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     });
 
     it('沿革に発効が理由つきで残る（種別・予約フェーズは廃止・spec: goal-freeze MODIFIED）', () => {
-      const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-      const freezes = rep.chronicle.freezes;
+      const freezes = getChronicle(db, DEMO_GOAL_ID, DEMO_AFTER_END_DAY).freezes;
       expect(freezes.map((f) => f.kind)).toEqual(['activate']);
       expect(freezes[0]!.reason).toContain('差し込み案件');
       expect(freezes[0]!.startDay).toBe(DEMO_FREEZE_START_DAY);
@@ -188,9 +146,8 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
   });
 
   describe('⑤沿革のサンプル（ルール操作の年表）', () => {
-    /** 完走レポートの沿革（rule_change は day_key 昇順・同日内は記録順）。 */
-    const chronicle = (): ReturnType<typeof getGoalReport>['chronicle'] =>
-      getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY)).chronicle;
+    /** 沿革（rule_change は day_key 昇順・同日内は記録順）。 */
+    const chronicle = (): ReturnType<typeof getChronicle> => getChronicle(db, DEMO_GOAL_ID, DEMO_AFTER_END_DAY);
 
     it('6件のルール操作が既存の谷（Day11 / Day13 / Day20 / Day23）に時系列で並ぶ', () => {
       const entries = chronicle().entries;
@@ -243,13 +200,13 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
 
     it('走行中プレビューの沿革は「その日までに起きたこと」だけを載せる（未来を見せない）', () => {
       // Day12（06-22）時点: Day11 の2件だけが存在し、Day13 以降はまだ無い。
-      const day12 = getGoalReport(db, DEMO_GOAL_ID, vnow('2026-06-22')).chronicle;
+      const day12 = getChronicle(db, DEMO_GOAL_ID, '2026-06-22');
       expect(day12.entries.map((e) => e.change.dayKey)).toEqual(['2026-06-21', '2026-06-21']);
       // 仕掛かり中（Day14・Day15 の回答はまだ起きていない）。
       expect(day12.entries.every((e) => e.answers.length === 0)).toBe(true);
 
       // Day15（06-25）時点: Day13 の2件まで現れ、Day14・Day15 の回答だけが載る。
-      const day15 = getGoalReport(db, DEMO_GOAL_ID, vnow('2026-06-25')).chronicle;
+      const day15 = getChronicle(db, DEMO_GOAL_ID, '2026-06-25');
       expect(day15.entries.map((e) => e.change.dayKey)).toEqual(['2026-06-21', '2026-06-21', '2026-06-23', '2026-06-23']);
       const sky = day15.entries.find((e) => e.ruleId === RULE_PHOTO_SKY_ID)!;
       expect(sky.answers.map((r) => r.dayKey)).toEqual(['2026-06-24', '2026-06-25']); // 06-27 以降はまだ。
@@ -261,49 +218,21 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
       expect(json).not.toContain('30日を終えて'); // Day30 の日記見出し。
     });
 
-    it('写真ルールの提出画像は③ Before/After へ流入する（先指定キャプションでグループ化）', () => {
-      const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-      const sky = rep.reportImages.filter((i) => i.caption === 'その日の空');
-      expect(sky.map((i) => i.dayNumber)).toEqual([14, 15, 17, 18, 19]); // 古い→新しい順（サボりは既存の谷日）。
-      expect(rep.reportImages.filter((i) => i.caption === '朝の机')).toHaveLength(1);
-    });
-
-    it('沿革の写真/質問ルールは①にも乗るが、達成日数の筋書きは崩れない（谷日に凍結・サボりを寄せてある）', () => {
-      const rep = getGoalReport(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
-      expect(rep.goal.achievedDays).toBe(26);
-      // 沿革専用の写真/質問ルールも goal_rule で紐づくため①の行に乗る（4つの永続ルール＋4つの沿革ルール）。
-      expect(rep.rules).toHaveLength(8);
-    });
+    // レポート③（写真の比較・reportImages のキャプション横断集約）と①（達成カレンダー・
+    // achievedDays・rules 一覧）は capability ごと廃止された（spec: goal-report REMOVED）。
+    // どちらも代替の読み手が無いため、それらを検証していた2テストはここで意図的に落とす
+    // （画像そのものの保存・キャプションは既存の goal_journal_image 経由で別途検証済み）。
   });
 
-  it('手動チェックのみの目標（DEMO_GOAL2）は①のみで②時間の推移が出ない', () => {
+  // レポート①②（達成カレンダー・時間推移）は capability ごと廃止された
+  // （spec: goal-report REMOVED）。DEMO_GOAL2 のルール一覧・セル単位の met・achievedDays に
+  // 相当する読み手はどこにも残らないため、それらを検証していた assertion はここで意図的に落とす。
+  it('手動チェックのみの目標（DEMO_GOAL2）が一覧に並び、日記が引ける', () => {
     // 一覧には主目標・手動チェックのみ目標・目標時間つきで終えた目標・終了→再開の目標の4件が並ぶ。
     const goals = listGoals(db, vnow(DEMO_AFTER_END_DAY));
     expect(goals.length).toBe(4);
     const g2 = goals.find((g) => g.id === DEMO_GOAL2_ID)!;
     expect(g2.name).toBe('朝の散歩を習慣にする');
-
-    const rep = getGoalReport(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
-    // ① ルールは手動チェック2つ・各31マス（凍結1日ぶん実効 end_day が延びる）。全て非時間型。
-    expect(rep.rules.length).toBe(2);
-    for (const p of rep.rules) {
-      expect(p.target).toBe('MANUAL_CHECK');
-      expect(p.isTimeType).toBe(false);
-      expect(p.cells.length).toBe(31);
-    }
-    // ② 時間の推移は出ない（時間型ルールゼロ）＋変更ログも無い。
-    expect(rep.hasTimeType).toBe(false);
-    expect(rep.ruleChanges.length).toBe(0);
-    // 達成日数（両方 met の日）＝ 24/30。個別 met は 朝散歩27・ストレッチ26。
-    expect(rep.goal.achievedDays).toBe(24);
-    const walk = rep.rules.find((p) => p.conditionKey === `rule:${RULE_WALK_ID}`)!;
-    const stretch = rep.rules.find((p) => p.conditionKey === `rule:${RULE_STRETCH_ID}`)!;
-    expect(walk.cells.filter((c) => c.met).length).toBe(27);
-    expect(stretch.cells.filter((c) => c.met).length).toBe(26);
-    expect(walk.cells[4]!.met).toBe(false); // Day5 は朝散歩を飛ばした
-    // 手動チェックは時間実測を持たない。
-    expect(walk.cells[0]!.actualSeconds).toBeNull();
-    expect(walk.cells[0]!.thresholdSeconds).toBeNull();
     // ③④ Before/After の日記が引ける。
     expect(getJournal(db, DEMO_GOAL2_ID, DEMO_GOAL2_START_DAY).content).toContain('朝散歩を始める');
   });
@@ -316,40 +245,19 @@ describe('デモ seed の仮想日付連動（5.2 / 1.4）', () => {
     expect(g2.freeze!.startDay).toBe(DEMO_GOAL2_FREEZE_DAY);
     expect(g2.freeze!.endDay).toBe(DEMO_GOAL2_FREEZE_DAY);
     expect(getGoal(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY)).endDay).toBe(DEMO_EFFECTIVE_END_DAY);
-
-    const rep = getGoalReport(db, DEMO_GOAL2_ID, vnow(DEMO_AFTER_END_DAY));
-    // 凍結1日ぶん日数は 30 → 31 に増える。
-    expect(rep.goal.dayCount).toBe(31);
-    // Day12（既存の谷）は「未達成」ではなく「対象外」として並ぶ。達成日数 24 は変わらない。
-    const walk = rep.rules.find((p) => p.conditionKey === `rule:${RULE_WALK_ID}`)!;
-    expect(walk.cells[11]!.dayKey).toBe(DEMO_GOAL2_FREEZE_DAY);
-    expect(walk.cells[11]!.frozen).toBe(true);
-    expect(walk.cells[11]!.met).toBe(false);
-    expect(rep.goal.achievedDays).toBe(24);
   });
 
   describe('終了→再開のサイクルのサンプル（spec: goal-lifecycle-fork ADDED・issue #103）', () => {
-    it('終了していた3日ぶん実効 end_day が延び、その3日はレポートで対象外になる', () => {
+    it('終了していた3日ぶん実効 end_day が延びる', () => {
       const g4 = getGoal(db, DEMO_GOAL4_ID, vnow(DEMO_AFTER_END_DAY));
       expect(g4.status).toBe('completed');
       expect(g4.endDay).toBe(DEMO_GOAL4_EFFECTIVE_END_DAY);
       expect(g4.dayCount).toBe(13);
       expect(g4.resumingOn).toBeNull();
-
-      const rep = getGoalReport(db, DEMO_GOAL4_ID, vnow(DEMO_AFTER_END_DAY));
-      expect(rep.goal.dayCount).toBe(13);
-      const rule = rep.rules[0]!;
-      // Day4-6（終了していた期間）は対象外、Day1-3・Day7-13 は達成。
-      expect(rule.cells[3]!.dayKey).toBe(DEMO_GOAL4_ENDED_DAY);
-      expect(rule.cells[3]!.frozen).toBe(true);
-      expect(rule.cells[5]!.frozen).toBe(true);
-      expect(rule.cells[0]!.frozen).toBe(false);
-      expect(rule.cells[0]!.met).toBe(true);
-      expect(rule.cells[6]!.dayKey).toBe(DEMO_GOAL4_RESUMED_DAY);
-      expect(rule.cells[6]!.frozen).toBe(false);
-      expect(rule.cells[6]!.met).toBe(true);
-      expect(rule.cells[12]!.met).toBe(true); // Day13（延長ぶん）
-      expect(rep.goal.achievedDays).toBe(10); // Day4-6 の3日を除く10日。
+      // レポート①（達成カレンダーのセル単位 frozen/met・achievedDays）は capability ごと
+      // 廃止された（spec: goal-report REMOVED）。終了区間ぶん dayCount が延びる事実は上で
+      // getGoal() により検証済みで、セル単位の frozen フラグに相当する読み手はどこにも
+      // 残らないため、それを検証していたアサーションはここで意図的に落とす。
     });
 
     it('大きい沿革に「終える」「→再開」が理由つきで並ぶ', () => {
@@ -492,15 +400,16 @@ describe('タイムライン identity 単位化 seed（timeline-group-identity /
 });
 
 describe('自動記録の削除デモ（timeline-record-deletion / issue #90）', () => {
-  it('閉じ忘れた「動画視聴」ブロックが谷日 Day16 に見え、削除すると総作業時間が減り取り消せる（達成日数 26 は不変）', () => {
+  // レポート①（達成カレンダーの achievedDays・cells[].actualSeconds）は capability ごと
+  // 廃止された（spec: goal-report REMOVED）。「閉じ忘れブロックを削除すると Day16 の実測秒数が
+  // 減り、取り消すと元に戻る」という本テストの核（issue #90）は、レポートを経由せず
+  // totalWorkSecondsForDay() で直接検証する（既存の集計関数・burnup も内部で使う）。
+  it('閉じ忘れた「動画視聴」ブロックが谷日 Day16 に見え、削除すると総作業時間が減り取り消せる', () => {
     const now = vnow(DEMO_AFTER_END_DAY);
 
     // (a) デモリセット直後＝「気づく前」。閉じ忘れブロックぶんも含めて Day16 は320分（force で
-    // 一度だけ本物の集計を通した状態・seedDemo 参照）。谷日なので達成日数はまだ 26。
-    const before = getGoalReport(db, DEMO_GOAL_ID, now);
-    expect(before.goal.achievedDays).toBe(26);
-    const totalBefore = before.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
-    expect(totalBefore.cells[15]!.actualSeconds).toBe(320 * 60); // Day16(index15) = 200+120分
+    // 一度だけ本物の集計を通した状態・seedDemo 参照）。
+    expect(totalWorkSecondsForDay(db, DEMO_FORGOTTEN_DAY)).toBe(320 * 60);
 
     const tl = getTimeline(db, DEMO_FORGOTTEN_DAY);
     const video = tl.auto.find((b) => b.title === '動画視聴')!;
@@ -516,10 +425,7 @@ describe('自動記録の削除デモ（timeline-record-deletion / issue #90）'
     recompute(db, { onlyDays: [DEMO_FORGOTTEN_DAY], force: true });
     evaluateDay(db, DEMO_FORGOTTEN_DAY, now, { force: true });
 
-    const after = getGoalReport(db, DEMO_GOAL_ID, now);
-    expect(after.goal.achievedDays).toBe(26); // 谷日は谷日のまま（振り返り抜けは変わらない）。
-    const totalAfter = after.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
-    expect(totalAfter.cells[15]!.actualSeconds).toBe(200 * 60); // 320分 → 200分（-2時間）。
+    expect(totalWorkSecondsForDay(db, DEMO_FORGOTTEN_DAY)).toBe(200 * 60); // 320分 → 200分（-2時間）。
     expect(getTimeline(db, DEMO_FORGOTTEN_DAY).auto.some((b) => b.title === '動画視聴')).toBe(false);
 
     // (c) 取り消し: 削除前の状態へ完全に戻る。
@@ -527,39 +433,46 @@ describe('自動記録の削除デモ（timeline-record-deletion / issue #90）'
     recompute(db, { onlyDays: [DEMO_FORGOTTEN_DAY], force: true });
     evaluateDay(db, DEMO_FORGOTTEN_DAY, now, { force: true });
 
-    const restored = getGoalReport(db, DEMO_GOAL_ID, now);
-    const totalRestored = restored.rules.find((p) => p.conditionKey === `rule:${RULE_TOTAL_ID}`)!;
-    expect(totalRestored.cells[15]!.actualSeconds).toBe(320 * 60);
+    expect(totalWorkSecondsForDay(db, DEMO_FORGOTTEN_DAY)).toBe(320 * 60);
     expect(getTimeline(db, DEMO_FORGOTTEN_DAY).auto.some((b) => b.title === '動画視聴')).toBe(true);
   });
 });
 
-describe('設計図のサンプル（spec: task-tree / goal-blueprint）', () => {
-  it('主目標の設計図は3階層・一部完了・進行中の葉を1つ持ち、達成日数の筋書きを変えない', () => {
-    const now = vnow(DEMO_AFTER_END_DAY);
-    const rep = getGoalReport(db, DEMO_GOAL_ID, now);
-    expect(rep.goal.achievedDays).toBe(26); // 設計図サンプルは task へ直接焼き込むだけ・集計は不変。
-
+describe('設計図のサンプル（spec: task-tree / goal-blueprint / task-estimate）', () => {
+  it('主目標の設計図は3階層・根直下の枝が2つ完了・1つ走行中・進行中の葉を1つ持つ', () => {
     const { nodes } = getBlueprint(db, DEMO_GOAL_ID);
-    expect(nodes.map((n) => n.title)).toEqual(['苦手な質問への回答を用意する', '志望動機を明確にする']);
+    expect(nodes.map((n) => n.title)).toEqual(['志望動機を明確にする', '面接の練習をする', '苦手な質問への回答を用意する']);
 
-    const branch1 = nodes[0]!;
-    const pickUp = branch1.children.find((n) => n.title === '質問をピックアップする')!;
+    const branch1 = nodes[0]!; // 完了（tree_order 0）。
+    expect(branch1.done).toBe(true);
+    expect(branch1.children.map((n) => n.title)).toEqual(['企業研究をする', '自己分析をする']);
+    expect(branch1.children.every((n) => n.done)).toBe(true);
+    expect(branch1.estimatedSeconds).toBe(12 * 3600);
+
+    const branch2 = nodes[1]!; // 完了（tree_order 1）。
+    expect(branch2.done).toBe(true);
+    expect(branch2.children.map((n) => n.title)).toEqual(['模擬面接を1回受ける']);
+
+    const branch3 = nodes[2]!; // 走行中（tree_order 2・runningBranch はここへ収束する）。
+    expect(branch3.done).toBe(false);
+    const pickUp = branch3.children.find((n) => n.title === '質問をピックアップする')!;
     expect(pickUp.done).toBe(true); // 完了済みの葉。
     expect(pickUp.notes).toBe('去年の資料から。20問くらいに絞る。');
+    const list = branch3.children.find((n) => n.title === '定番の質問リストを書き出す')!;
+    expect(list.done).toBe(true); // pickUp と同日（凍結明け Day13）に完了する2件目。
 
-    const summarize = branch1.children.find((n) => n.title === '回答をまとめる')!;
+    const summarize = branch3.children.find((n) => n.title === '回答をまとめる')!;
     expect(summarize.children).toHaveLength(2); // 3階層目（容れ物のさらに下）。
     const draft = summarize.children.find((n) => n.title === 'Notion に下書きする')!;
     expect(draft.status).toBe('DOING'); // 進行中の葉。
     expect(draft.done).toBe(false);
     expect(summarize.done).toBe(false); // 未決着の子孫を持つため容れ物はまだ未完了。
-    expect(branch1.done).toBe(false);
-
-    const branch2 = nodes[1]!;
-    expect(branch2.children.map((n) => n.title)).toEqual(['企業研究をする', '自己分析をする']);
-    expect(branch2.children.find((n) => n.title === '企業研究をする')!.done).toBe(true);
-    expect(branch2.children.find((n) => n.title === '自己分析をする')!.done).toBe(false);
+    // 想定時間は上書きされても記録は残る（design D6）。現在値は見直し後の30h。
+    expect(branch3.estimatedSeconds).toBe(30 * 3600);
+    const changes = db
+      .prepare('SELECT reason FROM task_estimate_change WHERE task_id = ? ORDER BY id')
+      .all(branch3.id) as { reason: string }[];
+    expect(changes.map((c) => c.reason)).toEqual(['当初の見立て', '一周目の感触からもう少し軽いと見直した']);
 
     // 展開規則: 進行中の葉（Notion に下書きする）へ至る枝だけが開く（design D10）。
     const idOf = (title: string): number => nodes.flatMap(flattenIds).find((n) => n.title === title)!.id;
@@ -577,6 +490,35 @@ describe('設計図のサンプル（spec: task-tree / goal-blueprint）', () =>
   });
 });
 
+describe('進捗グラフのサンプル（spec: goal-burnup / task-estimate・issue #105 系）', () => {
+  it('根直下の枝が2つ完了（黒丸）・1つ走行中（白丸）で、走行中の枝は同日2件完了をまとめる', () => {
+    const v = goalBurnup(db, DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY))!;
+    expect(v.markers.branches.map((b) => ({ title: b.title, completed: b.completed }))).toEqual([
+      { title: '志望動機を明確にする', completed: true },
+      { title: '面接の練習をする', completed: true },
+      { title: '苦手な質問への回答を用意する', completed: false },
+    ]);
+    const running = v.markers.branches.find((b) => !b.completed)!;
+    expect(running.leaves.map((l) => l.title)).toEqual(
+      expect.arrayContaining(['質問をピックアップする', '定番の質問リストを書き出す', 'Notion に下書きする', '先輩にレビューしてもらう']),
+    );
+    // 凍結明け Day13（2026-06-23）に2件同日完了 → leafCompletions で1グループにまとまる。
+    const group = v.markers.leafCompletions.find((g) => g.dayKey === '2026-06-23')!;
+    expect(group).toBeDefined();
+    expect(group.leaves.map((l) => l.title).sort()).toEqual(['定番の質問リストを書き出す', '質問をピックアップする'].sort());
+  });
+
+  it('走行中の枝は実測から単価を導き、残り想定・完了予想日が算定される（進行中の時点で見る）', () => {
+    // 完走後は完了予想を出さない（design task 7.7）ため、進行中の Day（凍結明けから数日後）で見る。
+    const v = goalBurnup(db, DEMO_GOAL_ID, vnow('2026-07-05'))!;
+    // 2つの完了枝は残り0（黒丸に単価は乗らない）。残りは走行中の枝ぶんだけ。
+    expect(v.remainingSeconds).not.toBeNull();
+    expect(v.remainingSeconds).toBeGreaterThan(0);
+    expect(v.overall.projectedDay).not.toBeNull();
+    expect(v.recent3.projectedDay).not.toBeNull();
+  });
+});
+
 describe('本番非干渉ガードレール（5.1）', () => {
   it('デモ DB のリセットは本番 DB（別コネクション）に一切触れない', () => {
     const prod = openDb(':memory:');
@@ -587,7 +529,7 @@ describe('本番非干渉ガードレール（5.1）', () => {
     const demo = getDemoDb();
     expect(listGoals(demo, vnow(DEMO_AFTER_END_DAY)).length).toBe(4);
     resetDemoDb();
-    getGoalReport(getDemoDb(), DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
+    getGoal(getDemoDb(), DEMO_GOAL_ID, vnow(DEMO_AFTER_END_DAY));
 
     // 本番 DB は無傷（目標ゼロのまま）。
     const after = (prod.prepare('SELECT COUNT(*) AS c FROM goal').get() as { c: number }).c;

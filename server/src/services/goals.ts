@@ -2,7 +2,6 @@ import type { DB } from '../db/index.js';
 import { nextDayKey } from '../aggregation/index.js';
 import { addDaysKey, dayDiff } from './day-key.js';
 import { GoalNotFoundError } from './goal-errors.js';
-import { getChronicle } from './goal-chronicle.js';
 import {
   createRule,
   updateRule,
@@ -26,11 +25,8 @@ import {
   type RuleSchedule,
 } from './rule-registry.js';
 import type { DueRule, RuleAnswer } from '@track/contract';
-import { getReflection } from './reflection.js';
 import { todayKey } from './summary.js';
-import type { ConditionResult } from '../rules/evaluate.js';
 import { resolveGroupDisplay, getIdentity, listAliases } from './group-identity.js';
-import type { Chronicle } from '@track/contract';
 import {
   goalFreezeIntervals,
   effectiveEndDay,
@@ -42,8 +38,9 @@ import {
 import { totalWorkSecondsForDay } from './categories.js';
 
 /**
- * 30日チャレンジ（目標）のライフサイクル・レポート集計・日記（spec: goal-challenge / goal-report /
- * goal-journal / goal-lifecycle-fork / design.md D1-D7）。
+ * 30日チャレンジ（目標）のライフサイクル・目標時間のペース・日記（spec: goal-challenge /
+ * goal-target-hours / goal-journal / goal-lifecycle-fork / design.md D1-D7）。
+ * 目標の唯一のビュー「進捗グラフ」の算定は `./goal-burnup.js` が担う（spec: goal-burnup-forecast）。
  *
  * 「採用」概念は撤廃（`goal_practice` は撤去済み）。目標が追うルールは `goal_rule`（goal_id, rule_id）
  * で紐づき、ルールの中身は常に `rule` テーブルから live に解決する（改名・閾値変更がそのまま反映される）。
@@ -53,8 +50,8 @@ export type GoalStatus = 'upcoming' | 'active' | 'ended' | 'completed';
 /** 目標の開始日選択（既定=今日）。今日開始は当日を Day1 として即「進行中」（spec: goal-challenge / D3）。 */
 export type GoalStart = 'today' | 'tomorrow';
 
-// 時間型（②時間推移の対象）。MANUAL_CHECK / PLANNING / PHOTO / QUESTION は非時間型。
-const TIME_TARGETS = new Set<RuleTarget>(['TOTAL_WORK', 'GROUP', 'TIMELINE']);
+// 時間型（バーンアップの計測対象になりうる種別）。MANUAL_CHECK / PLANNING / PHOTO / QUESTION は非時間型。
+export const TIME_TARGETS = new Set<RuleTarget>(['TOTAL_WORK', 'GROUP', 'TIMELINE']);
 
 export class GoalValidationError extends Error {
   constructor(msg: string) {
@@ -72,13 +69,6 @@ export class GoalDeleteAfterEndError extends Error {
   constructor() {
     super('終了した目標は削除できません');
     this.name = 'GoalDeleteAfterEndError';
-  }
-}
-/** レポートを開けない＝**開始前**の目標（まだ1日も走っていない）。 */
-export class GoalReportNotReadyError extends Error {
-  constructor() {
-    super('レポートは開始日以降に開けます');
-    this.name = 'GoalReportNotReadyError';
   }
 }
 export class JournalNotWritableError extends Error {
@@ -435,41 +425,120 @@ function frozenDayKeySet(intervals: FreezeInterval[], startDay: string, upTo: st
   return set;
 }
 
+/**
+ * 計測対象（design: goal-burnup D2）。目標時間 or 束ねた時間型ルールのどちらの由来でも、
+ * 「何を積み上げるか」をこの共通の形へ落とし込む。`totalWork` は単独（束ねない・design D2）。
+ */
+export interface MeasurementTarget {
+  /** 表示名（現在値から都度解決・決定的な並び）。 */
+  labels: string[];
+  totalWork: boolean;
+  groupIdentityIds: number[];
+  timelineLabels: string[];
+}
+
+/** 対象の実測秒を dayKeys ぶん日別に合算する（design D2・D4・goal-burnup D2）。 */
+export function dailySecondsForTarget(db: DB, target: MeasurementTarget, dayKeys: string[]): Map<string, number> {
+  const out = new Map<string, number>(dayKeys.map((dk) => [dk, 0]));
+  if (dayKeys.length === 0) return out;
+  if (target.totalWork) {
+    for (const dk of dayKeys) out.set(dk, totalWorkSecondsForDay(db, dk));
+    return out;
+  }
+  const dayPh = dayKeys.map(() => '?').join(',');
+  for (const label of target.timelineLabels) {
+    const rows = db
+      .prepare(
+        `SELECT day_key, COALESCE(SUM((end_at - start_at) * 1.0 / n), 0) AS ms FROM activity_log_entry
+         WHERE entry_type = 'MANUAL' AND category_key = ? AND day_key IN (${dayPh}) GROUP BY day_key`,
+      )
+      .all(label, ...dayKeys) as { day_key: string; ms: number }[];
+    for (const r of rows) out.set(r.day_key, (out.get(r.day_key) ?? 0) + Math.floor(r.ms / 1000));
+  }
+  if (target.groupIdentityIds.length > 0) {
+    const aliasPairs: { name: string; color: string }[] = [];
+    for (const id of target.groupIdentityIds)
+      for (const a of listAliases(db, id)) aliasPairs.push({ name: a.name, color: a.color ?? '' });
+    if (aliasPairs.length > 0) {
+      const namePh = aliasPairs.map(() => '(?, ?)').join(', ');
+      const rows = db
+        .prepare(
+          `SELECT day_key, COALESCE(SUM(credited_ms), 0) AS ms FROM session
+           WHERE day_key IN (${dayPh}) AND (tab_group_name_snapshot, COALESCE(group_color_snapshot, '')) IN (${namePh})
+           GROUP BY day_key`,
+        )
+        .all(...dayKeys, ...aliasPairs.flatMap((a) => [a.name, a.color])) as { day_key: string; ms: number }[];
+      for (const r of rows) out.set(r.day_key, (out.get(r.day_key) ?? 0) + Math.floor(r.ms / 1000));
+    }
+  }
+  return out;
+}
+
+/** 対象の実測秒を dayKeys ぶん合算する（design: goal-burnup D2）。 */
+export function accumulatedSecondsForTarget(db: DB, target: MeasurementTarget, dayKeys: string[]): number {
+  let sum = 0;
+  for (const v of dailySecondsForTarget(db, target, dayKeys).values()) sum += v;
+  return sum;
+}
+
 /** 目標時間の対象の実測秒を dayKeys（凍結日を除いた対象日）ぶん合算する（design D2・D4）。 */
 function accumulatedSecondsFor(db: DB, row: TargetHoursRow, dayKeys: string[]): number {
-  if (dayKeys.length === 0) return 0;
-  if (row.kind === 'TOTAL_WORK') {
-    let sum = 0;
-    for (const dk of dayKeys) sum += totalWorkSecondsForDay(db, dk);
-    return sum;
+  const view = toTargetHoursView(db, row);
+  return accumulatedSecondsForTarget(
+    db,
+    {
+      labels: view.labels,
+      totalWork: view.kind === 'TOTAL_WORK',
+      groupIdentityIds: view.kind === 'GROUP_SET' ? view.groupIdentityIds : [],
+      timelineLabels: view.kind === 'TIMELINE' ? view.labels : [],
+    },
+    dayKeys,
+  );
+}
+
+/**
+ * バーンアップの計測対象を解決する（design: goal-burnup D2）。
+ * 1. 目標時間（`goal_target_hours`）の対象があればそれを使う（`secondsPerDay` は使わない）。
+ * 2. 無ければ、目標に紐づく時間型ルール（TOTAL_WORK/GROUP/TIMELINE）の対象を束ねる。
+ * 3. どちらも無ければ `null`（空状態。全作業時間へフォールバックしない）。
+ */
+export function resolveGoalMeasurementTarget(db: DB, goalId: number): MeasurementTarget | null {
+  const row = getTargetHoursRow(db, goalId);
+  if (row) {
+    const view = toTargetHoursView(db, row);
+    return {
+      labels: view.labels,
+      totalWork: view.kind === 'TOTAL_WORK',
+      groupIdentityIds: view.kind === 'GROUP_SET' ? view.groupIdentityIds : [],
+      timelineLabels: view.kind === 'TIMELINE' ? view.labels : [],
+    };
   }
-  if (row.kind === 'TIMELINE') {
-    const refs = targetHoursMemberRefs(db, row.goal_id);
-    const label = refs[0] ? refs[0].slice('timeline:'.length) : '';
-    const dayPh = dayKeys.map(() => '?').join(',');
-    const r = db
-      .prepare(
-        `SELECT COALESCE(SUM((end_at - start_at) * 1.0 / n), 0) AS ms FROM activity_log_entry
-         WHERE entry_type = 'MANUAL' AND category_key = ? AND day_key IN (${dayPh})`,
-      )
-      .get(label, ...dayKeys) as { ms: number };
-    return Math.floor(r.ms / 1000);
+  const rules = linkedRules(db, goalId).filter((r) => r.status === 'active' && TIME_TARGETS.has(r.target));
+  if (rules.length === 0) return null;
+  const labels: string[] = [];
+  let totalWork = false;
+  const groupIdentityIds: number[] = [];
+  const timelineLabels: string[] = [];
+  for (const r of rules) {
+    if (r.target === 'TOTAL_WORK') {
+      totalWork = true;
+      labels.push('総作業時間');
+    } else if (r.target === 'GROUP') {
+      if (r.group_identity_id != null) {
+        groupIdentityIds.push(r.group_identity_id);
+        labels.push(ruleLabel(db, r));
+      }
+    } else if (r.target === 'TIMELINE') {
+      const label = r.label ?? '';
+      if (label) {
+        timelineLabels.push(label);
+        labels.push(label);
+      }
+    }
   }
-  // GROUP_SET: 各対象グループの alias（name,color）を束ねて単純和（同一 identity は自動的に合算される）。
-  const refs = targetHoursMemberRefs(db, row.goal_id);
-  const groupIds = refs.map((r) => Number(r.slice('group:'.length)));
-  const aliasPairs: { name: string; color: string }[] = [];
-  for (const id of groupIds) for (const a of listAliases(db, id)) aliasPairs.push({ name: a.name, color: a.color ?? '' });
-  if (aliasPairs.length === 0) return 0;
-  const dayPh = dayKeys.map(() => '?').join(',');
-  const namePh = aliasPairs.map(() => '(?, ?)').join(', ');
-  const r = db
-    .prepare(
-      `SELECT COALESCE(SUM(credited_ms), 0) AS ms FROM session
-       WHERE day_key IN (${dayPh}) AND (tab_group_name_snapshot, COALESCE(group_color_snapshot, '')) IN (${namePh})`,
-    )
-    .get(...dayKeys, ...aliasPairs.flatMap((a) => [a.name, a.color])) as { ms: number };
-  return Math.floor(r.ms / 1000);
+  if (totalWork) return { labels: ['総作業時間'], totalWork: true, groupIdentityIds: [], timelineLabels: [] };
+  if (labels.length === 0) return null;
+  return { labels, totalWork: false, groupIdentityIds, timelineLabels };
 }
 
 /**
@@ -1202,320 +1271,6 @@ export function updateJournalImageCaption(
 export function deleteJournalImage(db: DB, goalId: number, imageId: number): boolean {
   imageMetaById(db, goalId, imageId); // 所有検証（他目標・不在は 404）。
   return db.prepare('DELETE FROM goal_journal_image WHERE id = ? AND goal_id = ?').run(imageId, goalId).changes > 0;
-}
-
-// --- レポート集計（spec: goal-report / D5・D6）-----------------------------
-
-export interface ReportDayCell {
-  dayKey: string;
-  dayNumber: number;
-  met: boolean;
-  actualSeconds: number | null;
-  thresholdSeconds: number | null;
-  /** まだ到来していない日（`day_key > today`）＝**未到来**。未達成マスにしない（design D6）。 */
-  future: boolean;
-  /** このルールがその日ゲートに含まれていなかった（開始前・削除後）＝**対象外**。未達成に数えない。 */
-  inactive: boolean;
-  /** その日、目標が凍結中だった＝**対象外**。`inactive` とは視覚的に区別する（spec: goal-report / design: goal-freeze D7）。 */
-  frozen: boolean;
-}
-export interface ReportRule {
-  ruleId: number;
-  conditionKey: string;
-  target: RuleTarget;
-  label: string;
-  isTimeType: boolean;
-  cells: ReportDayCell[];
-}
-export interface ReportRuleChange {
-  ruleId: number;
-  label: string;
-  effectiveDate: string;
-  dayNumber: number;
-  op: 'add' | 'update' | 'remove';
-  before: Record<string, unknown> | null;
-  after: Record<string, unknown> | null;
-  reason: string;
-}
-export interface ReportDayImage {
-  imageId: number;
-  caption: string;
-}
-/** ③の2モード用の平坦な画像メタ（キャプション横断・日跨ぎの並びに使う・design D5）。 */
-export interface ReportImage {
-  imageId: number;
-  caption: string;
-  dayKey: string;
-  dayNumber: number;
-  sortOrder: number;
-}
-export interface ReportDayText {
-  dayKey: string;
-  dayNumber: number;
-  text: string;
-  source: 'journal' | 'reflection' | null;
-  /** その日に添付された画像（sort_order 昇順）。③は Day1/Day30、④は各日で使う（D5）。 */
-  images: ReportDayImage[];
-}
-export interface GoalReport {
-  goal: {
-    id: number;
-    name: string;
-    purpose: string;
-    startDay: string;
-    endDay: string;
-    /** M = end_day - start_day + 1（延長されうる・design D7）。 */
-    dayCount: number;
-    /** 達成日数＝当日ゲートに含まれた全ルール met の日数。進行中は**その時点まで**（未到来は数えない）。 */
-    achievedDays: number;
-    /** 進行中（走行中プレビュー）か完走後か。UI の文言・CTA 出し分けに使う。 */
-    status: GoalStatus;
-    /** 進行中は 1..M（Day 12/30 のヘッダ用）、完走後は M。 */
-    dayNumber: number;
-    /** 事実が確定している日数（＝未到来でない日の数）。進行中は dayNumber と一致。 */
-    elapsedDays: number;
-    /**
-     * ③の After 側に使う Day 番号。完走後は最終日、進行中は**現時点で最も新しい
-     * 記録のある日**（記録が1つも無ければ現在の Day）（spec: goal-report ③）。
-     */
-    afterDayNumber: number;
-    /** ③の最終日写真 CTA を出してよいか＝**完走後のみ**（進行中は最終日がまだ来ていない）。 */
-    showFinalPhotoCta: boolean;
-    /** 完走レポート先頭の「続ける／終える」フォークを出すべきか（design: goal-lifecycle-fork）。 */
-    showLifecycleFork: boolean;
-    lifecycleChoice: 'continued' | 'ended' | null;
-    lifecycleReason: string | null;
-    continuedGoalId: number | null;
-    /** 一時凍結の現在状態。ヘッダの「凍結中」表示に使う（spec: goal-freeze / goal-report）。 */
-    freeze: FreezeView | null;
-    /** 証拠写真のキャプション。null なら「求めない」設定（完走フォークの「終える」ダイアログが使う）。 */
-    outcomeCaption: string | null;
-    /** 目標時間（②の水準線描画に使う）。無ければ null（spec: goal-target-hours）。 */
-    targetHours: GoalTargetHoursView | null;
-  };
-  rules: ReportRule[];
-  hasTimeType: boolean;
-  ruleChanges: ReportRuleChange[];
-  days: ReportDayText[];
-  /** 全画像の平坦リスト（(caption, dayNumber, sortOrder) 昇順）。③の2モードが使う（D5）。 */
-  reportImages: ReportImage[];
-  /** ⑤沿革（ルール操作の年表）。日記は含まない（spec: goal-chronicle）。 */
-  chronicle: Chronicle;
-}
-
-interface RuleChangeDbRow {
-  id: number;
-  rule_id: number;
-  day_key: string;
-  op: 'add' | 'update' | 'remove';
-  before: string | null;
-  after: string | null;
-  reason: string;
-}
-
-/**
- * 目標のレポートを集計する。**進行中でも開ける**（走行中プレビュー・spec: goal-report / D6）。
- * 開始前（まだ1日も走っていない）のみ GoalReportNotReadyError（API は 409）。
- */
-export function getGoalReport(db: DB, id: number, nowMs = Date.now()): GoalReport {
-  const goal = getGoalRow(db, id);
-  const today = todayKey(db, nowMs);
-  const status = deriveStatus(db, today, goal);
-  if (status === 'upcoming') throw new GoalReportNotReadyError();
-  const completed = status === 'completed';
-  const endDay = effectiveEndDayOf(db, goal, today);
-  const dayCount = dayDiff(goal.start_day, endDay) + 1;
-  // 事実が確定している日数（＝未到来でない日）。完走後は全日。
-  const elapsedDays = completed ? dayCount : Math.min(dayCount, dayDiff(goal.start_day, today) + 1);
-  const freezeIntervals = goalFreezeIntervals(db, goal.id);
-  const endedIntervals = endedIntervalsFor(db, goal);
-  const frozenOn = (dayKey: string): boolean =>
-    freezeIntervals.some((iv) => dayKey >= iv.startDay && dayKey <= iv.endDay) ||
-    endedIntervals.some((iv) => dayKey >= iv.startDay && dayKey <= iv.endDay);
-
-  const rules = linkedRules(db, id);
-  const ruleChanges = rules.length
-    ? (db
-        .prepare(
-          `SELECT * FROM rule_change WHERE rule_id IN (${rules.map(() => '?').join(',')}) ORDER BY day_key, id`,
-        )
-        .all(...rules.map((r) => r.id)) as RuleChangeDbRow[])
-    : [];
-
-  // 各ルールが dayKey に「実際にゲートにあったか」（design D1・D3。isRuleActiveOn の履歴版）。
-  // `rule_change`（op='add'）の day_key は「その変更を決めた日」で、スケジュール開始（start_day）
-  // より前のことがあるため境界には使わない。削除済みは最後の remove 日以降を対象外にする。
-  const removedAt = new Map<number, string | null>();
-  for (const r of rules) {
-    const removeRow = [...ruleChanges].reverse().find((c) => c.rule_id === r.id && c.op === 'remove');
-    removedAt.set(r.id, removeRow?.day_key ?? null);
-  }
-  function wasActiveOn(r: RuleRow, dayKey: string): boolean {
-    if (dayKey < r.start_day) return false;
-    const removedDay = removedAt.get(r.id) ?? null;
-    if (removedDay !== null && dayKey >= removedDay) return false;
-    if (r.end_day == null) return true;
-    const schedule = ruleSchedule(r.start_day, r.end_day);
-    if (carryoverPolicy(r.target, schedule) === 'carry') return true;
-    return dayKey <= r.end_day;
-  }
-
-  const dayKeys: string[] = [];
-  for (let i = 0; i < dayCount; i++) dayKeys.push(addDaysKey(goal.start_day, i));
-
-  // 各日の per_condition_results（rule:<id> または legacy_condition_key で解決）。凍結延長ぶんの
-  // 末尾日（実効 end_day まで）も含める（凍結で追加された日は通常どおり評価される実日のため）。
-  const evalByDay = new Map<string, ConditionResult[]>();
-  for (const row of db
-    .prepare('SELECT day_key, per_condition_results FROM unlock_evaluation WHERE day_key BETWEEN ? AND ?')
-    .all(goal.start_day, endDay) as { day_key: string; per_condition_results: string }[]) {
-    try {
-      evalByDay.set(row.day_key, JSON.parse(row.per_condition_results) as ConditionResult[]);
-    } catch {
-      evalByDay.set(row.day_key, []); // 壊れた JSON は空扱い（欠測＝未達成）。
-    }
-  }
-
-  // ① ルールごとの M日カレンダー（欠測・キー不在は未達成／未到来は空白／対象外期間は inactive／凍結日は frozen）。
-  const reportRules: ReportRule[] = rules.map((r) => {
-    const cells: ReportDayCell[] = dayKeys.map((dk, i) => {
-      const future = dk > today;
-      const frozen = !future && frozenOn(dk);
-      const inactive = !future && !frozen && !wasActiveOn(r, dk);
-      const skip = future || inactive || frozen;
-      const entry = skip ? undefined : resolveByStableOrLegacy(evalByDay.get(dk) ?? [], r);
-      return {
-        dayKey: dk,
-        dayNumber: i + 1,
-        met: !skip && entry?.met === true,
-        actualSeconds: skip ? null : (entry?.actualSeconds ?? null),
-        thresholdSeconds: skip ? null : (entry?.thresholdSeconds ?? null),
-        future,
-        inactive,
-        frozen,
-      };
-    });
-    return {
-      ruleId: r.id,
-      conditionKey: ruleConditionKey(r.id),
-      target: r.target,
-      label: ruleLabel(db, r),
-      isTimeType: TIME_TARGETS.has(r.target),
-      cells,
-    };
-  });
-
-  // ヘッダ達成日数 = その日ゲートにあった（inactive でも frozen でもない）ルールが1つ以上あり、全て met の日数。
-  // 凍結日は分母にも分子にも入らない（design: goal-freeze D7）。
-  let achievedDays = 0;
-  for (let i = 0; i < elapsedDays; i++) {
-    const applicable = reportRules.filter((r) => !r.cells[i]!.inactive && !r.cells[i]!.frozen);
-    if (applicable.length > 0 && applicable.every((r) => r.cells[i]!.met)) achievedDays++;
-  }
-
-  // ② 時間型ルールの閾値変更マーカー（②時間推移グラフの注釈・design D2）。写真/質問ルールの
-  // 追加・削除など一般のルール操作履歴は⑤沿革が読み手（ここでは二重に載せない）。
-  const reportRuleChanges: ReportRuleChange[] = ruleChanges
-    .filter((c) => c.day_key >= goal.start_day && c.day_key <= endDay && c.op === 'update')
-    .filter((c) => {
-      const rule = rules.find((r) => r.id === c.rule_id);
-      return rule && TIME_TARGETS.has(rule.target);
-    })
-    .map((c) => {
-      const rule = rules.find((r) => r.id === c.rule_id);
-      return {
-        ruleId: c.rule_id,
-        label: rule ? ruleLabel(db, rule) : `rule:${c.rule_id}`,
-        effectiveDate: c.day_key,
-        dayNumber: dayDiff(goal.start_day, c.day_key) + 1,
-        op: c.op,
-        before: c.before ? (JSON.parse(c.before) as Record<string, unknown>) : null,
-        after: c.after ? (JSON.parse(c.after) as Record<string, unknown>) : null,
-        reason: c.reason,
-      };
-    });
-
-  // ③④ Day 別文面（goal_journal → reflection_entry の日単位フォールバック）。
-  const journalByDay = new Map(
-    (db.prepare('SELECT day_key, content FROM goal_journal WHERE goal_id = ?').all(id) as {
-      day_key: string;
-      content: string;
-    }[]).map((r) => [r.day_key, r.content]),
-  );
-  const imagesByDay = new Map<string, ReportDayImage[]>();
-  const reportImages: ReportImage[] = [];
-  for (const r of db
-    .prepare('SELECT id, day_key, caption, sort_order FROM goal_journal_image WHERE goal_id = ? ORDER BY day_key, sort_order, id')
-    .all(id) as { id: number; day_key: string; caption: string; sort_order: number }[]) {
-    if (!imagesByDay.has(r.day_key)) imagesByDay.set(r.day_key, []);
-    imagesByDay.get(r.day_key)!.push({ imageId: r.id, caption: r.caption });
-    reportImages.push({
-      imageId: r.id,
-      caption: r.caption,
-      dayKey: r.day_key,
-      dayNumber: dayDiff(goal.start_day, r.day_key) + 1,
-      sortOrder: r.sort_order,
-    });
-  }
-  reportImages.sort(
-    (a, b) =>
-      a.caption.trim().localeCompare(b.caption.trim()) || a.dayNumber - b.dayNumber || a.sortOrder - b.sortOrder,
-  );
-  const days: ReportDayText[] = dayKeys.map((dk, i) => {
-    const images = imagesByDay.get(dk) ?? [];
-    const j = journalByDay.get(dk);
-    if (j && j.trim()) return { dayKey: dk, dayNumber: i + 1, text: j, source: 'journal', images };
-    const ref = getReflection(db, dk);
-    if (ref && ref.content && ref.content.trim())
-      return { dayKey: dk, dayNumber: i + 1, text: ref.content, source: 'reflection', images };
-    return { dayKey: dk, dayNumber: i + 1, text: '', source: null, images };
-  });
-
-  let afterDayNumber = elapsedDays;
-  if (completed) {
-    afterDayNumber = dayCount;
-  } else {
-    for (let i = elapsedDays - 1; i >= 0; i--) {
-      const d = days[i]!;
-      if (d.text.trim() || d.images.length > 0) {
-        afterDayNumber = d.dayNumber;
-        break;
-      }
-    }
-  }
-
-  return {
-    goal: {
-      id: goal.id,
-      name: goal.name,
-      purpose: goal.purpose,
-      startDay: goal.start_day,
-      endDay,
-      dayCount,
-      achievedDays,
-      status,
-      dayNumber: elapsedDays,
-      elapsedDays,
-      afterDayNumber,
-      showFinalPhotoCta: completed,
-      showLifecycleFork: completed && goal.lifecycle_choice === null,
-      lifecycleChoice: goal.lifecycle_choice,
-      lifecycleReason: goal.lifecycle_reason,
-      continuedGoalId: goal.continued_goal_id,
-      freeze: getFreezeOn(db, goal.id, today),
-      outcomeCaption: goal.outcome_caption,
-      targetHours: (() => {
-        const row = getTargetHoursRow(db, goal.id);
-        return row ? toTargetHoursView(db, row) : null;
-      })(),
-    },
-    rules: reportRules,
-    hasTimeType: reportRules.some((r) => r.isTimeType),
-    ruleChanges: reportRuleChanges,
-    days,
-    reportImages,
-    chronicle: getChronicle(db, id, today),
-  };
 }
 
 // --- 写真/質問ルールへの回答（今日タブの不足条件・spec: goal-check-gate）--------------------

@@ -1531,4 +1531,28 @@ CREATE INDEX idx_goal_end_interval_goal ON goal_end_interval(goal_id, id);
       }
     },
   },
+  {
+    version: 34,
+    name: 'task-estimate-and-progress',
+    // 想定時間と小数の進捗（spec: task-estimate / goal-burnup・design.md D4）。
+    // 想定時間は根直下のノードにだけ意味を持ち、進捗は葉にだけ意味を持つ（アプリ側で検証）。
+    // 変更は `task_estimate_change` へ理由・実行者つきで追記する（値は本体、履歴は別テーブル）。
+    sql: /* sql */ `
+ALTER TABLE task ADD COLUMN estimated_seconds INTEGER;
+ALTER TABLE task ADD COLUMN progress_ratio REAL;
+
+CREATE TABLE task_estimate_change (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES task(id) ON DELETE CASCADE,
+  field TEXT NOT NULL,              -- 'estimate' | 'progress'
+  from_value REAL,
+  to_value REAL,
+  reason TEXT NOT NULL,
+  actor TEXT NOT NULL,              -- 'human' | 'agent'
+  day_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_task_estimate_change_task ON task_estimate_change(task_id, id);
+`,
+  },
 ];

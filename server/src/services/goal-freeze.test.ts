@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { openDb, type DB } from '../db/index.js';
 import { zonedTimeToEpoch } from '../aggregation/index.js';
-import { createGoal, getGoal, getGoalReport, goalPace, type GoalView } from './goals.js';
+import { createGoal, getGoal, goalPace, type GoalView } from './goals.js';
 import { getChronicle } from './goal-chronicle.js';
 import { evaluateDay } from '../rules/evaluate.js';
 import {
@@ -360,33 +360,11 @@ describe('凍結中の目標のルールはゲートから外れる', () => {
   });
 });
 
-// --- レポート（spec: goal-report）----------------------------------------------
-
-describe('レポートは凍結日を対象外として扱う', () => {
-  it('凍結日のマスは frozen で、達成日数にも数えない', () => {
-    const g = makeGoal();
-    const ruleId = g.rules[0]!.ruleId;
-    // 7/1〜7/20 はすべて達成として焼き込む（凍結日も含めて焼き込み、凍結が勝つことを見る）。
-    for (let i = 0; i < 20; i++) {
-      const d = new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10);
-      seedEval(d, [{ conditionKey: `rule:${ruleId}`, ruleId, target: 'TOTAL_WORK', met: true }]);
-    }
-    freezeGoal(db, g.id, { endDay: '2026-07-14', reason: '大タスク' }, NOW_0710);
-
-    const report = getGoalReport(db, g.id, NOW_0720);
-    expect(report.goal.dayCount).toBe(35);
-    const cells = report.rules[0]!.cells;
-    expect(cells[9]!.dayKey).toBe('2026-07-10');
-    expect(cells[9]!.frozen).toBe(true);
-    expect(cells[9]!.met).toBe(false);
-    expect(cells[13]!.dayKey).toBe('2026-07-14');
-    expect(cells[13]!.frozen).toBe(true);
-    expect(cells[0]!.frozen).toBe(false);
-    expect(cells[0]!.met).toBe(true);
-    // 経過20日のうち凍結5日（7/10〜7/14）を除いた15日が達成日数。
-    expect(report.goal.achievedDays).toBe(15);
-  });
-});
+// レポート（①達成カレンダーの frozen セル・達成日数）は capability ごと廃止された
+// （spec: goal-report REMOVED・goal-burnup-forecast）。凍結が dayCount を延ばす事実は
+// 本ファイル内の「凍結日ぶん期限が延びる」describe で getGoal() により別途検証済み。
+// セル単位の frozen/met・achievedDays に相当する読み手はどこにも残らないため、
+// それらを検証していたこのテストはここで意図的に落とす。
 
 // --- 沿革（spec: goal-chronicle）------------------------------------------------
 

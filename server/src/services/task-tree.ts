@@ -350,6 +350,10 @@ export interface BlueprintNode {
   done: boolean;
   drop_reason: string | null;
   holdLeafCount: number;
+  /** 想定時間（秒・根直下のみ非 null・spec: task-estimate）。 */
+  estimatedSeconds: number | null;
+  /** 小数の進捗（0〜1・葉のみ非 null・spec: task-estimate）。 */
+  progressRatio: number | null;
   children: BlueprintNode[];
 }
 
@@ -389,6 +393,8 @@ export function getBlueprint(db: DB, goalId: number): Blueprint {
       done,
       drop_reason: t.drop_reason,
       holdLeafCount,
+      estimatedSeconds: t.parent_task_id === null ? t.estimated_seconds : null,
+      progressRatio: children.length === 0 ? t.progress_ratio : null,
       children,
     };
   }
@@ -455,7 +461,7 @@ export function setSubtreeDone(db: DB, taskId: number, done: boolean): void {
 
 // --- 枝への着手・打ち切り（design D7） ---------------------------------------
 
-function collectDescendantLeafIds(db: DB, containerId: number): number[] {
+export function collectDescendantLeafIds(db: DB, containerId: number): number[] {
   const all = listTasks(db);
   const byParent = new Map<number, TaskRow[]>();
   for (const t of all) {

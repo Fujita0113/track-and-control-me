@@ -1074,129 +1074,19 @@ body.rf-page .content { max-width: none; }
 .gr-start-btn.on { background: var(--accent); color: #fff; }
 .gr-start-btn:not(.on):hover { background: var(--panel); }
 
-/* --- 完了レポート（design-brief: bg #eef1f6 / accent #3b5bb5 / white card r14）--- */
-.gr-report { --gr-accent: #3b5bb5; background: #eef1f6; margin: -20px; padding: 26px 30px 44px; min-height: 60vh; }
-.gr-back { border: none; background: transparent; color: var(--gr-accent); font-family: inherit; font-size: 13px; cursor: pointer; padding: 4px 0; margin-bottom: 14px; }
-.gr-back:hover { text-decoration: underline; }
-.gr-header { max-width: 820px; margin: 0 auto 26px; text-align: center; }
-.gr-eyebrow { font-size: 12px; letter-spacing: 0.28em; color: var(--gr-accent); font-weight: 700; text-transform: uppercase; }
-.gr-h1 { font-size: 30px; font-weight: 700; color: #26303f; margin: 8px 0 6px; }
-.gr-purpose-line { font-size: 15px; color: #57616f; margin: 0 0 12px; }
-.gr-header-meta { display: flex; gap: 12px; justify-content: center; align-items: center; color: #6b7686; font-size: 13.5px; }
-.gr-dot { color: #b6bfcc; }
-.gr-achieved { font-weight: 700; color: #26303f; }
-.gr-card { max-width: 820px; margin: 0 auto 20px; background: #ffffff; border-radius: 14px; padding: 22px 26px; box-shadow: 0 1px 2px rgba(30,45,70,0.05), 0 14px 34px -22px rgba(30,45,70,0.28); }
-.gr-block-title { font-size: 14px; font-weight: 700; color: #3a4656; margin: 0 0 16px; }
-
-/* ① 達成カレンダー */
-.gr-cal-scroll { overflow-x: auto; }
-.gr-cal { display: grid; gap: 2px; align-items: center; min-width: max-content; }
-.gr-cal-corner { }
-.gr-cal-dh { font-size: 9.5px; color: #97a1af; text-align: center; cursor: pointer; }
-.gr-cal-dh.sel { color: var(--gr-accent); font-weight: 700; }
-.gr-cal-label { font-size: 12px; color: #46505f; padding-right: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gr-cell { width: 17px; height: 17px; border-radius: 4px; border: none; padding: 0; cursor: pointer; }
-.gr-cell.done { background: var(--gr-accent); }
-.gr-cell.miss { background: #e3e7ee; }
-/* 未到来（day_key > today）＝空白。走行中プレビューで残り日数を未達成マスで埋めないための3値目。
-   「欠測＝未達成（.miss の塗り）」と視覚的に取り違えないよう、塗らず薄い破線の枠だけにする。 */
-.gr-cell.future { background: transparent; border: 1px dashed #d7dde6; cursor: default; }
-/* 凍結（対象外）＝開始前・削除後の対象外（.future の破線）とは見分けがつく塗り分け（spec: goal-report）。 */
-.gr-cell.frozen {
-  background-image: repeating-linear-gradient(45deg, #cfe0f2 0 3px, #e9f1fa 3px 6px);
-  border: 1px solid #b9d2ea; cursor: default;
-}
-.gr-cell.sel { outline: 2px solid #26303f; outline-offset: 1px; }
-.gr-legend { display: flex; gap: 18px; margin-top: 14px; font-size: 12px; color: #6b7686; }
-.gr-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.gr-legend-swatch { width: 14px; height: 14px; cursor: default; }
-
-/* ①のホバープレビュー（spec: goal-report-day-detail） */
-.gr-daytip { position: fixed; top: 0; left: 0; z-index: 120; display: none; max-width: 260px; padding: 8px 10px; border-radius: 8px; background: #212b36; color: #f4f6fa; font-size: 12px; line-height: 1.5; box-shadow: var(--shadow-lg); pointer-events: none; }
-.gr-daytip.show { display: block; }
-.gr-daytip-head { font-weight: 700; color: #e3e8ef; margin-bottom: 3px; }
-.gr-daytip-body { white-space: pre-wrap; word-break: break-word; }
-
-/* ①クリックで開く日別詳細モーダル（spec: goal-report-day-detail） */
-.gr-daymodal-sec { display: flex; flex-direction: column; gap: 6px; }
-.gr-daymodal-rules { display: flex; flex-direction: column; gap: 4px; }
-.gr-daymodal-rule { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.gr-daymodal-rule-label { flex: 1; color: #46505f; }
-.gr-daymodal-rule-nums { color: var(--muted); font-size: 12px; }
-.gr-daymodal-rule-status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
-.gr-daymodal-rule-status.done { color: #1a7a4c; background: #e2f5ea; }
-.gr-daymodal-rule-status.miss { color: #6b7686; background: #eef1f5; }
-.gr-daymodal-rule-status.future,
-.gr-daymodal-rule-status.frozen { color: #97a1af; background: #f4f6f9; }
-.gr-daymodal-time-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #46505f; }
-.gr-daymodal-time-target { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--line); }
-.gr-daymodal-journal { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
-.gr-daymodal-journal-text { font-size: 13px; color: #46505f; white-space: pre-wrap; word-break: break-word; background: #f7f8fa; border-radius: 8px; padding: 8px 10px; }
-
-/* ② 時間の推移 */
-.gr-ts { margin-bottom: 20px; }
-.gr-ts:last-child { margin-bottom: 0; }
-.gr-ts-label { font-size: 13px; font-weight: 600; color: #46505f; margin-bottom: 8px; }
-.gr-chart-wrap { position: relative; height: 240px; }
-.gr-marker { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 10px; padding: 8px 12px; background: #f5f2ec; border-left: 3px solid #c9a86a; border-radius: 6px; }
-.gr-marker-day { font-size: 12px; font-weight: 700; color: #8a6d3b; }
-.gr-marker-delta { font-size: 12.5px; color: #46505f; font-variant-numeric: tabular-nums; }
-.gr-marker-reason { font-size: 13px; color: #57616f; }
-
-/* ③ 画像のペア/単独並置（Before=左 / After=右） */
-.gr-ba-imgs { margin-top: 18px; padding-top: 16px; border-top: 1px solid #edf0f5; display: flex; flex-direction: column; gap: 16px; }
+/* --- 大きい沿革が使う画像ペア（旧レポート③の共有分だけ残す。design: goal-burnup-forecast）--- */
 .gr-ba-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: start; }
 @media (max-width: 720px) { .gr-ba-pair { grid-template-columns: 1fr; } }
-.gr-ba-figslot { min-height: 0; } /* 単独表示の反対側の空スロット */
 
-/* 画像1枚（③④共通） */
+/* 画像1枚（大きい沿革・振り返りタブの目標コーナー共通） */
 .gr-fig { margin: 0; min-width: 0; }
 .gr-fig-img { width: 100%; height: auto; max-height: 340px; object-fit: contain; border-radius: 10px; border: 1px solid #e4e9f1; background: #f3f5f9; display: block; }
 .gr-fig-cap { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
-.gr-fig-tag { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; color: var(--gr-accent); }
+.gr-fig-tag { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; color: var(--gr-accent, #3b5bb5); }
 .gr-fig-text { font-size: 13px; color: #46505f; }
-
-/* ③ 見出し行＋モード切替トグル */
-.gr-block-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.gr-mode-seg { display: inline-flex; border: 1px solid #d8dee9; border-radius: 999px; overflow: hidden; background: #f3f5f9; }
-.gr-mode-btn { border: none; background: transparent; font-family: inherit; font-size: 12px; font-weight: 600; color: #6b7686; padding: 5px 13px; cursor: pointer; }
-.gr-mode-btn.on { background: var(--gr-accent); color: #fff; }
-.gr-img-host { }
-
-/* ③ 全比較モード（キャプション＝行、古い→新しいを横スクロール） */
-.gr-allrows { margin-top: 18px; padding-top: 16px; border-top: 1px solid #edf0f5; display: flex; flex-direction: column; gap: 18px; }
-.gr-allrow-cap { font-size: 13px; font-weight: 700; color: #46505f; margin-bottom: 8px; }
-.gr-allstrip { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; }
-.gr-allstrip .gr-fig { flex: 0 0 auto; width: 200px; }
-.gr-allstrip .gr-fig-img { max-height: 180px; }
-
-/* ③ 最終日写真の追加CTA */
-.gr-cta { margin-top: 16px; border: 1px dashed #c6d0e4; border-radius: 12px; background: linear-gradient(135deg, #f4f7ff, #eef2fb); padding: 14px 16px; transition: background 0.12s, box-shadow 0.12s; }
-.gr-cta.drag { background: #e7eeff; box-shadow: inset 0 0 0 2px #b9caf2; }
-.gr-cta-lead { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
-.gr-cta-title { font-size: 14px; font-weight: 700; color: #33404f; }
-.gr-cta-sub { font-size: 12.5px; color: #6b7686; }
-.gr-cta-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.gr-cta-cap { flex: 1 1 200px; min-width: 0; font-family: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid #d5ddec; border-radius: 8px; }
-.gr-cta-btn { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; color: #fff; background: var(--gr-accent); border-radius: 8px; padding: 8px 14px; cursor: pointer; white-space: nowrap; }
-.gr-cta-btn:hover { filter: brightness(1.06); }
-.gr-cta-file { display: none; }
-.gr-cta-error { font-size: 12px; color: #c0392b; margin-top: 8px; }
 
 /* 作成フォームの初日写真ステージング（rf-imgzone を流用しつつ枠付きに） */
 .gr-stage { border: 1px solid #e4e9f1; border-radius: 12px; margin-top: 4px; }
-
-/* ④ 日記ストリップ（design D5。カードは固定幅・固定高、本文だけカード内で縦スクロール） */
-.gr-strip { display: flex; gap: 14px; overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding-bottom: 6px; }
-.gr-strip-card { flex: 0 0 auto; width: clamp(280px, 26vw, 360px); height: 360px; display: flex; flex-direction: column; scroll-snap-align: start; border: 1px solid #e4e9f1; border-radius: 12px; padding: 14px 16px; background: #fbfcfe; }
-.gr-strip-card.sel { border-color: var(--gr-accent); box-shadow: 0 0 0 2px rgba(59,91,181,0.18); }
-.gr-strip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #edf0f5; flex: 0 0 auto; }
-.gr-strip-day { font-size: 12.5px; font-weight: 700; color: #46505f; }
-.gr-strip-src { font-size: 11px; color: var(--gr-accent); border: 1px solid #d5ddf0; border-radius: 999px; padding: 1px 9px; }
-.gr-strip-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; font-size: 13.5px; line-height: 1.6; }
-.gr-empty { color: #a6afc0; font-size: 13.5px; }
-/* ④ カード内の画像（読み取り専用・本文と同じスクロール領域に続く） */
-.gr-strip-imgs { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
 
 /* --- 振り返りタブの目標日記コーナー --- */
 .rf-journals { display: flex; flex-direction: column; gap: 14px; margin-top: 20px; }
@@ -1349,42 +1239,7 @@ body.rf-page .content { max-width: none; }
 .cond-answer { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; flex: 1 1 200px; min-width: 0; }
 .cond-hint { font-size: 11.5px; color: var(--muted-2); }
 
-/* --- ⑤ 沿革（spec: goal-chronicle）── 社史・年表の組み --------------------
-   参照は企業の沿革（年表）。色分け・絵文字は使わず、種別は「形」で分ける
-   （写真＝図版プレート／問い＝Q&A の文）。書体は明朝、日付を主役に。
-   合否・スコア・演出は出さない。取り下げは貶めず淡々と残す。 */
-.gr-chr-mincho, .gr-chr-stmt, .gr-chr-day-num, .gr-chr-qa p {
-  font-family: "Hiragino Mincho ProN", "Hiragino Mincho Pro", "Yu Mincho", "YuMincho", "Noto Serif JP", serif;
-}
-.gr-chr { display: flex; flex-direction: column; }
-.gr-chr-entry { display: grid; grid-template-columns: 60px 1fr; column-gap: 0; }
-
-/* 左列：日付（Day 番号が主役・濃紺の一点差し） */
-.gr-chr-date { text-align: right; padding-right: 20px; padding-top: 3px; }
-.gr-chr-day-label { font-size: 9.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--muted-2); }
-.gr-chr-day-num { font-size: 30px; font-weight: 500; line-height: 1; color: #2f4368; margin-top: 3px; font-variant-numeric: lining-nums; }
-.gr-chr-date-sub { font-size: 11px; color: var(--muted-2); margin-top: 5px; font-variant-numeric: tabular-nums; }
-.gr-chr-flag { display: block; margin-top: 8px; font-size: 10.5px; letter-spacing: .14em; color: var(--muted); }
-
-/* 右列：縦罫を貫く菱形の節＋賭けの一文（明朝） */
-.gr-chr-main { position: relative; border-left: 1px solid #cfd4da; padding-left: 26px; padding-bottom: 42px; }
-.gr-chr-entry:last-child .gr-chr-main { padding-bottom: 4px; }
-.gr-chr-main::before {
-  content: ""; position: absolute; left: -4px; top: 8px; width: 7px; height: 7px;
-  background: var(--text); transform: rotate(45deg);
-}
-.gr-chr-entry.off .gr-chr-main::before {
-  background: var(--panel); border: 1.4px solid var(--muted-2); width: 6px; height: 6px; left: -3.5px;
-}
-.gr-chr-stmt { margin: 0; max-width: 30em; font-size: 16.5px; line-height: 1.95; letter-spacing: .02em; color: var(--text); }
-.gr-chr-entry.off .gr-chr-stmt { color: var(--muted); }
-/* 一時凍結イベント（予約/取消/発効/延長/解除）。ルール操作と同じ年表に並ぶが起点の色だけ変える
-   （合否・スコアに相当する演出は付けない・spec: goal-chronicle / goal-freeze）。 */
-.gr-chr-freeze .gr-chr-main::before { background: #6f9bc9; }
-.gr-chr-reason { display: block; margin-top: 11px; font-size: 13px; line-height: 1.75; color: var(--muted); }
-
-/* 大きい沿革（目標そのものの年表・spec: goal-history）。行クリックでレポートへ。
-   レポート⑤沿革（読み物・明朝・1件42px）とは用途が違う索引なので CSS を共有しない。
+/* 大きい沿革（目標そのものの年表・spec: goal-history）。行クリックで進捗グラフへ。
    ✓/× はここでだけ使う（診断であって断罪ではない・design D7-b）。合否・スコア相当の語は出さない。 */
 .gr-history { margin-top: 14px; }
 .gr-hist-list { display: flex; flex-direction: column; margin-top: 4px; }
@@ -1408,7 +1263,7 @@ body.rf-page .content { max-width: none; }
 .gr-hist-pending { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #eef1f5; color: #5a6472; font-size: 11.5px; }
 .gr-hist-line { margin: 0; font-size: 12.5px; color: var(--muted); }
 .gr-hist-reason { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
-/* 索引に置く図版なので小さく。レポート③の原寸（max-height 340px）は持ち込まない。 */
+/* 索引に置く図版なので小さく。原寸（max-height 340px）は持ち込まない。 */
 .gr-hist-row .gr-ba-pair { grid-template-columns: repeat(2, 116px); gap: 10px; margin-top: 2px; }
 .gr-hist-row .gr-fig-img { max-height: 84px; }
 .gr-hist-row .gr-fig-cap { font-size: 10.5px; color: var(--muted-2); margin-top: 3px; }
@@ -1416,35 +1271,86 @@ body.rf-page .content { max-width: none; }
 .gr-hist-tag.ok { color: #2f7d4f; border-color: #bfe3cc; background: #eef8f1; }
 .gr-hist-tag.miss { color: #8a5a1f; border-color: #f0dbb8; background: #fbf2e4; }
 
-/* 証拠（写真／問い）：細罫の見出し＋内容 */
-.gr-chr-ev { margin-top: 22px; }
-.gr-chr-ev.off { opacity: .7; }
-.gr-chr-cap { font-size: 11px; letter-spacing: .1em; color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--line-2); margin-bottom: 11px; }
-.gr-chr-cap-kind { color: var(--muted-2); }
-.gr-chr-cap b { color: var(--text); font-weight: 600; }
-.gr-chr-quit { margin: 0 0 11px; font-size: 12.5px; color: var(--muted); }
-.gr-chr-quit::before { content: "取り下げ ── "; color: var(--muted-2); }
+/* --- 進捗グラフ（spec: goal-burnup。見た目の正典: ref/goal-burnup/burnup-mock.html） --- */
+.bu-page { max-width: 960px; margin: 0 auto; }
+.bu-back { border: none; background: transparent; color: var(--accent); font-family: inherit; font-size: 13px; cursor: pointer; padding: 4px 0; margin-bottom: 14px; }
+.bu-back:hover { text-decoration: underline; }
+.bu-card { padding: 22px 24px 26px; }
+.bu-eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; color: var(--muted-2); text-transform: uppercase; }
+.bu-title { font-size: 20px; margin: 3px 0 0; }
+.bu-target { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+.bu-empty-box { height: 96px; margin-top: 16px; border: 1.5px dashed var(--line); border-radius: 9px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted-2); font-size: 12px; }
+.bu-empty-cta { color: var(--accent); border-color: var(--accent-weak); background: var(--accent-weak); }
 
-/* 写真は図版プレート扱い（角丸なし・細枠・小さめキャプション） */
-.gr-chr-plates { display: flex; flex-wrap: wrap; gap: 13px; }
-.gr-chr-plate { margin: 0; }
-.gr-chr-plate-img { width: 138px; height: 96px; object-fit: cover; display: block; border: 1px solid #cfd4da; box-shadow: 0 1px 2px rgba(20, 25, 35, .06); }
-.gr-chr-plate figcaption { margin-top: 6px; font-size: 10.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
-.gr-chr-note { margin-top: 11px; font-size: 11px; color: var(--muted-2); letter-spacing: .03em; }
+/* ヒーロー: 完了予想の大きな日付＋ペーストグル（design D7） */
+.bu-hero2 { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 18px 0 4px; flex-wrap: wrap; }
+.fc-big { display: flex; align-items: baseline; gap: 9px; }
+.fc-big .fc-date-big { font-size: 40px; font-weight: 750; letter-spacing: -0.01em; color: var(--text); line-height: 1; }
+.fc-big .fc-suffix { font-size: 13px; color: var(--muted); }
+.pace-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--panel-2); flex: none; }
+.pace-toggle button { font-family: inherit; font-size: 12.5px; font-weight: 650; border: none; background: transparent; color: var(--muted); padding: 8px 15px; border-radius: 999px; cursor: pointer; }
+.pace-toggle button.active { background: var(--accent); color: #fff; }
 
-/* 問いと答え（明朝の本文＋余白の日付） */
-.gr-chr-qa { display: grid; grid-template-columns: 44px 1fr; column-gap: 13px; padding: 5px 0; }
-.gr-chr-qa + .gr-chr-qa { border-top: 1px solid var(--line-2); }
-.gr-chr-qa time { font-size: 11px; color: var(--muted-2); padding-top: 6px; font-variant-numeric: tabular-nums; }
-.gr-chr-qa p { margin: 0; font-size: 14px; line-height: 1.85; color: var(--text); }
+/* 表示バー（全期間 / ズーム中の範囲・design D12） */
+.bu-viewbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line-2); font-size: 12px; color: var(--muted); }
+.bu-svg { width: 100%; height: auto; display: block; margin-top: 4px; }
+.bu-ax-label { font-size: 10.5px; fill: var(--muted-2); }
+.bu-grid-line { stroke: var(--line-2); stroke-width: 1; }
+.bu-month-line { stroke: var(--line); stroke-width: 1; }
+.bu-cum-line { fill: none; stroke: var(--accent); stroke-width: 2.6; stroke-linejoin: round; stroke-linecap: round; }
+.bu-today-line { stroke: var(--text); stroke-width: 1.2; stroke-dasharray: 1 3; opacity: 0.5; }
+.bu-today-sub { font-size: 11.5px; fill: var(--text); font-weight: 700; }
+.bu-today-hline { stroke: var(--text); stroke-width: 1; stroke-dasharray: 1 3; opacity: 0.4; }
+.bu-today-hlabel { font-size: 10.5px; fill: var(--text); font-weight: 700; }
 
-@media (max-width: 520px) {
-  .gr-chr-entry { grid-template-columns: 48px 1fr; }
-  .gr-chr-date { padding-right: 12px; }
-  .gr-chr-day-num { font-size: 25px; }
-  .gr-chr-main { padding-left: 18px; }
-  .gr-chr-plate-img { width: 120px; height: 84px; }
-}
+/* 完了予想の描画（選んだ側は強調、もう片方は控えめ・design D7） */
+.bu-fc-target-guide { stroke: var(--muted-2); stroke-dasharray: 2 4; stroke-width: 1; opacity: 0.6; }
+.bu-fc-line { fill: none; }
+.bu-fc-line.strong { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 8 5; stroke-linecap: round; }
+.bu-fc-line.dim { stroke: var(--accent); stroke-width: 1.4; stroke-dasharray: 2 4; opacity: 0.35; }
+.bu-fc-target-dot { fill: var(--panel); stroke: var(--accent); stroke-width: 3; }
+.bu-fc-target-label { font-size: 13px; font-weight: 750; fill: var(--accent); }
+.bu-fc-target-sub { font-size: 10.5px; fill: var(--muted); }
+.bu-fc-dim-label { font-size: 10.5px; fill: var(--muted-2); text-anchor: middle; }
+
+/* タスク達成マーカー（design D11） */
+.bu-ach-dot.branch.done { fill: var(--text); stroke: none; }
+.bu-ach-dot.branch.todo { fill: var(--panel); stroke: var(--text); stroke-width: 2; cursor: pointer; }
+.bu-ach-dot.branch.todo:hover { stroke: var(--accent); }
+.bu-ach-dot.leaf { cursor: pointer; }
+.bu-ach-dot.leaf.done { fill: var(--text); stroke: var(--panel); stroke-width: 1.5; }
+.bu-ach-dot.leaf:hover { stroke: var(--accent); }
+.bu-ach-label { font-size: 11px; font-weight: 650; fill: var(--text); }
+
+/* ズーム帯・日付帯（design D12・D13） */
+.bu-zoom-band { fill: transparent; cursor: zoom-in; }
+.bu-zoom-band:hover { fill: rgba(26, 115, 232, 0.08); }
+.bu-day-band { fill: transparent; cursor: pointer; }
+.bu-day-band:hover { fill: rgba(24, 128, 56, 0.09); }
+
+/* 凡例・脚注 */
+.bu-legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-size: 11.5px; color: var(--muted); }
+.bu-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.bu-swatch { width: 16px; height: 0; border-top-width: 2.5px; border-top-style: solid; border-top-color: var(--accent); display: inline-block; }
+.bu-swatch.dash { border-top-style: dashed; }
+.bu-dot-swatch { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.bu-dot-swatch.done { background: var(--text); }
+.bu-dot-swatch.todo { background: var(--panel); border: 1.6px solid var(--text); }
+.bu-footnote { margin-top: 18px; font-size: 11.5px; color: var(--muted-2); }
+
+/* 達成マーカーのモーダル（葉一覧・完了日一覧。タイトルは modal-header 側で出す） */
+.bu-modal-row { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
+
+/* ラベルの背景ハロ（累積線と重なるときだけ敷く・design D14） */
+.bu-label-halo { fill: var(--panel); opacity: 0.82; rx: 3; }
+
+/* 日付クリックで開く振り返りモーダル（作業時間バー＋本文・spec: goal-burnup / issue #106） */
+.bu-day-modal { gap: 14px; }
+.bu-day-modal .rf-ed { min-height: 190px; padding: 18px 22px 22px; font-size: 14.5px; }
+.bu-day-modal .rf-ph { top: 18px; left: 22px; right: 22px; font-size: 14.5px; }
+.bu-day-modal .rf-alloc-card { padding: 12px 16px 14px; }
+.bu-day-entry { display: flex; flex-direction: column; gap: 10px; }
+.bu-day-note { font-size: 11.5px; }
 
 /* --- タスク一覧ビュー（spec: goal-blueprint。見た目の正典: ref/goal-blueprint/task-tree-mock.html） --- */
 .bp-page { max-width: 780px; margin: 0 auto; }
@@ -1478,6 +1384,7 @@ body.rf-page .content { max-width: none; }
 .bp-node-title.container { font-weight: 700; }
 .bp-node-title.done { color: var(--muted-2); text-decoration: line-through; }
 .bp-node-childcount { font-size: 11.5px; color: var(--muted-2); flex-shrink: 0; }
+.bp-node-estimate, .bp-node-progress { font-size: 11px; color: var(--muted-2); flex-shrink: 0; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; }
 .bp-node-children { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .bp-node-menu { position: relative; flex-shrink: 0; }
 .bp-node-menu-btn { width: 20px; height: 20px; flex-shrink: 0; border: none; background: transparent; color: var(--muted-2); font-size: 13px; line-height: 1; cursor: pointer; border-radius: 5px; opacity: 0; }

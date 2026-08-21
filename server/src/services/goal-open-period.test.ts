@@ -4,7 +4,6 @@ import { zonedTimeToEpoch } from '../aggregation/index.js';
 import {
   createGoal,
   getGoal,
-  getGoalReport,
   listJournalImages,
   addDaysKey,
   GoalValidationError,
@@ -132,18 +131,10 @@ describe('証拠写真の設定（任意・キャプションは1つ・初期写
     expect(imgs[0]!.caption).toBe('AtCoder レーティング');
   });
 
-  it('初期写真はレポート③へ、指定キャプションの最古（＝Before）として流入する', () => {
-    const g = createGoal(
-      db,
-      baseInput({ outcomeCaption: 'AtCoder レーティング', outcomeImage: { dataUrl: dataUrl() } }),
-      NOW_TODAY,
-    );
-    // ③はキャプションでグループ化して最古/最新を Before/After に割り当てる（既存実装）。
-    // ここでは「同じキャプションで開始日に1枚流入していること」までを固定する。
-    const shots = getGoalReport(db, g.id, NOW_TODAY).reportImages.filter((i) => i.caption === 'AtCoder レーティング');
-    expect(shots).toHaveLength(1);
-    expect(shots[0]!.dayKey).toBe(TODAY);
-  });
+  // レポート③（写真の比較・reportImages のキャプション横断集約）は capability ごと廃止された
+  // （spec: goal-report REMOVED・goal-burnup-forecast）。「同じキャプションで開始日に1枚流入する」
+  // という下敷きの事実は直前のテストで listJournalImages() により既に検証済みで、この
+  // テストが追加で確かめていたのは③の Before/After 集約経路のみだったため、意図的に落とす。
 
   it('キャプション無しで初期写真だけ指定するのは拒否される（宛先が決まらない）', () => {
     expect(() => createGoal(db, baseInput({ outcomeImage: { dataUrl: dataUrl() } }), NOW_TODAY)).toThrow(

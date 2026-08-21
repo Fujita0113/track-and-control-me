@@ -15,6 +15,8 @@ import {
   dropBranch,
   TaskTreeError,
 } from '../services/task-tree.js';
+import { setTaskEstimate, setTaskProgress, TaskEstimateError } from '../services/task-estimate.js';
+import { TaskEstimateInputSchema, TaskProgressInputSchema } from '@track/contract';
 
 /**
  * カテゴリ入力の正規化・バリデーション（kanban-task-category, design D1〜D3）。
@@ -266,6 +268,49 @@ export function registerPlanningRoutes(app: FastifyInstance, deps: ApiDeps): voi
       return { tasks: listTasks(db) };
     } catch (err) {
       if (err instanceof TaskTreeError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // 想定時間の登録・更新（根直下のノードにだけ置ける・spec: task-estimate）。
+  // Gemini / Antigravity から叩く口。理由と実行者を必須にし、範囲だけを検証する（値の妥当性は問わない）。
+  app.put('/api/tasks/:id/estimate', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = TaskEstimateInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: '不正な estimate ボディ', detail: parsed.error.issues };
+    }
+    try {
+      setTaskEstimate(db, Number(id), parsed.data);
+      deps.runPipeline();
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof TaskEstimateError) {
+        reply.code(400);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  // 葉の小数の進捗の登録・更新（spec: task-estimate）。
+  app.put('/api/tasks/:id/progress', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = TaskProgressInputSchema.safeParse(req.body);
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: '不正な progress ボディ', detail: parsed.error.issues };
+    }
+    try {
+      setTaskProgress(db, Number(id), parsed.data);
+      deps.runPipeline();
+      return { ok: true };
+    } catch (err) {
+      if (err instanceof TaskEstimateError) {
         reply.code(400);
         return { error: err.message };
       }

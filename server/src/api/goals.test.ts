@@ -299,18 +299,21 @@ describe('目標・ルール API（spec: editable-rule-registry / goal-lifecycle
     expect(chronicle.json().entries[0]).toMatchObject({ target: 'TOTAL_WORK', change: { op: 'add', reason: '守りたい' } });
   });
 
-  it('レポートは進行中でも 200（走行中プレビュー）', async () => {
+  // レポートは capability ごと廃止された（spec: goal-report REMOVED・goal-burnup-forecast）。
+  // 目標の唯一のビューは進捗グラフ（`GET /api/goals/:id/burnup`）で、開始前 409・進行中 200 の
+  // 形は burnup が引き継ぐ（frozen: server/src/api/goal-burnup.test.ts が既に検証済み）。
+  it('進捗グラフは進行中でも 200（走行中プレビュー）', async () => {
     const { id: goalId } = await createActiveGoal([{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }]);
-    const rep = await app.inject({ method: 'GET', url: `/api/goals/${goalId}/report` });
-    expect(rep.statusCode).toBe(200);
-    expect(rep.json().goal).toMatchObject({ status: 'active', dayNumber: 1, showFinalPhotoCta: false });
+    const burnup = await app.inject({ method: 'GET', url: `/api/goals/${goalId}/burnup` });
+    expect(burnup.statusCode).toBe(200);
+    expect(burnup.json()).toHaveProperty('points');
   });
 
-  it('開始前の目標のレポートは 409（notReady）', async () => {
+  it('開始前の目標の進捗グラフは 409（notReady）', async () => {
     const today = todayKey(db, Date.now());
     const upcoming = insertGoal(addDaysKey(today, 1), addDaysKey(today, 30));
-    const rep = await app.inject({ method: 'GET', url: `/api/goals/${upcoming}/report` });
-    expect(rep.statusCode).toBe(409);
-    expect(rep.json().notReady).toBe(true);
+    const burnup = await app.inject({ method: 'GET', url: `/api/goals/${upcoming}/burnup` });
+    expect(burnup.statusCode).toBe(409);
+    expect(burnup.json().notReady).toBe(true);
   });
 });

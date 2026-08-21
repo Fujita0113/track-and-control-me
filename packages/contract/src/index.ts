@@ -429,6 +429,30 @@ export const GoalPaceSchema = z.object({
 });
 export type GoalPace = z.infer<typeof GoalPaceSchema>;
 
+// --- 想定時間・小数の進捗（spec: task-estimate / goal-burnup-forecast）------------------------
+// Gemini / Antigravity から叩ける登録・更新 API。外部エージェントが叩く口なので、ここで型を固定する
+// （design D9: `reason` は必須、`actor` は明示的に渡させる、`ratio` は 0〜1）。
+
+/** 想定時間・進捗の変更主体。誰が決めたかは画面に出る情報であり、推測させない（design D9）。 */
+export const TaskEstimateActorSchema = z.enum(['human', 'agent']);
+export type TaskEstimateActor = z.infer<typeof TaskEstimateActorSchema>;
+
+/** 根直下のノードの想定時間（秒）の登録・更新（`PUT /api/tasks/:id/estimate`）。 */
+export const TaskEstimateInputSchema = z.object({
+  estimatedSeconds: z.number().nonnegative(),
+  reason: NonEmptyText,
+  actor: TaskEstimateActorSchema,
+});
+export type TaskEstimateInput = z.infer<typeof TaskEstimateInputSchema>;
+
+/** 葉の小数の進捗（0〜1）の登録・更新（`PUT /api/tasks/:id/progress`）。 */
+export const TaskProgressInputSchema = z.object({
+  ratio: z.number().min(0).max(1),
+  reason: NonEmptyText,
+  actor: TaskEstimateActorSchema,
+});
+export type TaskProgressInput = z.infer<typeof TaskProgressInputSchema>;
+
 /** 大きい沿革（目標の年表）の1行の種別（design D7）。 */
 export const GoalHistoryEntryKindSchema = z.enum(['created', 'ended', 'completed']);
 export type GoalHistoryEntryKind = z.infer<typeof GoalHistoryEntryKindSchema>;

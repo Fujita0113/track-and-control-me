@@ -6,7 +6,7 @@
 //  - デモ（お試し）モードは読み取り専用: 追加・改名・階層の変更・完了の切り替え・⋯ のいずれも出さない。
 import { api } from './api.js';
 import { state } from './state.js';
-import { h, clear, toast, attachTooltip } from './util.js';
+import { h, clear, toast, attachTooltip, fmtDur } from './util.js';
 import { isDemo } from './demo.js';
 import { createMarkdownEditor } from './md-editor.js';
 
@@ -22,16 +22,16 @@ function fetchBlueprint(goalId) {
 /**
  * @param {Element} root
  * @param {number} goalId
- * @param {{goalName?: string, canOpenReport?: boolean, onBack: () => void, onOpenReport?: () => void}} opts
+ * @param {{goalName?: string, canOpenBurnup?: boolean, onBack: () => void, onOpenBurnup?: () => void}} opts
  */
 export async function render(root, goalId, opts = {}) {
   S = {
     root,
     goalId,
     goalName: opts.goalName || '',
-    canOpenReport: !!opts.canOpenReport,
+    canOpenBurnup: !!opts.canOpenBurnup,
     onBack: opts.onBack || (() => {}),
-    onOpenReport: opts.onOpenReport || null,
+    onOpenBurnup: opts.onOpenBurnup || null,
     demo: isDemo(),
     nodes: [],
     index: new Map(), // id -> { node, parentId, depth, siblingIds }（renderAll のたびに作り直す）
@@ -142,10 +142,10 @@ function renderAll(opts = {}) {
     });
     headActions.appendChild(bulkBtn);
   }
-  if (S.canOpenReport && S.onOpenReport) {
-    const reportBtn = h('button', { class: 'btn small', type: 'button', text: 'レポートを開く' });
-    reportBtn.addEventListener('click', S.onOpenReport);
-    headActions.appendChild(reportBtn);
+  if (S.canOpenBurnup && S.onOpenBurnup) {
+    const burnupBtn = h('button', { class: 'btn small', type: 'button', text: '進捗グラフを開く' });
+    burnupBtn.addEventListener('click', S.onOpenBurnup);
+    headActions.appendChild(burnupBtn);
   }
   page.appendChild(h('header', { class: 'bp-head' },
     h('div', {},
@@ -283,6 +283,15 @@ function nodeEl(node, depth) {
   if (!isLeaf) {
     const stats = leafStats(node);
     row.appendChild(h('span', { class: 'bp-node-childcount', text: `${stats.done}/${stats.total}` }));
+  }
+
+  // 想定時間（根直下のみ）・小数の進捗（葉のみ）。Gemini / Antigravity が API 経由で書き込む値の
+  // 表示専用（spec: task-estimate）。編集導線はこの画面には置かない。
+  if (node.estimatedSeconds != null) {
+    row.appendChild(h('span', { class: 'bp-node-estimate', text: `想定 ${fmtDur(node.estimatedSeconds)}` }));
+  }
+  if (node.progressRatio != null) {
+    row.appendChild(h('span', { class: 'bp-node-progress', text: `${Math.round(node.progressRatio * 100)}%` }));
   }
 
   if (!S.demo) row.appendChild(nodeMenuEl(node));

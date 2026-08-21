@@ -6,7 +6,6 @@ import {
   listGoals,
   getGoal,
   deleteGoal,
-  getGoalReport,
   saveJournal,
   getJournal,
   listJournalImages,
@@ -24,7 +23,6 @@ import {
   answerRuleQuestion,
   GoalDeleteWindowError,
   GoalDeleteAfterEndError,
-  GoalReportNotReadyError,
   JournalNotWritableError,
   JournalImageError,
   JournalImageNotFoundError,
@@ -32,8 +30,11 @@ import {
   GoalExtensionRequiredError,
   GoalLifecycleError,
 } from './goals.js';
+import { goalBurnup } from './goal-burnup.js';
+import { getChronicle } from './goal-chronicle.js';
 import { resolveIdentity } from './group-identity.js';
 import { listActiveRules } from './rule-registry.js';
+import { todayKey } from './summary.js';
 
 /** テスト用 data URL（バイト内容は検証しないので任意バイト列でよい）。 */
 const dataUrl = (mime = 'image/png', bytes: number[] = [1, 2, 3]): string =>
@@ -307,8 +308,8 @@ describe('完走フォーク（続ける／終える・spec: goal-lifecycle-fork
     const ruleRow = db.prepare('SELECT r.status AS status FROM goal_rule gr JOIN rule r ON r.id = gr.rule_id WHERE gr.goal_id = ?').get(id) as { status: string };
     expect(ruleRow.status).toBe('active');
     expect(view.endingOn).toBe('2026-08-11');
-    // レポートは開ける。
-    expect(() => getGoalReport(db, id, NOW_COMPLETED)).not.toThrow();
+    // 進捗グラフ（burnup）は開ける。
+    expect(() => goalBurnup(db, id, NOW_COMPLETED)).not.toThrow();
   });
 
   it('未回答の間は永続ルールがゲートに残り続ける', () => {
@@ -318,13 +319,12 @@ describe('完走フォーク（続ける／終える・spec: goal-lifecycle-fork
     expect(before.status).toBe('active');
   });
 
-  it('完走レポートにフォークが出て、進行中プレビューには出ない', () => {
+  it('完走したカードにフォークが出て、進行中カードには出ない', () => {
     const id = seedCompletedGoal();
-    expect(getGoalReport(db, id, NOW_COMPLETED).goal.showLifecycleFork).toBe(true);
+    expect(getGoal(db, id, NOW_COMPLETED).showLifecycleFork).toBe(true);
     // 進行中の別目標では出ない。
     const g2 = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'B', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    const runningReport = getGoalReport(db, g2.id, NOW_NEXT);
-    expect(runningReport.goal.showLifecycleFork).toBe(false);
+    expect(getGoal(db, g2.id, NOW_NEXT).showLifecycleFork).toBe(false);
   });
 });
 
@@ -454,94 +454,21 @@ describe('目標日記の画像添付（明日開始）', () => {
   });
 });
 
-describe('完了レポート（明日開始）', () => {
-  it('完走前は 409（GoalReportNotReadyError）', () => {
+// レポート（①達成カレンダー・②時間推移・日単位フォールバック等）は capability ごと廃止された
+// （spec: goal-report REMOVED・goal-burnup-forecast）。①の met/future/inactive セルグリッドと
+// achievedDays に相当する読み手はどこにも残らない（進捗グラフは累積作業時間の1本線であり、
+// ルールごとの日別セルという構造を持たない）ため、それらを検証していたテスト
+// （欠測=未達成/達成日数、削除後 inactive、TIMELINE/MANUAL_CHECK の①②振り分け、
+// 未到来=future の空白セル）はここで意図的に落とす。開始前 409・進行中の Day 番号・
+// ⑤沿革の3点は、行き先を変えて以下に残す。
+describe('完了予想（burnup）は開始前 409 を引き継ぐ', () => {
+  it('開始前は null（burnup の 409 相当）', () => {
     const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    expect(() => getGoalReport(db, g.id, NOW_TODAY)).toThrow(GoalReportNotReadyError);
-  });
-
-  it('欠測=未達成、達成日数=当日ゲートにあった全ルール met の日数、変更マーカー、日単位フォールバック', () => {
-    const identityId = resolveIdentity(db, 'AtCoder', 'blue')!;
-    const g = createGoal(
-      db,
-      { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 14400, reason: 'r' }, { target: 'GROUP', groupIdentityId: identityId, thresholdSeconds: 1800, reason: 'r' }], start: 'tomorrow' },
-      NOW_TODAY,
-    );
-    const totalRuleId = g.rules.find((r) => r.target === 'TOTAL_WORK')!.ruleId;
-    const groupRuleId = g.rules.find((r) => r.target === 'GROUP')!.ruleId;
-
-    seedEval('2026-07-11', [
-      { conditionKey: `rule:${totalRuleId}`, target: 'TOTAL_WORK', met: true, actualSeconds: 15000, thresholdSeconds: 14400 },
-      { conditionKey: `rule:${groupRuleId}`, target: 'GROUP', met: true, actualSeconds: 2000, thresholdSeconds: 1800 },
-    ]);
-    seedEval('2026-07-12', [
-      { conditionKey: `rule:${totalRuleId}`, target: 'TOTAL_WORK', met: true, actualSeconds: 11000, thresholdSeconds: 10800 },
-      { conditionKey: `rule:${groupRuleId}`, target: 'GROUP', met: false, actualSeconds: 100, thresholdSeconds: 1800 },
-    ]);
-    updateGoalRule(db, g.id, totalRuleId, { target: 'TOTAL_WORK', thresholdSeconds: 10800, startDay: START, reason: '課題週間。ゼロにはしない' }, {}, jst(2026, 7, 12, 12, 0));
-
-    db.prepare(`INSERT INTO reflection_entry (date, content, satisfaction, created_at, updated_at) VALUES ('2026-07-11', 'Day1 の振り返り', NULL, 0, 0)`).run();
-    db.prepare(`INSERT INTO goal_journal (goal_id, day_key, content, created_at, updated_at) VALUES (?, '2026-08-09', 'Day30 の日記', 0, 0)`).run(g.id);
-
-    const rep = getGoalReport(db, g.id, NOW_COMPLETED);
-
-    expect(rep.goal.dayCount).toBe(30);
-    expect(rep.goal.achievedDays).toBe(1);
-    expect(rep.hasTimeType).toBe(true);
-
-    const total = rep.rules.find((r) => r.ruleId === totalRuleId)!;
-    const group = rep.rules.find((r) => r.ruleId === groupRuleId)!;
-    expect(total.cells[0]!.met).toBe(true);
-    expect(total.cells[1]!.met).toBe(true);
-    expect(group.cells[1]!.met).toBe(false);
-    expect(total.cells[2]!.met).toBe(false); // Day3 欠測=未達成
-
-    expect(rep.ruleChanges.length).toBe(1);
-    expect(rep.ruleChanges[0]!.dayNumber).toBe(2);
-    expect(rep.ruleChanges[0]!.reason).toContain('課題週間');
-
-    expect(rep.days[0]!.source).toBe('reflection');
-    expect(rep.days[29]!.source).toBe('journal');
-  });
-
-  it('削除後の日は inactive（対象外）扱いで、削除前の達成は保持される', () => {
-    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: 'A', rules: [{ target: 'TOTAL_WORK', thresholdSeconds: 100, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    const ruleId = g.rules[0]!.ruleId;
-    seedEval('2026-07-11', [{ conditionKey: `rule:${ruleId}`, target: 'TOTAL_WORK', met: true, actualSeconds: 200, thresholdSeconds: 100 }]);
-    // Day3 に削除する。
-    removeGoalRule(db, g.id, ruleId, '反応が薄いから', jst(2026, 7, 13, 12, 0));
-
-    const rep = getGoalReport(db, g.id, NOW_COMPLETED);
-    const cell = rep.rules[0]!.cells;
-    expect(cell[0]!.met).toBe(true); // Day1: 削除前
-    expect(cell[2]!.inactive).toBe(true); // Day3 以降: 削除済みで対象外
-    expect(rep.goal.achievedDays).toBe(1); // Day1 のみ
-  });
-
-  it('TIMELINE ルールは①カレンダーに乗り、②時間推移（isTimeType）として扱われる', () => {
-    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '運動', rules: [{ target: 'TIMELINE', label: '運動', thresholdSeconds: 1800, reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    const ruleId = g.rules[0]!.ruleId;
-    seedEval('2026-07-11', [{ conditionKey: `rule:${ruleId}`, target: 'TIMELINE', met: true, actualSeconds: 2100, thresholdSeconds: 1800 }]);
-    const rep = getGoalReport(db, g.id, NOW_COMPLETED);
-    const p = rep.rules.find((x) => x.ruleId === ruleId)!;
-    expect(p.isTimeType).toBe(true);
-    expect(p.cells[0]!.met).toBe(true);
-  });
-
-  it('MANUAL_CHECK ルールは①カレンダーに乗り、②時間推移からは除外される（非時間型）', () => {
-    const g = createGoal(db, { purpose: 'めざす状態', startReason: '始める理由', endDay: END, name: '筋トレ習慣', rules: [{ target: 'MANUAL_CHECK', label: '筋トレ', reason: 'r' }], start: 'tomorrow' }, NOW_TODAY);
-    const ruleId = g.rules[0]!.ruleId;
-    seedEval('2026-07-11', [{ conditionKey: `rule:${ruleId}`, target: 'MANUAL_CHECK', met: true }]);
-    const rep = getGoalReport(db, g.id, NOW_COMPLETED);
-    const p = rep.rules.find((x) => x.ruleId === ruleId)!;
-    expect(p.isTimeType).toBe(false);
-    expect(p.label).toBe('筋トレ');
-    expect(p.cells[0]!.met).toBe(true);
-    expect(rep.hasTimeType).toBe(false);
+    expect(goalBurnup(db, g.id, NOW_TODAY)).toBeNull();
   });
 });
 
-describe('走行中プレビュー（レポートの鍵を外す・spec: goal-report / design D6）', () => {
+describe('走行中プレビュー（design D6）', () => {
   const NOW_DAY12 = jst(2026, 7, 22, 12, 0);
 
   function seedRunningGoal(): { id: number; ruleId: number } {
@@ -553,36 +480,24 @@ describe('走行中プレビュー（レポートの鍵を外す・spec: goal-re
     return { id: g.id, ruleId };
   }
 
-  it('進行中でもレポートが返る（Day 12/30 の姿）', () => {
+  it('進行中は状態と Day 番号が取れる（Day 12/30）', () => {
     const { id } = seedRunningGoal();
-    const rep = getGoalReport(db, id, NOW_DAY12);
-    expect(rep.goal.status).toBe('active');
-    expect(rep.goal.dayNumber).toBe(12);
-    expect(rep.goal.dayCount).toBe(30);
+    const view = getGoal(db, id, NOW_DAY12);
+    expect(view.status).toBe('active');
+    expect(view.dayNumber).toBe(12);
+    expect(view.dayCount).toBe(30);
   });
 
-  it('未到来（Day13〜30）は空白＝future で、未達成の黒星にならない', () => {
-    const { id } = seedRunningGoal();
-    const cells = getGoalReport(db, id, NOW_DAY12).rules[0]!.cells;
-    for (const c of cells.slice(0, 12)) {
-      expect(c.future).toBe(false);
-      expect(c.met).toBe(true);
-    }
-    for (const c of cells.slice(12)) {
-      expect(c.future).toBe(true);
-      expect(c.met).toBe(false);
-    }
-  });
-
-  it('⑤沿革がレポートに含まれる（日記は含まない）', () => {
+  // ⑤沿革はレポート廃止後も getChronicle() が直接の読み手として残る
+  // （振り返りタブの目標コーナー「最近の変更」— spec: editable-rule-registry — が今も使うため）。
+  it('⑤沿革は getChronicle() から読める（日記は含まない）', () => {
     const { id, ruleId } = seedRunningGoal();
     saveJournal(db, id, '2026-07-13', '日記の本文はここに', jst(2026, 7, 13, 12, 0));
     updateGoalRule(db, id, ruleId, { target: 'TOTAL_WORK', thresholdSeconds: 10800, startDay: START, reason: '課題週間' }, {}, jst(2026, 7, 13, 12, 0));
 
-    const rep = getGoalReport(db, id, NOW_DAY12);
-    expect(rep.chronicle.goalId).toBe(id);
-    expect(rep.chronicle.entries.some((e) => e.change.reason === '課題週間')).toBe(true);
-    expect(JSON.stringify(rep.chronicle)).not.toContain('日記の本文はここに');
-    expect(rep.days[2]!.text).toBe('日記の本文はここに');
+    const chronicle = getChronicle(db, id, todayKey(db, NOW_DAY12));
+    expect(chronicle.goalId).toBe(id);
+    expect(chronicle.entries.some((e) => e.change.reason === '課題週間')).toBe(true);
+    expect(JSON.stringify(chronicle)).not.toContain('日記の本文はここに');
   });
 });

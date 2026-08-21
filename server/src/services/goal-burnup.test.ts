@@ -230,8 +230,8 @@ describe('計測対象の解決', () => {
         startReason: '手が止まる前に型を入れたい',
         endDay: END,
         rules: [
-          { target: 'GROUP' as const, groupIdentityIds: [python], thresholdSeconds: 900, reason: 'Python' },
-          { target: 'GROUP' as const, groupIdentityIds: [design], thresholdSeconds: 900, reason: '設計' },
+          { target: 'GROUP' as const, groupIdentityId: python, thresholdSeconds: 900, reason: 'Python' },
+          { target: 'GROUP' as const, groupIdentityId: design, thresholdSeconds: 900, reason: '設計' },
         ],
       },
       NOW_D1,

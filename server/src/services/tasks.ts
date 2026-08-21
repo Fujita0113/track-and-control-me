@@ -39,6 +39,10 @@ export interface TaskRow {
   goal_id: number | null;
   tree_order: number;
   drop_reason: string | null;
+  /** 想定時間（秒・根直下のみ意味を持つ・spec: task-estimate）。NULL = 未設定。 */
+  estimated_seconds: number | null;
+  /** 小数の進捗（0〜1・葉のみ意味を持つ・spec: task-estimate）。NULL = 未設定。 */
+  progress_ratio: number | null;
   /** listTasks 限定で付与（design D3）。1 = 子を持つ「容れ物」。getTask/createTask の戻り値には無い。 */
   has_children?: number;
   /**

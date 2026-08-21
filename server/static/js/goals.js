@@ -1,22 +1,18 @@
-// 目標（30日チャレンジ）タブ: 一覧・新規作成・完了レポート
-//  (spec: goal-challenge / goal-report). 合否・スコアの語や演出は出さない（「完走」のみ）。
-//  スタイルは gr-* クラス + CSSOM（CSP: インライン style 属性なし）。② は同梱 Chart.js。
+// 目標（30日チャレンジ）タブ: 一覧・新規作成・進捗グラフ
+//  (spec: goal-challenge / goal-burnup). 合否・スコアの語や演出は出さない（「完走」のみ）。
+//  スタイルは gr-*（一覧・大きい沿革）/ bu-*（進捗グラフ）クラス + CSSOM（CSP: インライン style 属性なし）。
 import { api } from './api.js';
 import { state } from './state.js';
 import { h, clear, toast, openModal, closeModal, emptyState, fmtDur, fmtHM, addDays, attachTooltip, ctrlEnterToSave, colorHex } from './util.js';
-import { ruleNiceLabel } from './targets.js';
-import { buildRuleForm, ruleDisplayLabel, ruleScheduleText, ruleKindIcon, shortDay, promptReason } from './rule-form.js';
-import { renderMarkdown } from './markdown.js';
+import { buildRuleForm, ruleDisplayLabel, ruleKindIcon, shortDay } from './rule-form.js';
 import { isDemo } from './demo.js';
 import { shrinkImage, isImageFile } from './images.js';
 import { render as renderBlueprint } from './blueprint.js';
+import { renderBurnup } from './goal-burnup-view.js';
 
 // デモ中は取得先を /api/demo/* + 仮想日付へ切替（通常モードは既存経路のまま）。
 function fetchGoals() {
   return isDemo() ? api.demo.goals(state.demo.virtualDay).then((r) => r.goals) : api.getGoals();
-}
-function fetchReport(id) {
-  return isDemo() ? api.demo.report(id, state.demo.virtualDay) : api.getGoalReport(id);
 }
 function fetchHistory() {
   return isDemo() ? api.demo.history(state.demo.virtualDay) : api.getGoalHistory();
@@ -26,69 +22,17 @@ function endGoalApi(goalId, b) {
   return isDemo() ? api.demo.endGoal(goalId, b, state.demo.virtualDay) : api.endGoal(goalId, b);
 }
 
-let charts = [];
-function destroyCharts() {
-  for (const c of charts) {
-    try { c.destroy(); } catch { /* noop */ }
-  }
-  charts = [];
-}
-
-// --- ①のホバープレビュー（spec: goal-report-day-detail / design D1）------------------------
-// body 直下に1つだけツールチップ DOM を持ち回す（util.js の attachTooltip と同じ流儀）。
-// 表示内容はレポート取得済みの rep.days をそのまま使い、新規のネットワーク取得は行わない。
-let dayTipEl = null;
-function ensureDayTip() {
-  if (dayTipEl) return dayTipEl;
-  dayTipEl = h('div', { class: 'gr-daytip', role: 'tooltip' });
-  document.body.appendChild(dayTipEl);
-  return dayTipEl;
-}
-function positionDayTip(el) {
-  const tip = dayTipEl;
-  const r = el.getBoundingClientRect();
-  tip.classList.add('show');
-  const tw = tip.offsetWidth;
-  const th = tip.offsetHeight;
-  const gap = 8;
-  const vw = document.documentElement.clientWidth;
-  const vh = document.documentElement.clientHeight;
-  let top = r.bottom + gap;
-  if (top + th > vh - 4) top = r.top - gap - th;
-  if (top < 4) top = 4;
-  let left = r.left + r.width / 2 - tw / 2;
-  left = Math.max(4, Math.min(left, vw - tw - 4));
-  tip.style.top = `${Math.round(top)}px`;
-  tip.style.left = `${Math.round(left)}px`;
-}
-function hideDayTip() {
-  if (dayTipEl) dayTipEl.classList.remove('show');
-}
-/** ①のマス／ヘッダに、その日の文面プレビューをホバーで出す。新規取得はしない（design D1）。 */
-function attachDayHoverPreview(el, day) {
-  el.addEventListener('mouseenter', () => {
-    const tip = ensureDayTip();
-    clear(tip);
-    tip.appendChild(h('div', { class: 'gr-daytip-head', text: `Day ${day.dayNumber}（${day.dayKey}）` }));
-    tip.appendChild(h('div', { class: 'gr-daytip-body', text: day.text && day.text.trim() ? day.text : '未記入' }));
-    positionDayTip(el);
-  });
-  el.addEventListener('mouseleave', hideDayTip);
-}
-
 export function hide() {
-  destroyCharts();
+  /* 進捗グラフの後始末は goal-burnup-view.js 側（モーダル閉じのみ）。 */
 }
 
 export async function show(root) {
-  destroyCharts();
   await renderList(root);
 }
 
 // --- 一覧 -----------------------------------------------------------------
 async function renderList(root) {
   clear(root);
-  destroyCharts();
 
   // デモは閲覧専用（追加ボタンを出さない・spec: 閲覧専用）。
   const headRow = h('div', { class: 'row' });
@@ -204,7 +148,7 @@ function historyRow(entry, onOpen) {
 }
 
 async function goalHistorySection(root) {
-  // カード一覧と同じ幅・同じ器（.card）に置く。レポート画面用の .gr-card（820px 中央寄せ）は使わない。
+  // カード一覧と同じ幅・同じ器（.card）に置く。
   const card = h('section', { class: 'card gr-history' });
   card.appendChild(h('div', { class: 'card-title', text: 'これまでの目標' }));
 
@@ -217,7 +161,9 @@ async function goalHistorySection(root) {
     return card;
   }
   const list = h('div', { class: 'gr-hist-list' });
-  for (const entry of entries) list.appendChild(historyRow(entry, (goalId) => renderReport(root, goalId)));
+  // 大きい沿革の行から開く先は進捗グラフ（レポートは存在しない・spec: goal-history MODIFIED）。
+  // 沿革の行は必ず既に開始済みの目標を指すため、status は canOpenBurnup 判定用のプレースホルダで足りる。
+  for (const entry of entries) list.appendChild(historyRow(entry, (goalId) => openBurnup({ id: goalId, name: entry.name, status: 'active' }, root)));
   card.appendChild(list);
   return card;
 }
@@ -252,22 +198,39 @@ function goalCard(g, root) {
     h('div', { class: 'spacer' }),
   );
 
-  // 完走後・進行中・終了後のいずれもレポートへ遷移できる（走行中プレビュー・spec: goal-report）。
-  // 同じ画面だが、文言を状態で分けて「まだ途中の姿」であることを一目で伝える。
-  if (g.status !== 'upcoming') {
-    const label = g.status === 'active' ? 'レポートプレビュー' : 'レポートを開く';
-    const openBtn = h('button', { class: 'btn small primary', text: label, type: 'button' });
-    openBtn.addEventListener('click', () => renderReport(root, g.id));
+  // 導線の数は増やさない（design: goal-burnup D1）。完走後・未回答のカードだけ「続ける」に
+  // 差し替わる（＝レポート先頭にあった続ける／終えるフォークの片方をここへ移す・design D1-b）。
+  // それ以外（進行中・完走後の決定済み・終了後）は進捗グラフを開く。開始前は出さない。
+  if (g.status === 'completed' && g.showLifecycleFork) {
+    const contBtn = h('button', { class: 'btn small primary', text: '続ける', type: 'button' });
+    contBtn.addEventListener('click', async () => {
+      contBtn.disabled = true;
+      try {
+        const newGoal = isDemo() ? await api.demo.continueGoal(g.id, state.demo.virtualDay) : await api.continueGoal(g.id);
+        toast(`新しい目標「${newGoal.name}」を Day 1 で作りました`, 'ok');
+        openBurnup({ id: newGoal.id, name: newGoal.name, status: 'active' }, root);
+      } catch (err) {
+        toast(err.data?.error || `失敗: ${err.message}`, 'err');
+        contBtn.disabled = false;
+      }
+    });
+    head.appendChild(contBtn);
+  } else if (g.status !== 'upcoming') {
+    const openBtn = h('button', { class: 'btn small primary', text: '進捗グラフ', type: 'button' });
+    openBtn.addEventListener('click', () => openBurnup(g, root));
     head.appendChild(openBtn);
   }
   // タスク一覧（spec: goal-blueprint）。走る前に組むものなので、開始前の目標でも出す。
   const blueprintBtn = h('button', { class: 'btn small', text: 'タスク一覧', type: 'button' });
   blueprintBtn.addEventListener('click', () => openBlueprint(g, root));
   head.appendChild(blueprintBtn);
-  // 開始前はレポートを開けない（まだ1日も走っていない）ので導線を出さない。
+  // 開始前は進捗グラフを開けない（まだ1日も走っていない）ので導線を出さない。
 
   // 「終える」導線（進行中・完走どちらからも。終了済み・終了予約中には出さない）。
   // 終了予約中は代わりに「終了を取り消す」を出す（発効前だけ取り消せる・design D7・D11）。
+  // 完走フォーク（続ける／終える）の「終える」だけは、続ける同様デモでも叩ける
+  // （demo-rule-tutorial の完走フォークチュートリアル・デモ DB 限定の書き込み）。
+  const forkEnd = g.status === 'completed' && g.showLifecycleFork;
   if (!isDemo() && g.endingOn) {
     const cancelBtn = h('button', { class: 'btn small', text: '終了を取り消す', type: 'button' });
     attachTooltip(cancelBtn, { label: `${shortDay(g.endingOn)} の発効前なら取り消せます` });
@@ -278,7 +241,7 @@ function goalCard(g, root) {
       catch (err) { toast(err.data?.error || `失敗: ${err.message}`, 'err'); cancelBtn.disabled = false; }
     });
     head.appendChild(cancelBtn);
-  } else if (!isDemo() && (g.status === 'active' || g.status === 'completed')) {
+  } else if ((!isDemo() || forkEnd) && (g.status === 'active' || g.status === 'completed')) {
     const endBtn = h('button', { class: 'btn small', text: '終える', type: 'button' });
     endBtn.addEventListener('click', () => openEndDialog(g, () => renderList(root)));
     head.appendChild(endBtn);
@@ -327,7 +290,12 @@ function goalCard(g, root) {
   card.appendChild(h('div', { class: 'period muted', text: `${g.startDay} 〜 ${g.endDay}` }));
 
   // ペースブロック（目標時間を持つ場合のみ・目標時間を持たない目標には出さない・spec: goal-target-hours）。
-  if (g.targetHours) card.appendChild(paceBlock(g, g.status === 'active' || g.status === 'upcoming'));
+  if (g.targetHours) {
+    const pace = paceBlock(g, g.status === 'active' || g.status === 'upcoming');
+    card.appendChild(pace);
+    // 隣に完了予想日を1行だけ足す（バーンアップの平均値そのものはカードへ出さない・design D7 Risks）。
+    if (g.status !== 'upcoming') attachForecastLine(pace, g.id);
+  }
 
   const chips = h('div', { class: 'gr-chips' });
   for (const r of g.rules) chips.appendChild(h('span', { class: 'gr-chip', text: `${ruleKindIcon(r.target)} ${ruleDisplayLabel(r)}` }));
@@ -335,14 +303,38 @@ function goalCard(g, root) {
   return card;
 }
 
-/** タスク一覧を開く（spec: goal-blueprint）。レポートとは別のビューへ行き来できる（design D10）。 */
+/** 進捗グラフを開く（spec: goal-burnup）。タスク一覧とは別のビューへ行き来できる（design D10）。 */
+function openBurnup(g, root) {
+  renderBurnup(root, g.id, {
+    onBack: () => renderList(root),
+    onOpenBlueprint: () => openBlueprint(g, root),
+  });
+}
+
+/** タスク一覧を開く（spec: goal-blueprint）。進捗グラフとは別のビューへ行き来できる（design D10）。 */
 function openBlueprint(g, root) {
   renderBlueprint(root, g.id, {
     goalName: g.name,
-    canOpenReport: g.status !== 'upcoming',
+    canOpenBurnup: g.status !== 'upcoming',
     onBack: () => renderList(root),
-    onOpenReport: () => renderReport(root, g.id),
+    onOpenBurnup: () => openBurnup(g, root),
   });
+}
+
+function fetchBurnupFor(goalId) {
+  return isDemo() ? api.demo.burnup(goalId, state.demo.virtualDay) : api.getGoalBurnup(goalId);
+}
+
+/** ペースブロックの隣に完了予想日を1行だけ非同期で足す（design D7 Risks）。無ければ何も出さない。 */
+function attachForecastLine(paceEl, goalId) {
+  const line = h('p', { class: 'gr-pace-forecast muted' });
+  paceEl.appendChild(line);
+  fetchBurnupFor(goalId)
+    .then((v) => {
+      if (!v || !v.overall || !v.overall.projectedDay) { line.remove(); return; }
+      line.textContent = `完了予想 ${v.overall.projectedDay}（全体平均ペース）`;
+    })
+    .catch(() => line.remove());
 }
 
 /**
@@ -684,7 +676,7 @@ async function openCreateForm(onDone) {
   const thCheck = h('input', { type: 'checkbox', class: 'gr-th-check' });
 
   // 証拠写真: 「終わるときに写真を出す」を決め、求めるならキャプションを1つ決める。
-  // キャプションはレポート③の Before/After のグループ化キーになる（③の実装は触らない・design D4-c）。
+  // キャプションは大きい沿革（goal-history）の Before/After のグループ化キーになる（design D4-c）。
   const outcomeCaptionInp = h('input', { type: 'text', class: 'gr-input gr-outcome-caption-input', placeholder: '例: AtCoder レーティング', maxlength: '60' });
   const stager = buildCreateImageStager();
   const outcomeBody = h('div', { class: 'stack gr-outcome-body' },
@@ -790,779 +782,3 @@ async function openCreateForm(onDone) {
   openModal(body, '新しい目標');
 }
 
-// --- 完了レポート（ヘッダ + 4ブロック・1カラム）-------------------------
-async function renderReport(root, goalId, selectedDay) {
-  clear(root);
-  destroyCharts();
-  root.appendChild(h('div', { class: 'empty', text: 'レポートを読み込み中…' }));
-
-  let rep;
-  try { rep = await fetchReport(goalId); }
-  catch (err) { clear(root); root.appendChild(emptyState(`レポートを開けません: ${err.data?.error || err.message}`)); backLink(root); return; }
-  clear(root);
-
-  const page = h('div', { class: 'gr-report' });
-  root.appendChild(page);
-
-  const back = h('button', { class: 'gr-back', type: 'button', text: '← 目標一覧へ' });
-  back.addEventListener('click', () => renderList(root));
-  page.appendChild(back);
-
-  // タスク一覧と行き来できる（spec: goal-blueprint「タスク一覧とレポートは互いに行き来できる」）。
-  const bpLink = h('button', { class: 'btn small', type: 'button', text: 'タスク一覧を開く' });
-  bpLink.addEventListener('click', () => openBlueprint(rep.goal, root));
-  page.appendChild(bpLink);
-
-  // ヘッダ。進行中は「完走」ではなく現在の Day を出す（まだ途中の姿であることを一目で伝える）。
-  const running = rep.goal.status === 'active';
-  const frozenNow = rep.goal.freeze && rep.goal.freeze.state === 'frozen';
-  page.appendChild(h('header', { class: 'gr-header' },
-    h('div', { class: 'gr-eyebrow', text: running ? `Day ${rep.goal.dayNumber}/${rep.goal.dayCount}` : '完走' },
-      frozenNow ? h('span', { class: 'badge gf-badge', style: { marginLeft: '8px' }, text: '❄ 凍結中' }) : null),
-    h('h1', { class: 'gr-h1', text: rep.goal.name }),
-    rep.goal.purpose ? h('p', { class: 'gr-purpose-line', text: rep.goal.purpose }) : null,
-    h('div', { class: 'gr-header-meta' },
-      h('span', { text: `${rep.goal.startDay} 〜 ${rep.goal.endDay}` }),
-      h('span', { class: 'gr-dot', text: '·' }),
-      // 進行中の達成日数は「その時点まで」の事実（分母は現時点までの日数。凍結日は分母にも分子にも入らない）。
-      h('span', { class: 'gr-achieved', text: running
-        ? `達成 ${rep.goal.achievedDays}/${rep.goal.elapsedDays}（現時点）`
-        : `達成 ${rep.goal.achievedDays}/${rep.goal.dayCount}` }),
-    ),
-  ));
-
-  // 完走フォーク（続ける／終える）。レポート先頭に出す（spec: goal-lifecycle-fork）。
-  const forkBlock = blockLifecycleFork(rep, root);
-  if (forkBlock) page.appendChild(forkBlock);
-
-  // 読み手状態（④ で使う。①のマス/④ストリップから連動）。
-  const readerState = { selected: 1, cellsByDay: new Map(), headerByDay: new Map(), cardByDay: new Map(), renderReader: null };
-
-  // 画像バイナリのベース URL（デモは /api/demo/… 経路へ切替・design D8）。
-  const imgBase = `${isDemo() ? '/api/demo/goals/' : '/api/goals/'}${rep.goal.id}/journal`;
-
-  // ① 達成カレンダー
-  page.appendChild(blockCalendar(rep, readerState, root));
-  // ② 時間の推移（時間型ルールがある場合のみ）
-  if (rep.hasTimeType) page.appendChild(blockTimeSeries(rep));
-  // ③ 写真の比較（2モード＋最終日CTA）
-  page.appendChild(blockPhotoCompare(rep, imgBase));
-  // ④ 日記ストリップ
-  page.appendChild(blockJournalStrip(rep, readerState, imgBase));
-  // ⑤ 沿革（ルール操作の年表。日記は載らない）
-  page.appendChild(blockChronicle(rep, imgBase));
-
-  // 初期選択日: 呼び出し元が渡した日 → 無ければ先頭のカードの Day → カードが無ければ 1（design D4）。
-  const firstCardDay = readerState.cardByDay.size ? readerState.cardByDay.keys().next().value : null;
-  readerState.selected = selectedDay || firstCardDay || 1;
-  readerState.renderReader(readerState.selected, false);
-}
-
-// 完走フォーク（続ける／終える・spec: goal-lifecycle-fork）。
-// 未決定なら分岐ボタンを、決定済みならその結果を静かに示す。
-function blockLifecycleFork(rep, root) {
-  const g = rep.goal;
-  if (!g.showLifecycleFork && !g.lifecycleChoice) return null;
-  const card = h('section', { class: 'gr-card gr-fork' });
-
-  if (g.lifecycleChoice === 'continued') {
-    card.appendChild(h('p', { class: 'gr-fork-lead', text: `${g.name} を続けています（新しい30日目標が Day 1/30 で作られました）。` }));
-    return card;
-  }
-  if (g.lifecycleChoice === 'ended') {
-    card.appendChild(h('p', { class: 'gr-fork-lead', text: `${g.name} をここで終えました。` }));
-    if (g.lifecycleReason) card.appendChild(h('p', { class: 'muted', text: g.lifecycleReason }));
-    return card;
-  }
-
-  card.appendChild(h('p', { class: 'gr-fork-lead', text: `${g.name} の1ヶ月が終わりました。続けますか？` }));
-  const contBtn = h('button', { class: 'btn primary', type: 'button', text: '続ける' });
-  const endBtn = h('button', { class: 'btn', type: 'button', text: 'ここで終える' });
-  contBtn.addEventListener('click', async () => {
-    contBtn.disabled = true;
-    try {
-      const newGoal = isDemo() ? await api.demo.continueGoal(g.id, state.demo.virtualDay) : await api.continueGoal(g.id);
-      toast(`新しい30日目標「${newGoal.name}」を Day 1/30 で作りました`, 'ok');
-      await renderReport(root, newGoal.id);
-    } catch (err) {
-      toast(err.data?.error || `失敗: ${err.message}`, 'err');
-      contBtn.disabled = false;
-    }
-  });
-  // 進行中の「終える」と同じダイアログ（めざした状態・証拠写真・理由）を使う（design D6）。
-  endBtn.addEventListener('click', () => openEndDialog(g, () => renderReport(root, g.id)));
-  card.appendChild(h('div', { class: 'actions' }, endBtn, contBtn));
-  return card;
-}
-
-// ⑤ 沿革（spec: goal-chronicle）
-//
-// ルール操作（追加・変更・削除）を時系列に並べる。写真ルールには画像、質問ルールには Q&A のペアが
-// ぶら下がる。削除は理由つきで残す（消さない＝逃げた事実そのものが歴史）。
-// **日記は載せない**（載る／載らないの線引きは「大きさ」ではなく「検証がぶら下がるか」）。
-// スコア・演出（紙吹雪・バッジ・合否の語）は出さず、素の時系列リストとして静かに提示する。
-function blockChronicle(rep, imgBase) {
-  const card = grCard('⑤ 沿革');
-  const entries = (rep.chronicle && rep.chronicle.entries) || [];
-  const freezes = (rep.chronicle && rep.chronicle.freezes) || [];
-  if (!entries.length && !freezes.length) {
-    card.appendChild(h('p', { class: 'gr-empty', text: 'まだルールの変更はありません。振り返りタブの目標コーナーでルールを足すと、ここに積み上がります。' }));
-    return card;
-  }
-  // ルール操作と一時凍結イベントを sortKey で安定併合する（design: goal-freeze D6）。
-  const merged = [
-    ...entries.map((e) => ({ sortKey: e.sortKey, el: chronicleEntry(e, imgBase) })),
-    ...freezes.map((f) => ({ sortKey: f.sortKey, el: freezeEntryEl(f) })),
-  ].sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
-  const list = h('div', { class: 'gr-chr' });
-  for (const m of merged) list.appendChild(m.el);
-  if (rep.chronicle.endedNote) {
-    list.appendChild(chronicleEndedNote(rep, rep.chronicle.endedNote));
-  }
-  if (rep.chronicle.resumedNote) {
-    list.appendChild(chronicleResumedNote(rep, rep.chronicle.resumedNote));
-  }
-  card.appendChild(list);
-  return card;
-}
-
-/** b - a の日数差＋1（凍結解除の「凍結 N 日」表示用。b が a より前なら 0）。 */
-function freezeDayCount(startDay, endDay) {
-  if (!startDay || !endDay || endDay < startDay) return 0;
-  const toUtc = (k) => { const [y, m, d] = k.split('-').map(Number); return Date.UTC(y, m - 1, d); };
-  return Math.round((toUtc(endDay) - toUtc(startDay)) / 86400000) + 1;
-}
-
-const FREEZE_KIND_LABEL = {
-  activate: '凍結が発効',
-  extend: '凍結を延長',
-  release: '凍結を解除',
-};
-
-/**
- * 一時凍結イベント1件を沿革の1エントリとして組む（spec: goal-chronicle / goal-freeze）。
- * 合否・スコアに相当する語や演出は使わない（起きた事実と理由だけを静かに示す）。
- */
-function freezeEntryEl(f) {
-  const dateCol = h('div', { class: 'gr-chr-date' },
-    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
-    h('div', { class: 'gr-chr-day-num', text: String(f.dayNumber) }),
-    h('div', { class: 'gr-chr-date-sub', text: shortDay(f.dayKey) }),
-  );
-  let text = FREEZE_KIND_LABEL[f.kind] || f.kind;
-  if (f.kind === 'activate') text += `（${shortDay(f.startDay)}〜${shortDay(f.afterEndDay)}）`;
-  else if (f.kind === 'extend') text += `（${shortDay(f.beforeEndDay)} → ${shortDay(f.afterEndDay)}）`;
-  else if (f.kind === 'release') text += `（凍結 ${freezeDayCount(f.startDay, f.afterEndDay)} 日）`;
-  const stmt = h('p', { class: 'gr-chr-stmt', text: `❄ ${text}` });
-  if (f.reason) stmt.appendChild(h('span', { class: 'gr-chr-reason', text: f.reason }));
-  return h('article', { class: 'gr-chr-entry gr-chr-freeze' }, dateCol, h('div', { class: 'gr-chr-main' }, stmt));
-}
-
-/** update 操作の変更前後を短い一文へ（閾値・グループ差し替え・スケジュール変更）。 */
-function changeDiffText(change) {
-  if (change.op !== 'update' || !change.before || !change.after) return null;
-  const parts = [];
-  const b = change.before, a = change.after;
-  if ((b.thresholdSeconds ?? null) !== (a.thresholdSeconds ?? null) && (b.thresholdSeconds != null || a.thresholdSeconds != null)) {
-    parts.push(`${fmtHM(b.thresholdSeconds || 0)} → ${fmtHM(a.thresholdSeconds || 0)}`);
-  }
-  if ((b.groupIdentityId ?? null) !== (a.groupIdentityId ?? null) || (b.stableGroupId ?? null) !== (a.stableGroupId ?? null)) {
-    parts.push('グループを差し替え');
-  }
-  if (b.label !== a.label && a.label) parts.push(`${b.label || '?'} → ${a.label}`);
-  if (b.startDay !== a.startDay || b.endDay !== a.endDay) parts.push('スケジュールを変更');
-  return parts.join('・') || null;
-}
-
-/**
- * 沿革のルール操作1件を「社史・年表」の1エントリとして組む。
- * 左列＝日付（Day 番号を主役に）、右列＝操作＋理由（明朝）＋配下の答え合わせ（写真/質問ルールのみ）。
- */
-function chronicleEntry(entry, imgBase) {
-  const removed = entry.change.op === 'remove';
-  const opLabel = entry.change.op === 'add' ? '＋追加' : entry.change.op === 'remove' ? '−削除' : '✎変更';
-  const dayNum = entry.change.dayNumber;
-
-  const dateCol = h('div', { class: 'gr-chr-date' },
-    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
-    h('div', { class: 'gr-chr-day-num', text: dayNum != null ? String(dayNum) : '—' }),
-    h('div', { class: 'gr-chr-date-sub', text: shortDay(entry.change.dayKey) }),
-    removed ? h('span', { class: 'gr-chr-flag', text: '削除' }) : null,
-  );
-
-  const diff = changeDiffText(entry.change);
-  const stmt = h('p', { class: 'gr-chr-stmt', text: `${opLabel} ${ruleKindIcon(entry.target)} ${entry.label}${diff ? `（${diff}）` : ''}` });
-  if (entry.change.reason) stmt.appendChild(h('span', { class: 'gr-chr-reason', text: entry.change.reason }));
-
-  const main = h('div', { class: 'gr-chr-main' }, stmt);
-  if (entry.answers && entry.answers.length) main.appendChild(chronicleAnswers(entry, imgBase));
-
-  return h('article', { class: `gr-chr-entry${removed ? ' off' : ''}` }, dateCol, main);
-}
-
-/** 写真ルールは画像を図版として、質問ルールは Q&A のペアとして時系列に並べる。 */
-function chronicleAnswers(entry, imgBase) {
-  const wrap = h('div', { class: 'gr-chr-ev' });
-  if (entry.target === 'PHOTO') {
-    const plates = h('div', { class: 'gr-chr-plates' });
-    for (const a of entry.answers.filter((x) => x.imageId != null)) {
-      plates.appendChild(h('figure', { class: 'gr-chr-plate' },
-        h('img', { class: 'gr-chr-plate-img', src: `${imgBase}/images/${a.imageId}`, alt: entry.label, loading: 'lazy' }),
-        h('figcaption', { text: shortDay(a.dayKey) }),
-      ));
-    }
-    wrap.appendChild(plates);
-  } else {
-    for (const a of entry.answers) {
-      wrap.appendChild(h('div', { class: 'gr-chr-qa' },
-        h('time', { text: shortDay(a.dayKey) }),
-        h('p', { text: a.answerText || '' }),
-      ));
-    }
-  }
-  return wrap;
-}
-
-/** 完走フォークで理由つきに「終える」を選んだときの最終エントリ（design D7）。 */
-function chronicleEndedNote(rep, note) {
-  const dateCol = h('div', { class: 'gr-chr-date' },
-    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
-    h('div', { class: 'gr-chr-day-num', text: String(note.dayNumber) }),
-  );
-  const stmt = h('p', { class: 'gr-chr-stmt', text: `${rep.goal.name} をここで終える` },
-    h('span', { class: 'gr-chr-reason', text: note.reason }));
-  return h('article', { class: 'gr-chr-entry' }, dateCol, h('div', { class: 'gr-chr-main' }, stmt));
-}
-
-/** 発効済みの終了を理由つきで再開したときの最終エントリ（spec: goal-lifecycle-fork ADDED）。 */
-function chronicleResumedNote(rep, note) {
-  const dateCol = h('div', { class: 'gr-chr-date' },
-    h('div', { class: 'gr-chr-day-label', text: 'Day' }),
-    h('div', { class: 'gr-chr-day-num', text: String(note.dayNumber) }),
-  );
-  const stmt = h('p', { class: 'gr-chr-stmt', text: `${rep.goal.name} を再開する` },
-    h('span', { class: 'gr-chr-reason', text: note.reason }));
-  return h('article', { class: 'gr-chr-entry' }, dateCol, h('div', { class: 'gr-chr-main' }, stmt));
-}
-
-function backLink(root) {
-  const back = h('button', { class: 'gr-back', type: 'button', text: '← 目標一覧へ' });
-  back.addEventListener('click', () => renderList(root));
-  root.appendChild(back);
-}
-
-function grCard(title) {
-  const card = h('section', { class: 'gr-card' });
-  card.appendChild(h('h2', { class: 'gr-block-title', text: title }));
-  return card;
-}
-
-// ① 30日 × 実践の達成カレンダー
-function blockCalendar(rep, rs, root) {
-  const card = grCard('① 達成カレンダー');
-  const scroll = h('div', { class: 'gr-cal-scroll' });
-  const grid = h('div', { class: 'gr-cal' });
-  grid.style.gridTemplateColumns = `minmax(92px, 132px) repeat(${rep.goal.dayCount}, 17px)`;
-
-  // クリックで開く日別詳細モーダル（既存の④選択・ハイライトは維持したまま追加で開く・design D5）。
-  // デモモードは本番用の GET /api/summary・GET/PUT /api/reflection/:date を持たないため開かない（design D6）。
-  const onDayClick = (dayNumber) => {
-    rs.renderReader(dayNumber, true);
-    if (!isDemo()) openDayDetailModal(rep, dayNumber, () => renderReport(root, rep.goal.id, dayNumber));
-  };
-
-  // ヘッダ行（空 + Day 番号）
-  grid.appendChild(h('div', { class: 'gr-cal-corner' }));
-  for (let d = 1; d <= rep.goal.dayCount; d++) {
-    const head = h('div', { class: 'gr-cal-dh', text: String(d) });
-    head.addEventListener('click', () => onDayClick(d));
-    attachDayHoverPreview(head, rep.days[d - 1]);
-    rs.headerByDay.set(d, head);
-    grid.appendChild(head);
-  }
-
-  // ルールごとの行。未到来（future）は空白マスにする＝走行中プレビューで残りを黒星で埋めない。
-  // 対象外（inactive・開始前／削除後）も同様に空白マスにする（design: goal-report）。
-  // 凍結（frozen）は対象外の一種だが、開始前・削除後とは見分けがつく見た目で描く（spec: goal-report）。
-  for (const p of rep.rules) {
-    grid.appendChild(h('div', { class: 'gr-cal-label', text: `${ruleKindIcon(p.target)} ${ruleNiceLabel(p.target, p.label)}`, title: p.label }));
-    for (const cell of p.cells) {
-      const blank = cell.future || cell.inactive;
-      const kind = cell.frozen ? 'frozen' : blank ? 'future' : cell.met ? 'done' : 'miss';
-      const label = cell.frozen ? '凍結中（対象外）' : blank ? 'まだ来ていない／対象外' : cell.met ? 'やった' : 'やってない';
-      const el = h('button', {
-        class: `gr-cell ${kind}`,
-        type: 'button',
-        title: `Day ${cell.dayNumber}: ${label}`,
-      });
-      el.addEventListener('click', () => onDayClick(cell.dayNumber));
-      attachDayHoverPreview(el, rep.days[cell.dayNumber - 1]);
-      if (!rs.cellsByDay.has(cell.dayNumber)) rs.cellsByDay.set(cell.dayNumber, []);
-      rs.cellsByDay.get(cell.dayNumber).push(el);
-      grid.appendChild(el);
-    }
-  }
-  scroll.appendChild(grid);
-  card.appendChild(scroll);
-  const legend = h('div', { class: 'gr-legend' },
-    h('span', {}, h('span', { class: 'gr-cell done gr-legend-swatch' }), 'やった'),
-    h('span', {}, h('span', { class: 'gr-cell miss gr-legend-swatch' }), 'やってない'),
-  );
-  // 未到来・対象外が1マスでもあるときだけ凡例に足す。完走レポートの凡例は従来どおり2値。
-  if (rep.rules.some((p) => p.cells.some((c) => c.future || c.inactive)))
-    legend.appendChild(h('span', {}, h('span', { class: 'gr-cell future gr-legend-swatch' }), 'まだ来ていない／対象外'));
-  if (rep.rules.some((p) => p.cells.some((c) => c.frozen)))
-    legend.appendChild(h('span', {}, h('span', { class: 'gr-cell frozen gr-legend-swatch' }), '凍結（対象外）'));
-  card.appendChild(legend);
-  return card;
-}
-
-const DAY_DETAIL_MOOD_LABELS = ['いまひとつ', 'まあまあ', 'ふつう', '良い', 'とても良い'];
-
-/**
- * ①のマスをクリックしたときに開く日別詳細モーダル（spec: goal-report-day-detail）。
- * ブロック1「この日にやったこと」はレポート取得済みの rep.rules[*].cells をそのまま使い、
- * 新規のルール評価はしない（design D2）。ブロック2「時間の内訳」・ブロック3「気分・振り返り」は
- * この日1件ぶんだけ、モーダルを開くたびに都度フェッチする（全日先読みしない・design D2）。
- * 編集・保存できるのは振り返り（ブロック3）だけ。保存後は差分更新せずレポート全体を再取得する（design D4）。
- */
-async function openDayDetailModal(rep, dayNumber, onSaved) {
-  const day = rep.days[dayNumber - 1];
-  const dayKey = day.dayKey;
-
-  const body = h('div', { class: 'modal-body stack gr-daymodal' });
-
-  // ブロック1: この日にやったこと。
-  const doneList = h('div', { class: 'gr-daymodal-rules' });
-  for (const p of rep.rules) {
-    const cell = p.cells[dayNumber - 1];
-    const blank = cell.future || cell.inactive;
-    const statusClass = cell.frozen ? 'frozen' : blank ? 'future' : cell.met ? 'done' : 'miss';
-    const statusText = cell.frozen ? '凍結中（対象外）' : blank ? 'まだ来ていない／対象外' : cell.met ? 'やった' : 'やってない';
-    doneList.appendChild(h('div', { class: 'gr-daymodal-rule' },
-      h('span', { class: 'gr-daymodal-rule-label', text: `${ruleKindIcon(p.target)} ${ruleNiceLabel(p.target, p.label)}` }),
-      p.isTimeType && cell.actualSeconds != null
-        ? h('span', { class: 'gr-daymodal-rule-nums', text: `${fmtHM(cell.actualSeconds)} / ${cell.thresholdSeconds != null ? fmtHM(cell.thresholdSeconds) : '—'}` })
-        : null,
-      h('span', { class: `gr-daymodal-rule-status ${statusClass}`, text: statusText }),
-    ));
-  }
-  body.appendChild(h('div', { class: 'gr-daymodal-sec' },
-    h('h4', { class: 'gr-fsec-title', text: 'この日にやったこと' }),
-    doneList,
-  ));
-
-  // ブロック2: 時間の内訳（GET /api/summary?date= を都度フェッチ）。
-  const timeList = h('div', { class: 'gr-daymodal-time' }, h('p', { class: 'gr-empty', text: '読み込み中…' }));
-  body.appendChild(h('div', { class: 'gr-daymodal-sec' },
-    h('h4', { class: 'gr-fsec-title', text: '時間の内訳' }),
-    timeList,
-  ));
-
-  // ブロック3: 気分・振り返り（GET/PUT /api/reflection/:date）。編集できるのはここだけ（design D3）。
-  let satisfaction = 0;
-  const moodSegs = [];
-  const moodGroup = h('div', { class: 'rf-mood' });
-  const syncMood = () => moodSegs.forEach((s, i) => s.classList.toggle('on', i + 1 === satisfaction));
-  DAY_DETAIL_MOOD_LABELS.forEach((label, idx) => {
-    const val = idx + 1;
-    const seg = h('span', { class: 'rf-mood-seg', text: label });
-    seg.addEventListener('click', () => { satisfaction = satisfaction === val ? 0 : val; syncMood(); });
-    moodSegs.push(seg);
-    moodGroup.appendChild(seg);
-  });
-  const textarea = h('textarea', { class: 'gr-textarea', rows: '4', placeholder: '今日はどんな一日でしたか。' });
-  body.appendChild(h('div', { class: 'gr-daymodal-sec' },
-    h('h4', { class: 'gr-fsec-title', text: '気分・振り返り' }),
-    h('div', { class: 'rf-mood-row' }, h('span', { class: 'rf-mood-label', text: '気分' }), moodGroup),
-    textarea,
-  ));
-
-  // 目標日記が別に存在する日は読み取り専用で追加表示。編集導線は出さない（design D3）。
-  if (day.source === 'journal') {
-    body.appendChild(h('div', { class: 'gr-daymodal-journal' },
-      h('h4', { class: 'gr-fsec-title', text: '📔 この目標の日記（読み取り専用）' }),
-      h('p', { class: 'muted', text: 'これは目標日記です。編集は振り返りタブ／目標コーナーから行えます。' }),
-      h('div', { class: 'gr-daymodal-journal-text', text: day.text }),
-    ));
-  }
-
-  const saveBtn = h('button', { class: 'btn primary', type: 'button', text: '保存' });
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    try {
-      await api.putReflection(dayKey, textarea.value, satisfaction || null);
-      toast('保存しました', 'ok');
-      closeModal();
-      await onSaved();
-    } catch (err) {
-      toast(err.data?.error || `失敗: ${err.message}`, 'err');
-      saveBtn.disabled = false;
-    }
-  });
-  body.appendChild(h('div', { class: 'actions' },
-    h('button', { class: 'btn', type: 'button', text: '閉じる', onclick: closeModal }),
-    saveBtn,
-  ));
-
-  openModal(body, `Day ${dayNumber}（${dayKey}）`);
-
-  // 時間の内訳（モーダルを開いてからこの日1件ぶんだけ取得・design D2）。
-  try {
-    const summary = await api.getSummary(dayKey);
-    clear(timeList);
-    if (!summary.groups.length) {
-      timeList.appendChild(h('p', { class: 'gr-empty', text: 'この日の記録はありません' }));
-    } else {
-      for (const g of summary.groups) {
-        timeList.appendChild(h('div', { class: 'gr-daymodal-time-row' },
-          h('span', { class: 'gr-daymodal-time-name', text: g.name }),
-          h('span', { class: 'gr-daymodal-time-sec', text: fmtDur(g.seconds) }),
-        ));
-      }
-    }
-    const targetHours = rep.goal.targetHours;
-    if (targetHours) {
-      const actual = targetHours.kind === 'TOTAL_WORK'
-        ? summary.totalWorkSeconds
-        : summary.groups.filter((g) => targetHours.labels.includes(g.name)).reduce((s, g) => s + g.seconds, 0);
-      timeList.appendChild(h('div', { class: 'gr-daymodal-time-target' },
-        h('span', { text: `目標（1日ぶん） ${fmtDur(targetHours.secondsPerDay)}` }),
-        h('span', { text: `実測 ${fmtDur(actual)}` }),
-      ));
-    }
-  } catch (err) {
-    clear(timeList);
-    timeList.appendChild(h('p', { class: 'gr-empty', text: `時間の内訳を取得できません: ${err.message}` }));
-  }
-
-  // 気分・振り返り本文（rep.days の合成テキストとは別に、生の reflection_entry を取得する・design D2）。
-  try {
-    const r = await api.getReflection(dayKey);
-    textarea.value = r && r.content ? r.content : '';
-    satisfaction = r && r.satisfaction ? r.satisfaction : 0;
-    syncMood();
-  } catch { /* noop */ }
-}
-
-/**
- * このレポートのルール `p` が、目標時間の対象と一致するか（水準線をどのチャートに足すか・design D2）。
- * `ReportRule` は identity 参照を持たないため、現在の表示名（都度解決済み）で照合する。
- */
-function targetHoursMatches(targetHours, p) {
-  if (!targetHours) return false;
-  if (targetHours.kind === 'TOTAL_WORK') return p.target === 'TOTAL_WORK';
-  if (targetHours.kind === 'TIMELINE') return p.target === 'TIMELINE' && p.label === targetHours.labels[0];
-  if (targetHours.kind === 'GROUP_SET') return p.target === 'GROUP' && targetHours.labels.includes(p.label);
-  return false;
-}
-
-// ② 時間型ルールの実測と閾値の推移（＋理由マーカー）
-function blockTimeSeries(rep) {
-  const card = grCard('② 時間の推移');
-  const timeRules = rep.rules.filter((p) => p.isTimeType);
-  const targetHours = rep.goal.targetHours;
-  for (const p of timeRules) {
-    const sub = h('div', { class: 'gr-ts' });
-    sub.appendChild(h('div', { class: 'gr-ts-label', text: `${ruleKindIcon(p.target)} ${ruleNiceLabel(p.target, p.label)}` }));
-    const canvas = h('canvas', {});
-    sub.appendChild(h('div', { class: 'gr-chart-wrap' }, canvas));
-
-    const labels = p.cells.map((c) => c.dayNumber);
-    const actualMin = p.cells.map((c) => (c.actualSeconds == null ? null : Math.round(c.actualSeconds / 60)));
-    const threshMin = p.cells.map((c) => (c.thresholdSeconds == null ? null : Math.round(c.thresholdSeconds / 60)));
-    const datasets = [
-      { label: '実測', data: actualMin, borderColor: '#3b5bb5', backgroundColor: 'rgba(59,91,181,0.10)', fill: true, tension: 0.25, pointRadius: 2, spanGaps: false },
-      { label: '閾値', data: threshMin, borderColor: '#b06000', borderDash: [5, 4], stepped: true, pointRadius: 0, spanGaps: true },
-    ];
-    // 目標時間の水準線（1本のみ・design D2）。パスワードの条件ではないため下限の閾値とは
-    // 視覚的に区別する見た目（緑・実線・太め）にする。目標時間が無ければ描かない。
-    if (targetHoursMatches(targetHours, p)) {
-      const levelMin = Math.round(targetHours.secondsPerDay / 60);
-      datasets.push({
-        label: '目標時間（パスワードの条件になりません）',
-        data: labels.map(() => levelMin),
-        borderColor: '#2f9e5c', borderWidth: 3, pointRadius: 0, spanGaps: true,
-      });
-    }
-    charts.push(new window.Chart(canvas, {
-      type: 'line',
-      data: { labels, datasets },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        scales: {
-          x: { grid: { display: false }, title: { display: true, text: 'Day' } },
-          y: { beginAtZero: true, ticks: { callback: (v) => `${Math.round(v / 60)}h` } },
-        },
-        plugins: {
-          legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
-          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y == null ? '—' : fmtHM(ctx.parsed.y * 60)}` } },
-        },
-      },
-    }));
-
-    // 閾値変更マーカー（「下げて、続けた」という事実。否定的な装飾はしない）。
-    const changes = rep.ruleChanges.filter((t) => t.ruleId === p.ruleId);
-    for (const t of changes) {
-      const oldS = t.before && t.before.thresholdSeconds != null ? t.before.thresholdSeconds : null;
-      const newS = t.after && t.after.thresholdSeconds != null ? t.after.thresholdSeconds : null;
-      sub.appendChild(h('div', { class: 'gr-marker' },
-        h('span', { class: 'gr-marker-day', text: `Day ${t.dayNumber}` }),
-        h('span', { class: 'gr-marker-delta', text: `${oldS == null ? '—' : fmtHM(oldS)} → ${newS == null ? '—' : fmtHM(newS)}` }),
-        h('span', { class: 'gr-marker-reason', text: t.reason }),
-      ));
-    }
-    card.appendChild(sub);
-  }
-  return card;
-}
-
-// ③ 写真の比較（2モードの画像比較 ＋ 最終日CTA・design D6/D6b）
-function blockPhotoCompare(rep, imgBase) {
-  const card = h('section', { class: 'gr-card' });
-  const state = { mode: 'default' }; // 'default'（最古/最新）| 'all'（全枚数）
-
-  // 見出し＋モード切替トグル。
-  const modeSeg = h('div', { class: 'gr-mode-seg' });
-  const modeBtns = [
-    { v: 'default', label: 'Before / After' },
-    { v: 'all', label: '全部くらべる' },
-  ].map(({ v, label }) => {
-    const b = h('button', { class: 'gr-mode-btn', type: 'button', text: label });
-    if (v === state.mode) b.classList.add('on');
-    b.addEventListener('click', () => {
-      if (state.mode === v) return;
-      state.mode = v;
-      for (const x of modeSeg.children) x.classList.toggle('on', x === b);
-      renderImgs();
-    });
-    modeSeg.appendChild(b);
-    return b;
-  });
-  const hasImages = () => (rep.reportImages || []).length > 0;
-  card.appendChild(h('div', { class: 'gr-block-head' },
-    h('h2', { class: 'gr-block-title', style: { margin: '0' }, text: '③ 写真の比較' }),
-    h('div', { class: 'spacer' }),
-    hasImages() ? modeSeg : null,
-  ));
-
-  // 最終日（Day30）の写真を追加する CTA。**完走後のみ**（進行中は最終日がまだ来ていない）。
-  // デモは閲覧専用なので出さない。
-  if (!isDemo() && rep.goal.showFinalPhotoCta)
-    card.appendChild(finalPhotoCta(rep, () => { syncToggleVisibility(); renderImgs(); }));
-
-  // 画像領域（モードで再描画）。
-  const imgHost = h('div', { class: 'gr-img-host' });
-  card.appendChild(imgHost);
-  const renderImgs = () => {
-    clear(imgHost);
-    const el = state.mode === 'all' ? renderAllMode(rep, imgBase) : renderDefaultMode(rep, imgBase);
-    if (el) imgHost.appendChild(el);
-    // 進行中は最終日 CTA を出していないので、それを案内する文言も出さない。
-    else imgHost.appendChild(h('p', { class: 'gr-empty', text: !isDemo() && rep.goal.showFinalPhotoCta
-      ? 'まだ写真がありません。上の「＋ 最終日の写真を追加」から追加できます。'
-      : 'まだ写真がありません。' }));
-  };
-  // CTA で最初の1枚が入るとトグルが必要になるので表示を同期する。
-  const syncToggleVisibility = () => {
-    const head = card.querySelector('.gr-block-head');
-    if (hasImages() && !head.contains(modeSeg)) head.appendChild(modeSeg);
-  };
-  renderImgs();
-  return card;
-}
-
-/**
- * reportImages を trim 済みキャプションでグループ化する（design D6）。
- * 空キャプションは各1枚を単独グループ扱い。グループ内は reportImages の並び（dayNumber→sortOrder）を保つ。
- */
-function groupImagesByCaption(reportImages) {
-  const byCap = new Map();
-  const singles = [];
-  for (const im of reportImages || []) {
-    const cap = (im.caption || '').trim();
-    if (!cap) { singles.push({ caption: '', images: [im] }); continue; }
-    if (!byCap.has(cap)) byCap.set(cap, []);
-    byCap.get(cap).push(im);
-  }
-  return [...[...byCap.entries()].map(([caption, images]) => ({ caption, images })), ...singles];
-}
-
-/** デフォルト: 各グループの最古(Before)/最新(After)の2枚を左右並置（1枚なら単独）。 */
-function renderDefaultMode(rep, imgBase) {
-  const groups = groupImagesByCaption(rep.reportImages);
-  if (!groups.length) return null;
-  const wrap = h('div', { class: 'gr-ba-imgs' });
-  for (const g of groups) {
-    const oldest = g.images[0];
-    const newest = g.images[g.images.length - 1];
-    if (g.images.length === 1) {
-      wrap.appendChild(h('div', { class: 'gr-ba-pair' },
-        imgFig(imgBase, oldest, `Before · Day ${oldest.dayNumber}`), h('div', { class: 'gr-ba-figslot' })));
-    } else {
-      wrap.appendChild(h('div', { class: 'gr-ba-pair' },
-        imgFig(imgBase, oldest, `Before · Day ${oldest.dayNumber}`),
-        imgFig(imgBase, newest, `After · Day ${newest.dayNumber}`)));
-    }
-  }
-  return wrap;
-}
-
-/** 全比較: グループ＝行、古い→新しい順に全枚数を横スクロールで並置。 */
-function renderAllMode(rep, imgBase) {
-  const groups = groupImagesByCaption(rep.reportImages);
-  if (!groups.length) return null;
-  const wrap = h('div', { class: 'gr-allrows' });
-  for (const g of groups) {
-    const row = h('div', { class: 'gr-allrow' });
-    row.appendChild(h('div', { class: 'gr-allrow-cap', text: g.caption || '（キャプションなし）' }));
-    const strip = h('div', { class: 'gr-allstrip' });
-    for (const im of g.images) strip.appendChild(imgFig(imgBase, im, `Day ${im.dayNumber}`));
-    row.appendChild(strip);
-    wrap.appendChild(row);
-  }
-  return wrap;
-}
-
-/**
- * 最終日（Day30＝end_day）の写真を追加する CTA（3方式）。追加後 `onAdded(meta)` を呼ぶ。
- * 完走後でも保存できる（サーバの D4b により status 不問）。
- */
-function finalPhotoCta(rep, onAdded) {
-  const goalId = rep.goal.id;
-  const endDay = rep.goal.endDay;
-  const capInp = h('input', { type: 'text', class: 'gr-cta-cap', placeholder: 'キャプション（例: 体・正面）' });
-  const fileInput = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'gr-cta-file' });
-  const addLabel = h('label', { class: 'gr-cta-btn' }, '＋ 最終日の写真を追加', fileInput);
-  const errorEl = h('div', { class: 'gr-cta-error', hidden: true });
-  const el = h('div', { class: 'gr-cta' },
-    h('div', { class: 'gr-cta-lead' },
-      h('span', { class: 'gr-cta-title', text: '最終日の写真を残しましょう' }),
-      h('span', { class: 'gr-cta-sub', text: `Day ${rep.goal.dayCount}（${endDay}）の姿を撮って、初日と並べて変化を確かめられます。` }),
-    ),
-    h('div', { class: 'gr-cta-form' }, capInp, addLabel),
-    errorEl,
-  );
-
-  const showErr = (m) => { errorEl.textContent = m; errorEl.hidden = false; };
-  const clearErr = () => { errorEl.hidden = true; };
-  const attach = async (files) => {
-    const arr = [...(files || [])];
-    const images = arr.filter(isImageFile);
-    if (images.length < arr.length) showErr('画像ファイル以外は追加できません');
-    for (const file of images) {
-      let dataUrl;
-      try { dataUrl = await shrinkImage(file); } catch (e) { showErr(`画像を読み込めません: ${e.message}`); continue; }
-      try {
-        const meta = await api.addGoalJournalImage(goalId, endDay, { dataUrl, caption: capInp.value.trim() });
-        // レポートのメタへ反映（Day30・末尾）→ ③再描画に使う。
-        const dayNumber = rep.goal.dayCount;
-        rep.reportImages = rep.reportImages || [];
-        rep.reportImages.push({ imageId: meta.imageId, caption: meta.caption, dayKey: endDay, dayNumber, sortOrder: meta.sortOrder });
-        rep.reportImages.sort((a, b) => (a.caption || '').trim().localeCompare((b.caption || '').trim()) || a.dayNumber - b.dayNumber || a.sortOrder - b.sortOrder);
-        const lastDay = rep.days[rep.days.length - 1];
-        if (lastDay) { lastDay.images = lastDay.images || []; lastDay.images.push({ imageId: meta.imageId, caption: meta.caption }); }
-        clearErr();
-        capInp.value = '';
-        onAdded(meta);
-      } catch (e) {
-        showErr(e.status === 400 ? (e.data?.error || '画像を追加できません') : `追加に失敗: ${e.message}`);
-      }
-    }
-  };
-  fileInput.addEventListener('change', () => { attach(fileInput.files); fileInput.value = ''; });
-  el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drag'); });
-  el.addEventListener('dragleave', (e) => { if (e.target === el) el.classList.remove('drag'); });
-  el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('drag'); if (e.dataTransfer) attach(e.dataTransfer.files); });
-  el.addEventListener('paste', (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    const files = [];
-    for (const it of items) { if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); } }
-    if (files.length && files.some(isImageFile)) { e.preventDefault(); attach(files); }
-  });
-  return el;
-}
-
-/** 画像1枚（バイナリ URL ＋ タグ／キャプション）。imgBase は `/api/[demo/]goals/:id/journal`。 */
-function imgFig(imgBase, meta, tag) {
-  const cap = (meta.caption || '').trim();
-  const fig = h('figure', { class: 'gr-fig' },
-    h('img', { class: 'gr-fig-img', src: `${imgBase}/images/${meta.imageId}`, alt: cap, loading: 'lazy' }),
-  );
-  if (tag || cap) {
-    fig.appendChild(h('figcaption', { class: 'gr-fig-cap' },
-      tag ? h('span', { class: 'gr-fig-tag', text: tag }) : null,
-      cap ? h('span', { class: 'gr-fig-text', text: cap }) : null,
-    ));
-  }
-  return fig;
-}
-
-// ④ 日記ストリップ（記録のある日を横スクロールで全件並べる・design D2/D3）
-function blockJournalStrip(rep, rs, imgBase) {
-  const card = grCard('④ 毎日の日記');
-
-  // カードにするのは文面または画像のある日だけ（空カードを並べない・spec の MUST NOT）。
-  const cardDays = rep.days.filter((d) => d.text.trim() || (d.images && d.images.length));
-
-  if (!cardDays.length) {
-    card.appendChild(h('p', { class: 'gr-empty', text: 'まだ記録がありません' }));
-    // カードが無くても①からのハイライト連動は保つ（スクロールは何もしない）。
-    rs.renderReader = (dayNumber) => {
-      if (dayNumber) rs.selected = dayNumber;
-      for (const [d, cells] of rs.cellsByDay) {
-        const on = d === rs.selected;
-        for (const c of cells) c.classList.toggle('sel', on);
-        const hd = rs.headerByDay.get(d);
-        if (hd) hd.classList.toggle('sel', on);
-      }
-    };
-    return card;
-  }
-
-  const strip = h('div', { class: 'gr-strip' });
-  for (const d of cardDays) {
-    const srcLabel = d.source === 'journal' ? '日記' : d.source === 'reflection' ? '振り返り' : '';
-    const cardEl = h('div', { class: 'gr-strip-card' },
-      h('div', { class: 'gr-strip-head' },
-        h('span', { class: 'gr-strip-day', text: `Day ${d.dayNumber}（${d.dayKey}）` }),
-        srcLabel ? h('span', { class: 'gr-strip-src', text: srcLabel }) : null,
-      ),
-    );
-    const bodyHost = h('div', { class: 'gr-strip-body' });
-    if (d.text.trim()) bodyHost.appendChild(renderMarkdown(d.text));
-    else bodyHost.appendChild(h('p', { class: 'gr-empty', text: 'この日の記録はありません' }));
-    const imgs = d.images || [];
-    if (imgs.length) {
-      const gallery = h('div', { class: 'gr-strip-imgs' });
-      for (const m of imgs) gallery.appendChild(imgFig(imgBase, m, ''));
-      bodyHost.appendChild(gallery);
-    }
-    cardEl.appendChild(bodyHost);
-    rs.cardByDay.set(d.dayNumber, cardEl);
-    strip.appendChild(cardEl);
-  }
-  card.appendChild(strip);
-
-  // dayNumber を渡さない呼び出しは現在の選択を保ったまま再描画するだけ（design D2）。
-  // smooth: 初回描画は 'auto'、①クリックなどそれ以降は 'smooth'（design D3）。
-  rs.renderReader = (dayNumber, smooth) => {
-    if (dayNumber) rs.selected = dayNumber;
-    // ① のマス / ヘッダの選択ハイライトを更新。
-    for (const [d, cells] of rs.cellsByDay) {
-      const on = d === rs.selected;
-      for (const c of cells) c.classList.toggle('sel', on);
-      const hd = rs.headerByDay.get(d);
-      if (hd) hd.classList.toggle('sel', on);
-    }
-    // 強調は常に1枚。記録の無い日を選んだら強調ゼロになる（design D2）。
-    for (const el of rs.cardByDay.values()) el.classList.remove('sel');
-    const target = rs.cardByDay.get(rs.selected);
-    if (target) {
-      target.classList.add('sel');
-      target.scrollIntoView({ block: 'nearest', inline: 'center', behavior: smooth ? 'smooth' : 'auto' });
-    }
-  };
-  return card;
-}

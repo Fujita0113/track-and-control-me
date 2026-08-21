@@ -1,18 +1,18 @@
 ## REMOVED Requirements
 
-capability `goal-report` を**丸ごと廃止**する。進行中・完走後のいずれでもレポート画面は開けなくなり、`GET /api/goals/:id/report` も無くなる。走行中に見たいのは「この調子だといつ終わるのか」だけで、5ブロックはそのどれも答えていなかった。行き先は `goal-burnup`（見通し）1つに統一する。
+capability `goal-report` を**丸ごと廃止**する。進行中・完走後のいずれでもレポート画面は開けなくなり、`GET /api/goals/:id/report` も無くなる。走行中に見たいのは「この調子だといつ終わるのか」だけで、5ブロックはそのどれも答えていなかった。行き先は `goal-burnup`（進捗グラフ）1つに統一する。
 
 積み上げたデータ（`unlock_evaluation` / `goal_journal` / `goal_journal_image` / `rule_change` / `rule_answer`）は**削除しない**。読み手が消えるだけで、後から別の画面へ出せる。
 
 ### Requirement: レポートは進行中でも開ける（走行中プレビュー）
 
-**Reason**: レポート画面そのものを廃止するため。進行中の行き先は `goal-burnup`（見通し）に一本化する。
-**Migration**: 目標カードの導線は進行中・完走後とも「見通し」になる。`GET /api/goals/:id/report` は削除する。
+**Reason**: レポート画面そのものを廃止するため。進行中の行き先は `goal-burnup`（進捗グラフ）に一本化する。
+**Migration**: 目標カードの導線は進行中・完走後とも「進捗グラフ」になる。`GET /api/goals/:id/report` は削除する。
 
 ### Requirement: ヘッダ＋5ブロック構成（指定外の要素を足さない）
 
 **Reason**: 5ブロックのうち②以外は走行中に素材が溜まらず、完走後も開く動機がなかった。②はバーンアップとして `goal-burnup` へ移る。
-**Migration**: 見通しがヘッダ（目標名・Day・期限）とバーンアップで構成される。①③④⑤に相当する画面は無くなる。
+**Migration**: 進捗グラフがヘッダ（目標名・Day）とバーンアップで構成される。①③④⑤に相当する画面は無くなる。
 
 ### Requirement: ① 達成カレンダーは per_condition_results から描く
 

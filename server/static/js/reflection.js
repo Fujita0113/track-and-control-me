@@ -126,42 +126,40 @@ async function showDemo(root) {
   wrap.appendChild(buildGoalRulesBlock(fullGoal, vd, null, { startOpen: true }));
 }
 
-export async function show(root) {
-  clear(root);
-  // デモ中は進行中サンプルの記入済み日記を仮想日付で閲覧表示（保存動線は出さない）。
-  if (isDemo()) { await showDemo(root); return; }
-  document.body.classList.add('rf-page');
+const ENTRY_PLACEHOLDER = '今日はどんな一日でしたか。Markdown で自由にどうぞ。';
 
-  // ディープリンク: #timeline?from=&to= を読み取り、対象日とドラフト自動オープンに引き継ぐ
-  // （spec: タイムラインタブの振り返りタブへの統合とナビゲーション。リンク切れにしない）。
-  const link = timeline.consumeHashParams();
-  const initialDate = link && link.from ? timeline.deriveDayKey(link.from) : state.today;
+/**
+ * 振り返り本文の入力部品（気分ピル＋Markdown エディタ＋文字数/保存クローム）を組み立てる。
+ * 振り返りタブの右サイドバーと、進捗グラフの日付クリックで開くモーダル（spec: goal-burnup）で共用する。
+ * DOM とクラス名は振り返りタブの既存構造そのままで、呼び出し元ごとに分岐させない。
+ * 対象日の読み書きは loadReflectionEntry() / saveReflectionEntry() が担う（この部品は日付を持たない）。
+ * @param {{onSubmit?: () => void}} [opts] onSubmit は Ctrl+Enter（md-editor）で呼ばれる。
+ */
+export function buildReflectionEntry(opts = {}) {
+  const entry = { satisfaction: 0, dirty: false, loading: false };
 
-  // --- 右サイドバー: クローム（文字数・プレースホルダ・dirty） ---
-  const phEl = h('div', { class: 'rf-ph', text: '今日はどんな一日でしたか。Markdown で自由にどうぞ。' });
+  const phEl = h('div', { class: 'rf-ph', text: ENTRY_PLACEHOLDER });
   const countEl = h('span', { class: 'rf-count', text: '0 文字' });
-  const onEditorChange = (rawText) => {
-    countEl.textContent = [...rawText.replace(/\s/g, '')].length + ' 文字';
-    phEl.style.display = rawText.trim() === '' ? 'block' : 'none';
-    if (ctx && !ctx.loading) ctx.dirty = true;
-  };
-
   const editor = createMarkdownEditor({
-    placeholder: '今日はどんな一日でしたか。Markdown で自由にどうぞ。',
-    onChange: onEditorChange,
-    onSubmit: () => doSave(saveBtn),
+    placeholder: ENTRY_PLACEHOLDER,
+    onChange: (rawText) => {
+      countEl.textContent = [...rawText.replace(/\s/g, '')].length + ' 文字';
+      phEl.style.display = rawText.trim() === '' ? 'block' : 'none';
+      if (!entry.loading) entry.dirty = true;
+    },
+    onSubmit: () => opts.onSubmit && opts.onSubmit(),
   });
 
   // --- 気分ピル ---
   const moodSegs = [];
   const moodGroup = h('div', { class: 'rf-mood' });
-  const syncMood = () => moodSegs.forEach((s, i) => s.classList.toggle('on', i + 1 === ctx.satisfaction));
+  const syncMood = () => moodSegs.forEach((s, i) => s.classList.toggle('on', i + 1 === entry.satisfaction));
   MOOD_LABELS.forEach((label, idx) => {
     const val = idx + 1;
     const seg = h('span', { class: 'rf-mood-seg', text: label });
     seg.addEventListener('click', () => {
-      ctx.satisfaction = ctx.satisfaction === val ? 0 : val;
-      ctx.dirty = true;
+      entry.satisfaction = entry.satisfaction === val ? 0 : val;
+      entry.dirty = true;
       syncMood();
     });
     moodSegs.push(seg);
@@ -183,6 +181,43 @@ export async function show(root) {
       h('div', { class: 'rf-chrome-right' }, countEl, savedEl, saveBtn),
     ),
   );
+
+  return Object.assign(entry, { editor, moodRow, card, savedEl, saveBtn, syncMood });
+}
+
+/** 対象日の振り返り本文・気分を部品へ読み込む（読み込み中は dirty を立てない）。 */
+export async function loadReflectionEntry(entry, date) {
+  entry.loading = true;
+  let r = null;
+  try { r = await api.getReflection(date); } catch { /* noop */ }
+  entry.editor.setValue(r && r.content ? r.content : '');
+  entry.satisfaction = r && r.satisfaction ? r.satisfaction : 0;
+  entry.syncMood();
+  entry.loading = false;
+  entry.dirty = false;
+}
+
+/** 部品の内容を対象日へ保存する。既存の PUT /api/reflection/:date だけを使う（新しい API は起こさない）。 */
+export async function saveReflectionEntry(entry, date) {
+  await api.putReflection(date, entry.editor.getValue(), entry.satisfaction || null);
+  entry.editor.markSaved();
+  entry.dirty = false;
+}
+
+export async function show(root) {
+  clear(root);
+  // デモ中は進行中サンプルの記入済み日記を仮想日付で閲覧表示（保存動線は出さない）。
+  if (isDemo()) { await showDemo(root); return; }
+  document.body.classList.add('rf-page');
+
+  // ディープリンク: #timeline?from=&to= を読み取り、対象日とドラフト自動オープンに引き継ぐ
+  // （spec: タイムラインタブの振り返りタブへの統合とナビゲーション。リンク切れにしない）。
+  const link = timeline.consumeHashParams();
+  const initialDate = link && link.from ? timeline.deriveDayKey(link.from) : state.today;
+
+  // --- 右サイドバー: 気分ピル + エディタカード（共有部品・buildReflectionEntry） ---
+  const entry = buildReflectionEntry({ onSubmit: () => doSave(entry.saveBtn) });
+  const { moodRow, card, saveBtn } = entry;
 
   // 目標日記コーナー（進行中の目標ごと）。本文エディタの下に置き、同じ保存動線に相乗りする。
   const journalsHost = h('div', { class: 'rf-journals' });
@@ -236,8 +271,7 @@ export async function show(root) {
     h('div', { class: 'rf-split' }, main, sidebar)));
 
   ctx = {
-    activeDate: initialDate, satisfaction: 0, dirty: false, loading: false,
-    editor, savedEl, saveBtn, syncMood, journalsHost, journals: [], activeGoals: [],
+    activeDate: initialDate, entry, journalsHost, journals: [], activeGoals: [],
     tabButtons, viewHosts, viewHost, stripHost, currentView: 'timeline',
     sidebarTab: 'journal', sbTabsHost, journalPane, detailPane, logPane,
     viewDates: { timeline: null, alloc: null, plan: null },
@@ -326,7 +360,7 @@ async function ensureViewRendered(key) {
   if (key === 'timeline') await timeline.render(host, ctx.activeDate);
   else if (key === 'alloc') await renderAllocView(host, ctx.activeDate);
   else if (key === 'plan') {
-    await planView.render(host, ctx.editor.getValue(), {
+    await planView.render(host, ctx.entry.editor.getValue(), {
       detailHost: ctx.detailPane,
       logHost: ctx.logPane,
       onDetailOpen: () => setSidebarTab('detail'),
@@ -415,9 +449,9 @@ function journalCorner(goal, content, date, quota) {
     placeholder: `${goal.name} の今日の記録`,
     onChange: (raw) => {
       ph.style.display = raw.trim() === '' ? 'block' : 'none';
-      if (ctx && !ctx.loading) entry.dirty = true;
+      if (ctx && !ctx.entry.loading) entry.dirty = true;
     },
-    onSubmit: () => doSave(ctx.saveBtn),
+    onSubmit: () => doSave(ctx.entry.saveBtn),
   });
   entry.editor = editor;
   ctx.journals.push(entry);
@@ -591,15 +625,11 @@ async function loadJournals(date) {
 
 async function loadEditorForDate(date) {
   if (!ctx) return;
-  ctx.loading = true;
-  let r = null;
-  try { r = await api.getReflection(date); } catch { /* noop */ }
-  ctx.editor.setValue(r && r.content ? r.content : '');
-  ctx.satisfaction = r && r.satisfaction ? r.satisfaction : 0;
-  ctx.syncMood();
+  await loadReflectionEntry(ctx.entry, date);
+  ctx.entry.loading = true;
   await loadJournals(date); // 同じ対象日の目標日記コーナーを再構築（loading 中は dirty を立てない）。
-  ctx.loading = false;
-  ctx.dirty = false;
+  ctx.entry.loading = false;
+  ctx.entry.dirty = false;
 }
 
 /** 差分秒 → "+Nh Nm" / "-Nh Nm" / "±0"（fmtDur を流用し符号を付与）。 */
@@ -616,7 +646,7 @@ function fmtWorkDelta(deltaSeconds) {
  * 母数ゼロの日は棒を描かず空状態メッセージ。総作業時間・直近7日平均は母数ゼロと独立に計算されるため、
  * 空状態でも差分表示は行う（design D3・spec: reflection-day-overview「一日の配分バー」）。
  */
-function buildAllocCard(alloc) {
+export function buildAllocCard(alloc) {
   const head = h('div', { class: 'rf-alloc-head' },
     h('span', { class: 'rf-alloc-title', text: '一日の配分' }),
     h('span', { class: 'rf-alloc-sub', text: '覚醒時間中（記録の端〜端）' }),
@@ -674,10 +704,10 @@ async function renderAllocView(container, date) {
 function flush() {
   if (!ctx) return;
   const date = ctx.activeDate;
-  if (ctx.dirty) {
-    api.putReflection(date, ctx.editor.getValue(), ctx.satisfaction || null).catch(() => { /* noop */ });
-    ctx.editor.markSaved();
-    ctx.dirty = false;
+  if (ctx.entry.dirty) {
+    api.putReflection(date, ctx.entry.editor.getValue(), ctx.entry.satisfaction || null).catch(() => { /* noop */ });
+    ctx.entry.editor.markSaved();
+    ctx.entry.dirty = false;
   }
   for (const j of ctx.journals || []) {
     if (!j.dirty) continue;
@@ -691,9 +721,7 @@ async function doSave(saveBtn) {
   if (!ctx) return;
   saveBtn.disabled = true;
   try {
-    await api.putReflection(ctx.activeDate, ctx.editor.getValue(), ctx.satisfaction || null);
-    ctx.editor.markSaved();
-    ctx.dirty = false;
+    await saveReflectionEntry(ctx.entry, ctx.activeDate);
     // 目標日記も同時保存（変更があったものだけ）。
     for (const j of ctx.journals || []) {
       if (!j.dirty) continue;
@@ -715,8 +743,8 @@ async function doSave(saveBtn) {
 }
 
 function showSaved() {
-  const el = ctx.savedEl;
+  const el = ctx.entry.savedEl;
   el.classList.add('show');
   clearTimeout(ctx._savedTimer);
-  ctx._savedTimer = setTimeout(() => { if (ctx) ctx.savedEl.classList.remove('show'); }, 2200);
+  ctx._savedTimer = setTimeout(() => { if (ctx) ctx.entry.savedEl.classList.remove('show'); }, 2200);
 }
